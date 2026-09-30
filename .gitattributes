@@ -1,0 +1,4 @@
+*.R text eol=crlf
+*.Rmd text eol=crlf
+*.sub text eol=lf
+*.sh text eol=lf

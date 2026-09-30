@@ -21,11 +21,14 @@
 ###     split_indices_by_depth() - Depth-matched split of depth-ordered hybrid cells at an arbitrary fraction.
 ###     fit_counts_offset_row() - Single-gene row version of fit_counts_offset(), for parLapply distribution across genes.
 ###     fit_counts_offset_parallel() - Runs fit_counts_offset_row() across all genes on an already-open cluster.
-###     raw_gene_prefilter() - Fit-free preliminary gene filter using only raw count summaries, ahead of the real NB fit.
+###     raw_gene_prefilter() - Fit-free preliminary gene filter with depth-scaled abundance and an absolute detection floor, ahead of the real NB fit.
 ###     .fstar_from_r() - Closed-form optimal split fraction f* from the parent/hybrid noise ratio r.
 ###   2. GENE FILTER (marginal information only; never on a contrast)
-###     gene_pass_group() - Per-group pass/fail test (mean count and expression-fraction thresholds), used by build_gene_sets().
-###     build_gene_sets() - Builds the final per-mode and full gene sets from per-dataset fits.
+###     mad_lower() - Lower outlier cutoff (median minus k MAD) on the log10 scale, adapting to any sequencing depth.
+###     qc_cell_keep() - Per-dataset cell QC from library size and genes detected, using mad_lower() cutoffs.
+###     qc_gene_keep() - Cross-dataset gene QC with one relative abundance floor anchored to the shallowest dataset and an absolute detection floor.
+###     gene_pass_group() - Per-group pass/fail test (depth-scaled mean count and absolute detected-cell floor), used by build_gene_sets().
+###     build_gene_sets() - Builds the final per-mode and full gene sets from per-dataset fits, scaling the mean floor by dataset depth.
 ###     refine_by_boundary() - Bootstrap-checks candidate genes near the Poisson/NB boundary and reclassifies borderline DISP = Inf calls.
 ###     chk() - Calibration helper: flags a fit as usable based on convergence and finite, non-degenerate dispersion.
 ###     chk_prec() - Precision companion to chk(): flags fits whose SE is too imprecise to trust.
@@ -189,6 +192,10 @@
 ###   14. EXTERNAL NOISE VALIDATION
 ###     cor_row() - Spearman rank correlation between two vectors, with pairwise-complete filtering.
 ###     add_burst_terms() - Implied Fano factor, burst size, and burst frequency algebraically recovered from a reported mean and CV^2.
+###   15. UNUSED (not called by analysis.R or any cluster/scripts job; kept for manual/interactive use)
+###     pilot_split_se(), boot_contrasts(), permute_contrasts(), coexpr_bootstrap() - serial, local counterparts of the "_one" functions the pipeline calls directly via parLapply.
+###     refine_by_boundary(), chk(), chk_prec() - gene-fit calibration helpers for the Poisson/NB boundary and per-bin convergence/precision.
+###     bootstrap_compare_resolutions() - local bootstrap comparison of clustering resolutions, superseded by the cluster_stability.R round trip.
 ###############################################################
 
 library(MASS)   # glm.nb, ships with base R
@@ -390,14 +397,6 @@ pilot_split_se_one <- function(g, mats, expos, B = 200, seed = 1) {
     row.names = NULL, check.names = FALSE)
 }
 
-## Serial convenience wrapper, useful for a quick local check on a
-## handful of genes. The main pipeline no longer calls this directly;
-## it calls pilot_split_se_one via parLapply in Run_Pilot_Cluster.R
-## instead, the same way boot_contrasts_one and permute_contrasts_one
-## are called directly rather than through their serial wrappers.
-pilot_split_se <- function(genes, mats, expos, B = 200, seed = 1)
-  do.call(rbind, lapply(genes, pilot_split_se_one, mats = mats, expos = expos, B = B, seed = seed))
-
 ## Closed-form balance point. With A the hybrid-driven variance
 ## coefficient and B the fixed, non-tunable parent-driven term,
 ## setting SE_cis(f) = SE_trans(f) gives a quadratic in f whose root
@@ -493,9 +492,16 @@ fit_counts_offset_parallel <- function(mat, exposure, cl) {
 ## as the final gene filter (build_gene_sets, using real fits, still
 ## does that after the split-dependent fits come back).
 raw_gene_prefilter <- function(mats, min_mean = 0.001, min_expr_frac = 0.10) {
-  ok <- Reduce(`&`, lapply(mats, function(m) {
-    (rowSums(m) / ncol(m)) >= min_mean & (rowSums(m > 0) / ncol(m)) >= min_expr_frac
-  }))
+  # Depth of each dataset (mean reads per cell). Scaling the mean floor by
+  # relative depth gives every dataset the same abundance criterion.
+  depth <- vapply(mats, function(m) sum(m) / ncol(m), numeric(1))
+  floor_mean <- min_mean * depth / min(depth)
+  # Detection floor in cells, anchored to the smallest dataset so the
+  # number of informative cells is identical across datasets.
+  n_min <- ceiling(min_expr_frac * min(vapply(mats, ncol, integer(1))))
+  ok <- Reduce(`&`, Map(function(m, fm) {
+    (rowSums(m) / ncol(m)) >= fm & rowSums(m > 0) >= n_min
+  }, mats, floor_mean))
   rownames(mats[[1]])[ok]
 }
 
@@ -503,19 +509,68 @@ raw_gene_prefilter <- function(mats, min_mean = 0.001, min_expr_frac = 0.10) {
 ## 2. GENE FILTER (marginal information only; never on a contrast)
 ## ============================================================
 
-gene_pass_group <- function(fit, ncells, min_mean = 1, min_expr_frac = 0.10) {
-  is.finite(fit$DISP) & fit$DISP < 1e6 &
-    fit$MEAN_CT >= min_mean & (fit$N_EXPR / ncells) >= min_expr_frac
+## ---- Adaptive QC thresholds ----
+## Cutoffs are defined in relative units so that datasets with different
+## depth and cell number lose the same kind of cell or gene, which keeps
+## the retained data comparable.
+
+## Lower cutoff on the log10 scale. Working in logs makes the rule
+## scale-free, so one setting adapts to any sequencing depth.
+mad_lower <- function(x, k = 3) {
+  lx <- log10(x[x > 0])
+  10^(median(lx) - k * mad(lx))
 }
 
-build_gene_sets <- function(fits, ncells, min_mean = 1, min_expr_frac = 0.10) {
+## Cell QC from precomputed library size (lib) and genes detected (det).
+## Taking a vector lets hybrid alleles be pooled so each cell receives one
+## decision. Only the lower tail is trimmed, which retains large G2 cells
+## that carry more RNA. Filters on library size (read count) alone; the
+## genes-detected floor was dropped as too aggressive, especially on the
+## already-small MIX.SC dataset. min_reads is a safety net for empty
+## barcodes and never binds in typical data.
+qc_cell_keep <- function(lib, k = 3, min_reads = 500) {
+  lib_cut <- max(min_reads, mad_lower(lib, k))
+  list(keep = lib >= lib_cut, lib_cut = lib_cut)
+}
+
+## Gene QC across all datasets at once. Abundance is a fraction of each
+## dataset's total reads, so every dataset is judged on the same relative
+## scale. lambda0 is the mean count per cell required at the shallowest
+## dataset, which preserves the prior stringency where it binds.
+## The detection floor is an absolute number of cells because the precision
+## of a dispersion fit depends on informative cells, not on their fraction.
+qc_gene_keep <- function(mats, lambda0 = 0.20, cell_frac = 0.10) {
+  genes <- Reduce(intersect, lapply(mats, rownames))
+  mats  <- lapply(mats, function(m) m[genes, , drop = FALSE])
+  depth <- vapply(mats, function(m) sum(m) / ncol(m), numeric(1))
+  p_min <- lambda0 / min(depth)
+  n_min <- ceiling(cell_frac * min(vapply(mats, ncol, integer(1))))
+  pass  <- lapply(mats, function(m) rowSums(m) / sum(m) >= p_min & rowSums(m > 0) >= n_min)
+  list(genes = sort(genes[Reduce(`&`, pass)]), p_min = p_min, n_min = n_min,
+       depth = depth, exp_mean = p_min * depth)
+}
+
+## min_mean is the depth-scaled mean count floor for this dataset and
+## min_expr_cells is the absolute detected-cell floor shared by all datasets.
+gene_pass_group <- function(fit, min_mean = 0.001, min_expr_cells = 1) {
+  is.finite(fit$DISP) & fit$DISP < 1e6 &
+    fit$MEAN_CT >= min_mean & fit$N_EXPR >= min_expr_cells
+}
+
+## depth is a named vector of mean reads per cell for each group in fits.
+## The mean floor min_mean applies at the shallowest group and scales up
+## in proportion to depth. The detected-cell floor is min_expr_frac of the
+## smallest group, so every group faces the same information requirement.
+build_gene_sets <- function(fits, ncells, depth, min_mean = 0.001, min_expr_frac = 0.10) {
   groups <- names(fits)
-  stopifnot(all(groups %in% names(ncells)))
+  stopifnot(all(groups %in% names(ncells)), all(groups %in% names(depth)))
   genes <- rownames(fits[[1]])
   for (g in groups)
     if (!identical(rownames(fits[[g]]), genes))
       stop("fit frames are not gene-aligned; reorder to a common gene set first")
-  pass <- vapply(groups, function(g) gene_pass_group(fits[[g]], ncells[[g]], min_mean, min_expr_frac), logical(length(genes)))
+  floor_mean <- min_mean * depth[groups] / min(depth[groups])
+  n_min <- ceiling(min_expr_frac * min(ncells[groups]))
+  pass <- vapply(groups, function(g) gene_pass_group(fits[[g]], floor_mean[[g]], n_min), logical(length(genes)))
   rownames(pass) <- genes
   contrasts <- list(total = c("MIX.SC","MIX.SE"), cis = c("HYC.SC","HYC.SE"),
                     trans = c("MIX.SC","MIX.SE","HYT.SC","HYT.SE"),
@@ -525,30 +580,6 @@ build_gene_sets <- function(fits, ncells, min_mean = 1, min_expr_frac = 0.10) {
                     full = groups)
   sets <- lapply(contrasts, function(gr) genes[rowSums(pass[, gr, drop = FALSE]) == length(gr)])
   list(pass = pass, sets = sets, n = vapply(sets, length, integer(1)), contrasts = contrasts)
-}
-
-refine_by_boundary <- function(mats, expos, candidates, max_boundary = 0.10, B = 200) {
-  groups <- names(mats)
-  keep <- vapply(candidates, function(gn) all(vapply(groups, function(g) {
-    bf <- boot_disp_logse(mats[[g]][gn, ], expos[[g]], B = B)["boundary_frac"]
-    is.finite(bf) && bf <= max_boundary
-  }, logical(1))), logical(1))
-  candidates[keep]
-}
-
-## Calibration helpers, run on one group's fit frame. chk() bins by
-## mean count and reports the fraction with a finite size, the
-## identifiability gradient. chk_prec() reports the median size
-## standard error per bin; note this is the ASYMPTOTIC SE and is the
-## unreliable ruler, the definitive precision gradient comes from the
-## bootstrap size_*_se in BURST.CONTRASTS after step 3.
-chk <- function(fit) {
-  b <- cut(fit$MEAN_CT, c(0, 0.5, 1, 2, 4, 8, Inf))
-  round(tapply(is.finite(fit$DISP) & fit$DISP < 1e6, b, mean), 2)
-}
-chk_prec <- function(fit) {
-  b <- cut(fit$MEAN_CT, c(0, 0.5, 1, 2, 4, 8, Inf))
-  round(tapply(fit$DISP_LOGSE, b, median, na.rm = TRUE), 2)
 }
 
 ## ============================================================
@@ -647,6 +678,20 @@ make_draws <- function(ncells, B, seed = 1) {
 ## what the HYC/HYT split (f_mean) was chosen to balance.
 .BFREQ_SOURCE <- c(total = "total", cis = "cis_n", trans = "trans_n", dom = "dom", dpar_sc = "dpar_sc", dpar_se = "dpar_se", inh_sc = "inh_sc", inh_se = "inh_se")
 
+## Which draws-list element (the names used in make_draws()/boot_contrasts_one's
+## `d$...`) resamples each dataset. Used to test whether two modes' contrasts
+## were built from the same resampled cells, rather than inferring that from
+## mode-name equality.
+.DRAW.KEY <- c(MIX.SC = "MIX.SC", MIX.SE = "MIX.SE",
+               HYC.SC = "HYC", HYC.SE = "HYC", HYT.SC = "HYT", HYT.SE = "HYT",
+               HYC.SC.N = "HYC.N", HYC.SE.N = "HYC.N", HYT.SC.N = "HYT.N", HYT.SE.N = "HYT.N",
+               HYB.COMB = "HYB", HYB.SC = "HYB", HYB.SE = "HYB")
+
+## The set of draws-list keys a mode's contrast is built from, e.g. "trans"
+## touches the MIX.SC/MIX.SE and HYT draws, "trans_n" the MIX.SC/MIX.SE and
+## HYT.N draws. Two modes share draws exactly when this set matches.
+.mode_draw_keys <- function(mode) sort(unique(unname(.DRAW.KEY[.MODES[[mode]]])))
+
 .contrast_value <- function(mode, gv, q) {
   l2 <- log2
   switch(mode,
@@ -726,14 +771,14 @@ boot_contrasts_one <- function(g, mats, expos, fits, draws) {
     out[[paste0("cv2_", md, "_est")]]    <- unname(pc[smd])
     out[[paste0("cv2_", md, "_se")]]     <- unname(se[paste0("c.", smd)])
     ## cor_md, the correlation between the mean and burst-frequency
-    ## bootstrap draws, is only meaningful when both come from the same
-    ## cell resampling stream. That holds for every mode except cis and
-    ## trans, where mean now comes from the f_mean split and burst
-    ## frequency from the independent f_disp split; the two streams
-    ## share no resampled cells to be correlated through, so this is
-    ## reported as NA rather than as a number that looks like the old
-    ## quantity but no longer means the same thing.
-    out[[paste0("cor_", md)]] <- if (identical(md, smd)) {
+    ## bootstrap draws, is only meaningful when both are built from the
+    ## same resampled cells. .mode_draw_keys() reports which draws-list
+    ## keys (e.g. HYC vs HYC.N) feed each mode's contrast, so this checks
+    ## that directly instead of assuming it from md == smd. For cis and
+    ## trans, mean is drawn from the f_mean split (HYC/HYT) and burst
+    ## frequency from the independent f_disp split (HYC.N/HYT.N), so the
+    ## two share no resampled cells and cor_md is reported as NA.
+    out[[paste0("cor_", md)]] <- if (identical(.mode_draw_keys(md), .mode_draw_keys(smd))) {
       x <- M[, paste0("m.", md)]; y <- M[, paste0("s.", md)]; ok <- is.finite(x) & is.finite(y)
       if (sum(ok) > 2) cor(x[ok], y[ok]) else NA_real_
     } else NA_real_
@@ -746,9 +791,6 @@ boot_contrasts_one <- function(g, mats, expos, fits, draws) {
   out$cor_dpar_bfreq <- .r2("s.dpar_sc", "s.dpar_se")
   data.frame(out, row.names = NULL, check.names = FALSE)
 }
-
-boot_contrasts <- function(mats, expos, fits, genes, draws)
-  do.call(rbind, lapply(genes, boot_contrasts_one, mats = mats, expos = expos, fits = fits, draws = draws))
 
 ## Derives bsize (burst size) and kbal (kinetic balance) from the mean
 ## and burst-frequency contrasts boot_contrasts_one() already wrote into
@@ -1216,10 +1258,6 @@ permute_contrasts_one <- function(g, mats, expos, fits, perms, ploidy_shift = NU
   data.frame(out, row.names = NULL, check.names = FALSE)
 }
 
-## ... passes ploidy_shift = PLOIDY.SHIFT through for local runs, as gene_perm.R does on the cluster.
-permute_contrasts <- function(mats, expos, fits, genes, perms, ...)
-  do.call(rbind, lapply(genes, permute_contrasts_one, mats = mats, expos = expos, fits = fits, perms = perms, ...))
-
 ## ============================================================
 ## 7. CO-EXPRESSION  (residual co-fluctuation, cis/trans decomposed)
 ## ============================================================
@@ -1520,18 +1558,6 @@ coexpr_acc_finalize <- function(resid, pt, acc) {
        dpar_sc = mk(pt$dpar_sc[acc$up], acc$sum_dpar_sc, acc$sumsq_dpar_sc),
        dpar_se = mk(pt$dpar_se[acc$up], acc$sum_dpar_se, acc$sumsq_dpar_se),
        lambda = pt$lambda)
-}
-
-## Serial, local convenience wrapper built from the same primitives the
-## cluster job uses. Fine for a quick small-B check; real runs at
-## N.COEXPR go through coexpr_boot.R instead, since each draw redoes a
-## full shrink_cor per dataset and that cost adds up fast at B in the
-## thousands.
-coexpr_bootstrap <- function(resid, B = 200, seed = 1) {
-  pt    <- coexpr_decompose(resid)
-  draws <- make_coexpr_draws(ncol(resid$MIX.SC), ncol(resid$MIX.SE), ncol(resid$HYB.SC), B, seed)
-  draw_results <- lapply(draws, coexpr_bootstrap_one, resid = resid)
-  assemble_coexpr_bootstrap(resid, pt, draw_results)
 }
 
 ## Per-gene reliability, the fraction of a gene's total variance that is
@@ -2565,7 +2591,7 @@ summarize_go_sets <- function(sets, enrich, q = 0.2) {
 ## whatever pdf() block called this, skipping dev.off() and leaving a
 ## broken, incomplete file, plus, if the caller loops over several
 ## clusters, it silently drops every remaining cluster in that same
-## pdf(). A failed plot is now noted on the console and skipped instead.
+## pdf(). Instead, a failed plot is reported to the console and skipped.
 ## label should name the comparison (e.g. "Sc major vs minor cluster")
 ## since "up"/"down" always means ident.1 vs ident.2 from the FindMarkers()
 ## call that produced enrich_up/enrich_down, and that pairing differs
@@ -4442,58 +4468,11 @@ plateau_coarsest <- function(ok) {
   min(ok$res[grp == target_grp])
 }
 
-## Louvain resolution sweeps are not smooth: two nearby resolutions can
-## land on distinct community structures, so a lone high-silhouette
-## point separated from its neighbors by a crash or by small
-## fluctuations could be either a genuinely better partition that the
-## coarsest-near-max rule in sweep_cluster_resolution() missed (its tol
-## window is centered on the chosen point, not built to also catch a
-## detached higher peak elsewhere in the grid), or a small-N fluke that
-## bootstrap resampling would not reproduce. This runs
-## bootstrap_cluster_stability() at the chosen resolution and, if it
-## differs, at the coarsest resolution of the contiguous plateau
-## surrounding the grid's single highest silhouette (plateau_coarsest()),
-## not the literal argmax itself, so the comparison is a fair contest
-## between the coarsest representative of each candidate region rather
-## than chosen vs. an arbitrary interior point of an otherwise-flat
-## plateau.
-##
-## The FINAL resolution is then whichever candidate has the higher
-## bootstrap mean ARI, the direct evidence of which partition actually
-## reproduces under resampling, rather than always keeping the
-## originally chosen resolution regardless of how that comparison comes
-## out. Re-clusters sweep$obj (whose neighbor graph is already fitted)
-## at each resolution being checked, rather than reusing sweep$obj's
-## existing Idents, since those reflect only the chosen resolution.
-## Returns a list: table (one row per resolution checked, a single row
-## if the chosen resolution's own plateau already contains the highest
-## silhouette), final_res (the resolution to actually use downstream),
-## and final_obj (sweep$obj reclustered at final_res, ready to replace
-## the caller's Seurat object for UMAP/DimPlot).
-bootstrap_compare_resolutions <- function(sweep, counts, nfeatures, dims_n, metric = "manhattan", B = 20, seed = 1) {
-  ok       <- sweep$grid[sweep$grid$ok, ]
-  best_res <- plateau_coarsest(ok)
-  res_list <- unique(c(sweep$chosen_res, best_res))
-
-  rows <- lapply(res_list, function(r) {
-    cl   <- Idents(FindClusters(sweep$obj, resolution = r, verbose = FALSE))
-    boot <- bootstrap_cluster_stability(counts, cl, nfeatures = nfeatures, dims_n = dims_n, resolution = r, metric = metric, B = B, seed = seed)
-    data.frame(res = r, role = if (r == sweep$chosen_res) "chosen" else "highest silhouette",
-               sil = ok$sil[ok$res == r], n_clusters = ok$n_clusters[ok$res == r],
-               boot_mean_ari = boot$mean_ari, boot_min_ari = min(boot$ari), boot_max_ari = max(boot$ari))
-  })
-  table <- do.call(rbind, rows)
-
-  final_res <- table$res[which.max(table$boot_mean_ari)]
-  final_obj <- FindClusters(sweep$obj, resolution = final_res, verbose = FALSE)
-  list(table = table, final_res = final_res, final_obj = final_obj)
-}
-
-## Prints bootstrap_compare_resolutions()'s comparison table and, if the
-## bootstrap-validated final resolution differs from the resolution
-## sweep_cluster_resolution() originally chose, a note naming the
-## override and the bootstrap mean ARI at each so the switch is
-## traceable in the log rather than silent.
+## Prints the bootstrap comparison table (in the format assemble_cluster_stability()
+## builds from the cluster job's output) and, if the bootstrap-validated
+## final resolution differs from the resolution sweep_cluster_resolution()
+## originally chose, a note naming the override and the bootstrap mean ARI
+## at each so the switch is traceable in the log rather than silent.
 report_bootstrap_compare <- function(boot, label) {
   cat(sprintf("%s: bootstrap comparison across candidate resolutions\n", label)); print(boot$table)
   chosen_row <- boot$table[boot$table$role == "chosen", ]
@@ -5156,7 +5135,7 @@ get_data_header <- function(path, sep = "\t", skip = 0) {
 fread_matrix <- function(path, keep = NULL, sep = "\t", skip = 0, ...) {
   header <- get_data_header(path, sep = sep, skip = skip)
   if (is.null(keep)) keep <- rep(TRUE, length(header))
-  col.idx <- c(1L, which(keep) + 1L)   # +1 shifts past the row-id field, now always absent from header
+  col.idx <- c(1L, which(keep) + 1L)   # +1 shifts past the row-id field, which the header never names
   dt  <- fread(file = path, sep = sep, skip = skip + 1, header = FALSE, select = col.idx, ...)
   mat <- as.matrix(dt[, -1, with = FALSE])
   colnames(mat) <- header[keep]
@@ -5344,4 +5323,121 @@ mean_adjusted_noise <- function(mean, cv2, span = 0.3) {
   fit <- loess(lc[ok] ~ lm_[ok], span = span)   # smooth abundance trend, as in Newman's DM
   res[ok] <- lc[ok] - predict(fit)              # residual = noise beyond the expected level at that abundance
   res
+}
+
+## ============================================================
+## 15. UNUSED (not called by analysis.R or any cluster/scripts job)
+## ============================================================
+## Every function below was cross-referenced against analysis.R and every
+## script in cluster/scripts/ and has no caller in either. Each is confirmed
+## removable without changing what the pipeline computes; they are kept here,
+## grouped separately from the functions the pipeline actually uses, for manual
+## or interactive use.
+##
+## pilot_split_se(), boot_contrasts(), permute_contrasts(), and
+## coexpr_bootstrap() are serial, local counterparts of pilot_split_se_one(),
+## boot_contrasts_one(), permute_contrasts_one(), and coexpr_bootstrap_one():
+## the pipeline calls the "_one" form directly via parLapply in
+## gene_pilot.R, gene_boot.R, gene_perm.R, and coexpr_boot.R. These serial
+## wrappers are for running the same computation locally on a small gene set
+## without the cluster round trip.
+##
+## refine_by_boundary(), chk(), and chk_prec() are gene-fit calibration
+## helpers: refine_by_boundary() reclassifies borderline DISP = Inf calls
+## near the Poisson/NB boundary, and chk()/chk_prec() summarize a fit
+## frame's convergence and precision by mean-count bin.
+##
+## bootstrap_compare_resolutions() bootstrap-compares a chosen clustering
+## resolution against the grid's highest-silhouette plateau in a single
+## local call. The pipeline instead runs that same comparison through the
+## cluster: cluster_stability_inputs() packages the candidate resolutions,
+## cluster_stability.R runs the bootstrap resampling, and
+## assemble_cluster_stability() plus report_bootstrap_compare() assemble and
+## print the result. plateau_coarsest(), which this function calls, is still
+## used directly by cluster_stability_inputs() and is defined in Section 11.
+
+## Serial convenience wrapper for a quick local check on a handful of
+## genes. The pipeline calls pilot_split_se_one() directly via parLapply
+## in gene_pilot.R.
+pilot_split_se <- function(genes, mats, expos, B = 200, seed = 1)
+  do.call(rbind, lapply(genes, pilot_split_se_one, mats = mats, expos = expos, B = B, seed = seed))
+
+## Serial convenience wrapper for a quick local check on a handful of
+## genes. The pipeline calls boot_contrasts_one() directly via parLapply
+## in gene_boot.R.
+boot_contrasts <- function(mats, expos, fits, genes, draws)
+  do.call(rbind, lapply(genes, boot_contrasts_one, mats = mats, expos = expos, fits = fits, draws = draws))
+
+## Serial convenience wrapper for a quick local check on a handful of
+## genes. The pipeline calls permute_contrasts_one() directly via
+## parLapply/mclapply in gene_perm.R. Passes ploidy_shift through to
+## permute_contrasts_one() the same way gene_perm.R does on the cluster.
+permute_contrasts <- function(mats, expos, fits, genes, perms, ...)
+  do.call(rbind, lapply(genes, permute_contrasts_one, mats = mats, expos = expos, fits = fits, perms = perms, ...))
+
+## Serial, local convenience wrapper built from the same primitives the
+## cluster job uses. Fine for a quick small-B check; real runs at
+## N.COEXPR go through coexpr_boot.R instead, since each draw redoes a
+## full shrink_cor per dataset and that cost adds up fast at B in the
+## thousands.
+coexpr_bootstrap <- function(resid, B = 200, seed = 1) {
+  pt    <- coexpr_decompose(resid)
+  draws <- make_coexpr_draws(ncol(resid$MIX.SC), ncol(resid$MIX.SE), ncol(resid$HYB.SC), B, seed)
+  draw_results <- lapply(draws, coexpr_bootstrap_one, resid = resid)
+  assemble_coexpr_bootstrap(resid, pt, draw_results)
+}
+
+## Bootstrap-checks candidate genes near the Poisson/NB boundary:
+## refits each candidate gene B times per group and keeps it only if
+## every group's fraction of bootstrap replicates landing back on the
+## DISP = Inf boundary is at or below max_boundary.
+refine_by_boundary <- function(mats, expos, candidates, max_boundary = 0.10, B = 200) {
+  groups <- names(mats)
+  keep <- vapply(candidates, function(gn) all(vapply(groups, function(g) {
+    bf <- boot_disp_logse(mats[[g]][gn, ], expos[[g]], B = B)["boundary_frac"]
+    is.finite(bf) && bf <= max_boundary
+  }, logical(1))), logical(1))
+  candidates[keep]
+}
+
+## Calibration helpers, run on one group's fit frame. chk() bins by
+## mean count and reports the fraction with a finite size, the
+## identifiability gradient. chk_prec() reports the median size
+## standard error per bin; this is the ASYMPTOTIC SE, the definitive
+## precision gradient comes from the bootstrap size_*_se in
+## BURST.CONTRASTS after step 3.
+chk <- function(fit) {
+  b <- cut(fit$MEAN_CT, c(0, 0.5, 1, 2, 4, 8, Inf))
+  round(tapply(is.finite(fit$DISP) & fit$DISP < 1e6, b, mean), 2)
+}
+chk_prec <- function(fit) {
+  b <- cut(fit$MEAN_CT, c(0, 0.5, 1, 2, 4, 8, Inf))
+  round(tapply(fit$DISP_LOGSE, b, median, na.rm = TRUE), 2)
+}
+
+## Bootstrap-compares a chosen clustering resolution against the coarsest
+## resolution of the contiguous plateau surrounding the grid's single
+## highest silhouette (plateau_coarsest()), running
+## bootstrap_cluster_stability() at each candidate resolution locally.
+## Returns a list: table (one row per resolution checked), final_res
+## (whichever candidate has the higher bootstrap mean ARI), and final_obj
+## (sweep$obj reclustered at final_res). The pipeline instead runs this
+## comparison through the cluster (see the section note above).
+bootstrap_compare_resolutions <- function(sweep, counts, nfeatures, dims_n, metric = "manhattan", B = 20, seed = 1) {
+  ok       <- sweep$grid[sweep$grid$ok, ]
+  best_res <- plateau_coarsest(ok)
+  res_list <- unique(c(sweep$chosen_res, best_res))
+
+  rows <- lapply(res_list, function(r) {
+    cl   <- Idents(FindClusters(sweep$obj, resolution = r, verbose = FALSE))
+    boot <- bootstrap_cluster_stability(counts, cl, nfeatures = nfeatures, dims_n = dims_n, resolution = r, metric = metric, B = B, seed = seed)
+    data.frame(res = r, role = if (r == sweep$chosen_res) "chosen" else "highest silhouette",
+               sil = ok$sil[ok$res == r], n_clusters = ok$n_clusters[ok$res == r],
+               boot_mean_ari = boot$mean_ari, boot_min_ari = min(boot$ari), boot_max_ari = max(boot$ari))
+  })
+  table <- do.call(rbind, rows)
+
+  final_res <- table$res[which.max(table$boot_mean_ari)]
+  final_obj <- FindClusters(sweep$obj, resolution = final_res, verbose = FALSE)
+  list(table = table, final_res = final_res, final_obj = final_obj)
 }

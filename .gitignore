@@ -53,3 +53,5 @@ rsconnect/
 /results
 /figures
 .posit/assistant
+*.rda
+*.rds

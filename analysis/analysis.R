@@ -85,16 +85,15 @@
 ### drawn in Section 10.
 ###############################################################
 
-#renv pins every package to the version recorded in renv.lock. The project
-#.Rprofile activates it when the .Rproj is opened. Run renv::restore() once on
-#a new machine, and renv::snapshot() after installing or updating a package.
+#renv pins every package to the version recorded in renv.lock. Run renv::restore() once on a new machine
 if (!requireNamespace("renv", quietly = TRUE)) install.packages("renv")
-renv::status()   #reports whether the installed library matches renv.lock
+renv::status()
 
-#here() anchors every path to the project root (the folder holding the .Rproj),
-#so the script runs unchanged on any machine that clones the repository.
+#here() anchors every path to the project root so that functions and data load correctly
 library(here)
 stopifnot(file.exists(here("R", "functions.R")))
+FUNCTIONS.FILE <- here("R", "functions.R")
+source(FUNCTIONS.FILE)
 
 #data/ holds everything read from disk. cluster_inputs and cluster_outputs
 #carry *_inputs.rda and *_output.rda to and from the SLURM cluster.
@@ -106,23 +105,18 @@ OUTPUT.DIR   <- here("data", "cluster_outputs")
 
 #results/ holds everything this script writes. checkpoints hold the
 #section{N}_checkpoint.rda files, console holds a copy of what each section
-#prints to the R console (section{N}_console.txt), and tables holds the .csv
-#files.
+#prints to the R console (section{N}_console.txt), and tables holds .csv files.
 CHECKPOINT.DIR <- here("results", "checkpoints")
 CONSOLE.DIR    <- here("results", "console")
 TABLE.DIR      <- here("results", "tables")
 
-#FIGURE.DIR holds all figure output. Figure folders: main text figures,
-#extended data/supplement figures (including power analysis), and everything
+#figures/ holds main text figures, extended data/supplement figures, and everything
 #else (diagnostic and exploratory plots)
 FIGURE.DIR <- here("figures")
 for (d in c(INPUT.DIR, OUTPUT.DIR, CHECKPOINT.DIR, CONSOLE.DIR, TABLE.DIR,
             file.path(FIGURE.DIR, c("main", "extended", "extra")))) {
   dir.create(d, recursive = TRUE, showWarnings = FALSE)
 }
-
-#One functions.R path lets this script and the parallel workers load identical code
-FUNCTIONS.FILE <- here("R", "functions.R")
 
 #Packages
 suppressWarnings(suppressPackageStartupMessages({
@@ -143,40 +137,34 @@ suppressWarnings(suppressPackageStartupMessages({
   library(data.table)
 }))
 
-#Functions
-source(FUNCTIONS.FILE)
-
+# Classes
 REG.CLASS <- c("Conserved", "Cis", "Trans", "Cis + Trans", "Compensatory")
 DOM.CLASS <- c("Conserved", "Sc.Dominant", "Se.Dominant", "Overdominant", "Underdominant", "Additive")
-# BH FDR level for every class-overlap heatmap (regulatory, dominance, and their
-# cross-comparisons). Each heatmap is adjusted across its own cells, never across heatmaps.
+
+# BH FDR level 
 OVERLAP.FDR <- 0.01
 
-## ---- Color palettes (single source of truth; every figure draws from these) ----
-## Species anchors reused wherever Sc/Se appear, so a species hue never means anything else.
+## Color palettes
+
+## Species anchors
 SPECIES.COLOR <- c(Sc = "#B5533C", Se = "#3E6B7A")
-
-## Regulatory classes avoid both species hues (Conserved grey, Cis ink, Trans wine, Cis + Trans ochre, Compensatory sage).
+## Regulatory classes
 COLOR.LIST.1 <- c("#D4D4CF","#2B2F42","#640B14","#E0A526","#5F8F5A"); names(COLOR.LIST.1) <- REG.CLASS
-## Dominance classes: the two parents inherit their species colors.
+## Dominance classes
 COLOR.LIST.2 <- c("#D4D4CF", SPECIES.COLOR[["Sc"]], SPECIES.COLOR[["Se"]], "#7A2E4E","#D9A7BF","#8C8C86"); names(COLOR.LIST.2) <- DOM.CLASS
-## Diverging heatmap ramp (warm = enriched, cool = depleted, white center required by class_overlap_heatmap()).
-## The warm side is a segment of COLOR.SEQ and the cool side a segment of COLOR.CLUSTER, taken at matched
-## lightness (L* 75, 62, 48, 34) so positive and negative values carry equal visual weight.
+## Diverging heatmap ramp (warm = enriched, cool = depleted
 COLOR.LIST.3 <- colorRampPalette(c("#70453F","#A2623A","#C8893A","#DDB264","#F7F7F7","#D6ABD6","#BB82C3","#9D57AA","#6F3C79"))(11)
-
 ## Warm ramp with monotone lightness, shared by the power heatmaps and the power-curve lines.
 SEQ.ANCHORS <- c("#F6F1E4","#E8C77A","#C98A3A","#8A4A3A","#33384A")
 COLOR.SEQ <- colorRampPalette(SEQ.ANCHORS)(100)
-## Cell-cycle phases as a light-to-dark blue ramp in cycle order, clear of every class color.
+## Cell-cycle phases
 COLOR.PHASE <- c(G1 = "#A9CBF2", S = "#3F63BF", G2M = "#132057")
-## Power-curve lines follow the same anchors as COLOR.SEQ, minus the cream end that vanishes on white (light to dark via line_colors()).
+## Power-curve lines follow the same anchors as COLOR.SEQ, minus the cream end that vanishes on white
 POWER.COLOR <- SEQ.ANCHORS[-1]
-## Plum ramp for cluster labels; it also supplies the cool side of the diverging heatmap (light to dark via cluster_cols()).
+## Plum ramp for cluster labels
 COLOR.CLUSTER <- c("#D7ACD7", "#A159AF", "#512B59")
-## Neutral charcoal for thresholds and reference lines (separated by line type, not hue).
+## Neutral colors for thresholds and reference lines
 COLOR.ACCENT <- "#3A3A3A"
-## Three grey tiers replace the previous mix of grey30 to grey85.
 COLOR.GREY <- c(light = "#DADAD5", mid = "#B0B0AB", dark = "#6E6E6A")
 
 console_start(1)   # copies this section's console output to results/console
@@ -194,13 +182,39 @@ HYB.SC <- as.matrix(read.csv(file = file.path(SC.DIR, "HybSc_for_genes_percell_p
 HYB.SE <- as.matrix(read.csv(file = file.path(SC.DIR, "HybSe_for_genes_percell_pergene_count.csv"), row.names = 1))
 
 # Remove cells that have substantial reads from both species in the mixed parent sample
-# For cells with only a small number of reads from the minority species, remove from the minority species
-MIX.SC.BOTH.ALLELES <- which(colnames(MIX.SC) %in% colnames(MIX.SE))
-MIX.SE.BOTH.ALLELES <- which(colnames(MIX.SE) %in% colnames(MIX.SC))
-MIX.SC.REMOVE <- which(colnames(MIX.SC) %in% names(which(colSums(MIX.SE[,MIX.SE.BOTH.ALLELES]) > 3000)) | colnames(MIX.SC) %in% names(which(colSums(MIX.SC[,MIX.SC.BOTH.ALLELES]) < 10000)))
-MIX.SE.REMOVE <- which(colnames(MIX.SE) %in% names(which(colSums(MIX.SC[,MIX.SC.BOTH.ALLELES]) > 3000)) | colnames(MIX.SE) %in% names(which(colSums(MIX.SE[,MIX.SE.BOTH.ALLELES]) < 10000)))
-MIX.SC <- MIX.SC[,-MIX.SC.REMOVE]
-MIX.SE <- MIX.SE[,-MIX.SE.REMOVE]
+# For cells with only a small fraction of reads from the minority species, remove from the minority species only
+MIX.SHARED.CELLS <- intersect(colnames(MIX.SC), colnames(MIX.SE))
+MIX.SC.SHARED.SUM <- colSums(MIX.SC[, MIX.SHARED.CELLS, drop = FALSE])
+MIX.SE.SHARED.SUM <- colSums(MIX.SE[, MIX.SHARED.CELLS, drop = FALSE])
+MIX.MINORITY.FRAC <- pmin(MIX.SC.SHARED.SUM, MIX.SE.SHARED.SUM) / (MIX.SC.SHARED.SUM + MIX.SE.SHARED.SUM)
+
+# Sweep of minority-read-fraction thresholds
+MIX.FRAC.SWEEP <- 10^seq(log10(0.001), log10(0.5), length.out = 200)
+MINORITY.FRAC.THRESHOLD <- 0.005
+MIX.FRAC.SWEEP.N.EXCEED <- sapply(MIX.FRAC.SWEEP, function(t) sum(MIX.MINORITY.FRAC > t))
+pdf(file.path(FIGURE.DIR, "extra/S_mix_shared_cell_contamination_sweep.pdf"), width = 6, height = 5, useDingbats = FALSE)
+plot(MIX.FRAC.SWEEP * 100, MIX.FRAC.SWEEP.N.EXCEED, log = "x", type = "l",
+     xlab = "Minority-species read fraction threshold (%, log scale)",
+     ylab = "# of shared cells exceeding threshold",
+     main = "Contamination fraction among cells shared between MIX.SC and MIX.SE")
+rect(MINORITY.FRAC.THRESHOLD * 100, par("usr")[3], 10^par("usr")[2], par("usr")[4],
+     col = adjustcolor(COLOR.ACCENT, alpha.f = 0.1), border = NA)
+abline(v = MINORITY.FRAC.THRESHOLD * 100, col = COLOR.ACCENT, lwd = 2, lty = 2)
+legend("topright",
+       legend = sprintf("cutoff = %.1f%% (%d cells removed as doublets)",
+                         MINORITY.FRAC.THRESHOLD * 100, sum(MIX.MINORITY.FRAC > MINORITY.FRAC.THRESHOLD)),
+       col = COLOR.ACCENT, lwd = 2, lty = 2, bty = "n")
+dev.off()
+
+# Cells with substantial reads from both species: drop from both matrices
+MIX.DOUBLET.CELLS <- MIX.SHARED.CELLS[MIX.MINORITY.FRAC > MINORITY.FRAC.THRESHOLD]
+# Cells with only minor cross-contamination: drop from the minority species only
+MIX.MINOR.CONTAM.CELLS <- MIX.SHARED.CELLS[MIX.MINORITY.FRAC <= MINORITY.FRAC.THRESHOLD]
+MIX.MINOR.CONTAM.IN.SC <- MIX.MINOR.CONTAM.CELLS[MIX.SC.SHARED.SUM[MIX.MINOR.CONTAM.CELLS] < MIX.SE.SHARED.SUM[MIX.MINOR.CONTAM.CELLS]]
+MIX.MINOR.CONTAM.IN.SE <- MIX.MINOR.CONTAM.CELLS[MIX.SE.SHARED.SUM[MIX.MINOR.CONTAM.CELLS] < MIX.SC.SHARED.SUM[MIX.MINOR.CONTAM.CELLS]]
+
+MIX.SC <- MIX.SC[, !(colnames(MIX.SC) %in% c(MIX.DOUBLET.CELLS, MIX.MINOR.CONTAM.IN.SC))]
+MIX.SE <- MIX.SE[, !(colnames(MIX.SE) %in% c(MIX.DOUBLET.CELLS, MIX.MINOR.CONTAM.IN.SE))]
 
 # Combine mitochondrial directions
 HYB.SC['MT_F',] <- HYB.SC['MT_F',]+HYB.SC['MT_R',]; HYB.SC <- HYB.SC[!(row.names(HYB.SC) %in% c('MT_R')),]
@@ -208,60 +222,15 @@ HYB.SE['MT_F',] <- HYB.SE['MT_F',]+HYB.SE['MT_R',]; HYB.SE <- HYB.SE[!(row.names
 MIX.SC['MT_F',] <- MIX.SC['MT_F',]+MIX.SC['MT_R',]; MIX.SC <- MIX.SC[!(row.names(MIX.SC) %in% c('MT_R')),]
 MIX.SE['MT_F',] <- MIX.SE['MT_F',]+MIX.SE['MT_R',]; MIX.SE <- MIX.SE[!(row.names(MIX.SE) %in% c('MT_R')),]
 
-# Remove genes with low expression across all cells
-GENE.COUNT.THRESHOLD <- 0.20 #A gene needs to have at least 1 read per every 5 cells
-GENE.CELL.THRESHOLD  <- 0.10 #A gene must be expressed in at least 10% of cells
-pdf(file.path(FIGURE.DIR, "extra/S_gene_count_threshold_qc.pdf"), width = 8, height = 8, useDingbats = FALSE)
-par(mfrow=c(2,2))
-plot(rowSums(MIX.SC), rowSums(MIX.SC > 0), pch=19, cex=0.6, ylim=c(0,ncol(MIX.SC)), xlab="Count per Gene", ylab="Number of Cells", main= "Sc Parent"); abline(v=ncol(MIX.SC)*GENE.COUNT.THRESHOLD, col=COLOR.ACCENT, lty=2); abline(h=ncol(MIX.SC)*GENE.CELL.THRESHOLD, col=COLOR.ACCENT, lty=2)
-plot(rowSums(MIX.SE), rowSums(MIX.SE > 0), pch=19, cex=0.6, ylim=c(0,ncol(MIX.SE)), xlab="Count per Gene", ylab="Number of Cells", main= "Se Parent"); abline(v=ncol(MIX.SE)*GENE.COUNT.THRESHOLD, col=COLOR.ACCENT, lty=2); abline(h=ncol(MIX.SE)*GENE.CELL.THRESHOLD, col=COLOR.ACCENT, lty=2)
-plot(rowSums(HYB.SC), rowSums(HYB.SC > 0), pch=19, cex=0.6, ylim=c(0,ncol(HYB.SC)), xlab="Count per Gene", ylab="Number of Cells", main= "Sc Hybrid"); abline(v=ncol(HYB.SC)*GENE.COUNT.THRESHOLD, col=COLOR.ACCENT, lty=2); abline(h=ncol(HYB.SC)*GENE.CELL.THRESHOLD, col=COLOR.ACCENT, lty=2)
-plot(rowSums(HYB.SE), rowSums(HYB.SE > 0), pch=19, cex=0.6, ylim=c(0,ncol(HYB.SE)), xlab="Count per Gene", ylab="Number of Cells", main= "Se Hybrid"); abline(v=ncol(HYB.SE)*GENE.COUNT.THRESHOLD, col=COLOR.ACCENT, lty=2); abline(h=ncol(HYB.SE)*GENE.CELL.THRESHOLD, col=COLOR.ACCENT, lty=2)
-dev.off()
-
-MIX.SC <- MIX.SC[which(rowSums(MIX.SC)/ncol(MIX.SC) >= GENE.COUNT.THRESHOLD & rowSums(MIX.SC > 0)/ncol(MIX.SC) >= GENE.CELL.THRESHOLD ),]
-MIX.SE <- MIX.SE[which(rowSums(MIX.SE)/ncol(MIX.SE) >= GENE.COUNT.THRESHOLD & rowSums(MIX.SE > 0)/ncol(MIX.SE) >= GENE.CELL.THRESHOLD ),]
-HYB.SC <- HYB.SC[which(rowSums(HYB.SC)/ncol(HYB.SC) >= GENE.COUNT.THRESHOLD & rowSums(HYB.SC > 0)/ncol(HYB.SC) >= GENE.CELL.THRESHOLD ),]
-HYB.SE <- HYB.SE[which(rowSums(HYB.SE)/ncol(HYB.SE) >= GENE.COUNT.THRESHOLD & rowSums(HYB.SE > 0)/ncol(HYB.SE) >= GENE.CELL.THRESHOLD ),]
-
-# Remove cells with low counts across genes
-CELL.COUNT.THRESHOLD <- 1 #A cell needs to have at least 1 read for every gene
-CELL.GENE.THRESHOLD <- 0.25 #A cell needs to express at least 25% of all genes
-pdf(file.path(FIGURE.DIR, "extra/S_cell_count_threshold_qc.pdf"), width = 8, height = 8, useDingbats = FALSE)
-par(mfrow=c(2,2))
-plot(colSums(MIX.SC), colSums(MIX.SC > 0), pch=19, cex=0.6, xlim=c(0,50000), ylim=c(0,nrow(MIX.SC)), xlab="Count per Cell", ylab="Number of Genes", main= "Sc Parent"); abline(v=nrow(MIX.SC)*CELL.COUNT.THRESHOLD, col=COLOR.ACCENT, lty=2); abline(h=nrow(MIX.SC)*CELL.GENE.THRESHOLD, col=COLOR.ACCENT, lty=2)
-plot(colSums(MIX.SE), colSums(MIX.SE > 0), pch=19, cex=0.6, xlim=c(0,50000), ylim=c(0,nrow(MIX.SE)), xlab="Count per Cell", ylab="Number of Genes", main= "Se Parent"); abline(v=nrow(MIX.SE)*CELL.COUNT.THRESHOLD, col=COLOR.ACCENT, lty=2); abline(h=nrow(MIX.SE)*CELL.GENE.THRESHOLD, col=COLOR.ACCENT, lty=2)
-plot(colSums(HYB.SC), colSums(HYB.SC > 0), pch=19, cex=0.6, xlim=c(0,50000), ylim=c(0,nrow(HYB.SC)), xlab="Count per Cell", ylab="Number of Genes", main= "Sc Hybrid"); abline(v=nrow(HYB.SC)*CELL.COUNT.THRESHOLD, col=COLOR.ACCENT, lty=2); abline(h=nrow(HYB.SC)*CELL.GENE.THRESHOLD, col=COLOR.ACCENT, lty=2)
-plot(colSums(HYB.SE), colSums(HYB.SE > 0), pch=19, cex=0.6, xlim=c(0,50000), ylim=c(0,nrow(HYB.SE)), xlab="Count per Cell", ylab="Number of Genes", main= "Se Hybrid"); abline(v=nrow(HYB.SE)*CELL.COUNT.THRESHOLD, col=COLOR.ACCENT, lty=2); abline(h=nrow(HYB.SE)*CELL.GENE.THRESHOLD, col=COLOR.ACCENT, lty=2)
-dev.off()
-MIX.SC <- MIX.SC[,which(colSums(MIX.SC)/nrow(MIX.SC) >= CELL.COUNT.THRESHOLD & colSums(MIX.SC > 0)/nrow(MIX.SC) >= CELL.GENE.THRESHOLD)]
-MIX.SE <- MIX.SE[,which(colSums(MIX.SE)/nrow(MIX.SE) >= CELL.COUNT.THRESHOLD & colSums(MIX.SE > 0)/nrow(MIX.SE) >= CELL.GENE.THRESHOLD)]
-HYB.SC <- HYB.SC[,which(colSums(HYB.SC)/nrow(HYB.SC) >= CELL.COUNT.THRESHOLD & colSums(HYB.SC > 0)/nrow(HYB.SC) >= CELL.GENE.THRESHOLD)]
-HYB.SE <- HYB.SE[,which(colSums(HYB.SE)/nrow(HYB.SE) >= CELL.COUNT.THRESHOLD & colSums(HYB.SE > 0)/nrow(HYB.SE) >= CELL.GENE.THRESHOLD)]
-
-# Subset to same set of genes across all samples
-GENE.SET <- Reduce(intersect, list(rownames(MIX.SC), rownames(MIX.SE), rownames(HYB.SC), rownames(HYB.SE)))
-MIX.SC <- MIX.SC[GENE.SET,]
-MIX.SE <- MIX.SE[GENE.SET,]
-HYB.SC <- HYB.SC[GENE.SET,]
-HYB.SE <- HYB.SE[GENE.SET,]
-
-# Subset hybrid samples to same cells for each allele
-HYB.SC <- HYB.SC[,which(colnames(HYB.SC) %in% colnames(HYB.SE))]
-HYB.SE <- HYB.SE[,which(colnames(HYB.SE) %in% colnames(HYB.SC))]
-
-# Set gene order the same for all samples
-MIX.SC <- MIX.SC[order(rownames(MIX.SC)),]
-MIX.SE <- MIX.SE[order(rownames(MIX.SE)),]
-HYB.SC <- HYB.SC[order(rownames(HYB.SC)),]
-HYB.SE <- HYB.SE[order(rownames(HYB.SE)),]
-
 # Mitochondrial ratios in hybrid
 # MITO.IGNORE flags hybrid cells with zero Sc or Se mitochondrial reads.
-# The two histograms below plot the per-cell log2(Sc/Se) mitochondrial read ratio, 
+# The two histograms plot the per-cell log2(Sc/Se) mitochondrial read ratio, 
 # and total Sc read depth split by whether a cell was flagged in MITO.IGNORE (red).
-MITO.IGNORE <- which(HYB.SC['MT_F',] == 0 | HYB.SE['MT_F',]==0)
-MITO.RATIO  <- log2(HYB.SC['MT_F',-MITO.IGNORE]/HYB.SE['MT_F',-MITO.IGNORE])
+HYB.MITO.CELLS <- intersect(colnames(HYB.SC), colnames(HYB.SE))
+HYB.SC.MITO <- HYB.SC['MT_F', HYB.MITO.CELLS]
+HYB.SE.MITO <- HYB.SE['MT_F', HYB.MITO.CELLS]
+MITO.IGNORE <- which(HYB.SC.MITO == 0 | HYB.SE.MITO == 0)
+MITO.RATIO  <- log2(HYB.SC.MITO[-MITO.IGNORE]/HYB.SE.MITO[-MITO.IGNORE])
 pdf(file.path(FIGURE.DIR, "extra/S_mito_ratio_hybrid.pdf"), width = 6, height = 5, useDingbats = FALSE)
 par(mfrow=c(1,1))
 hist(MITO.RATIO,breaks=40,xlab="log2(Sc/Se) mitochondrial ratio in hybrid",main="")
@@ -271,18 +240,77 @@ cat("Mitochondrial log2(Sc/Se) ratio in hybrid, quantiles:\n")
 print(round(quantile(MITO.RATIO, probs = c(0, 0.25, 0.5, 0.75, 1)), 3))
 
 pdf(file.path(FIGURE.DIR, "extra/S_mito_ignore_depth.pdf"), width = 6, height = 5, useDingbats = FALSE)
-hist(colSums(HYB.SC[,-MITO.IGNORE]),breaks=seq(0,80000,2500), xlab="Hybrid Sc Reads/cell",main="")
-hist(colSums(HYB.SC[,MITO.IGNORE]),breaks=seq(0,80000,2500),col=COLOR.GREY[["dark"]],add=TRUE)
+hist(colSums(HYB.SC[,HYB.MITO.CELLS[-MITO.IGNORE]]),breaks=seq(0,80000,2500), xlab="Hybrid Sc Reads/cell",main="")
+hist(colSums(HYB.SC[,HYB.MITO.CELLS[MITO.IGNORE]]),breaks=seq(0,80000,2500),col=COLOR.GREY[["dark"]],add=TRUE)
 dev.off()
 
-# Remove mitochondrial reads from remainder of analyses
-MIX.SC <- MIX.SC[-1,]
-MIX.SE <- MIX.SE[-1,]
-HYB.SC <- HYB.SC[-1,]
-HYB.SE <- HYB.SE[-1,]
+# Remove mitochondrial reads from remainder of analyses.
+MIX.SC <- MIX.SC[rownames(MIX.SC) != "MT_F", , drop = FALSE]
+MIX.SE <- MIX.SE[rownames(MIX.SE) != "MT_F", , drop = FALSE]
+HYB.SC <- HYB.SC[rownames(HYB.SC) != "MT_F", , drop = FALSE]
+HYB.SE <- HYB.SE[rownames(HYB.SE) != "MT_F", , drop = FALSE]
+
+# Remove low-quality cells and low-information genes
+# Thresholds is based on each dataset's depth and cell number
+CELL.MAD.K     <- 3     # keep cells above median - 3 MAD on the log10 scale
+GENE.LAMBDA0   <- 0.10  # mean reads per cell required at the shallowest dataset
+GENE.CELL.FRAC <- 0.10  # detected-cell floor as a fraction of the smallest dataset
+
+# Hybrid alleles come from the same cells, so they share one QC decision
+HYB.CELLS <- intersect(colnames(HYB.SC), colnames(HYB.SE))
+HYB.SC <- HYB.SC[, HYB.CELLS]; HYB.SE <- HYB.SE[, HYB.CELLS]
+
+# Cells are filtered first, on all genes, so depth reflects the full library
+QC.STATS <- list(
+  MIX.SC = list(lib = colSums(MIX.SC), det = colSums(MIX.SC > 0)),
+  MIX.SE = list(lib = colSums(MIX.SE), det = colSums(MIX.SE > 0)),
+  HYB    = list(lib = colSums(HYB.SC) + colSums(HYB.SE),
+                det = colSums(HYB.SC > 0) + colSums(HYB.SE > 0)))
+# Genes-detected floor was dropped entirely (too aggressive, especially on
+# the already-small MIX.SC dataset); library size alone now decides
+QC.CELLS <- lapply(QC.STATS, function(s) qc_cell_keep(s$lib, k = CELL.MAD.K))
+QC.TITLES <- c(MIX.SC = "Sc Parent", MIX.SE = "Se Parent", HYB = "Hybrid (alleles pooled)")
+pdf(file.path(FIGURE.DIR, "extra/S_cell_count_threshold_qc.pdf"), width = 12, height = 4, useDingbats = FALSE)
+par(mfrow=c(1,3))
+for (nm in names(QC.STATS)) {
+  plot(QC.STATS[[nm]]$lib, QC.STATS[[nm]]$det, log = "xy", pch=19, cex=0.6, xlab="Count per Cell", ylab="Number of Genes", main=QC.TITLES[[nm]])
+  abline(v=QC.CELLS[[nm]]$lib_cut, col=COLOR.ACCENT, lty=2)
+}
+dev.off()
+MIX.SC <- MIX.SC[, QC.CELLS$MIX.SC$keep]; MIX.SE <- MIX.SE[, QC.CELLS$MIX.SE$keep]
+HYB.SC <- HYB.SC[, QC.CELLS$HYB$keep];    HYB.SE <- HYB.SE[, QC.CELLS$HYB$keep]
+
+# Genes are filtered second, using the retained cells and one relative abundance floor
+GENE.QC <- qc_gene_keep(list(MIX.SC = MIX.SC, MIX.SE = MIX.SE, HYB.SC = HYB.SC, HYB.SE = HYB.SE),
+                        lambda0 = GENE.LAMBDA0, cell_frac = GENE.CELL.FRAC)
+pdf(file.path(FIGURE.DIR, "extra/S_gene_count_threshold_qc.pdf"), width = 8, height = 8, useDingbats = FALSE)
+par(mfrow=c(2,2))
+GENE.QC.MATS <- list(MIX.SC = MIX.SC, MIX.SE = MIX.SE, HYB.SC = HYB.SC, HYB.SE = HYB.SE)
+GENE.QC.TITLES <- c(MIX.SC = "Sc Parent", MIX.SE = "Se Parent", HYB.SC = "Sc Hybrid", HYB.SE = "Se Hybrid")
+for (nm in names(GENE.QC.MATS)) {
+  m <- GENE.QC.MATS[[nm]]
+  plot(rowSums(m) + 1, rowSums(m > 0), log = "x", pch=19, cex=0.6, ylim=c(0,ncol(m)), xlab="Count per Gene (+1)", ylab="Number of Cells with >=1 Count", main=GENE.QC.TITLES[[nm]])
+  abline(v=GENE.QC$p_min * sum(m) + 1, col=COLOR.ACCENT, lty=2); abline(h=GENE.QC$n_min, col=COLOR.ACCENT, lty=2)
+}
+dev.off()
+
+# Subset to the same set of genes across all samples, in the same order
+GENE.SET <- GENE.QC$genes
+MIX.SC <- MIX.SC[GENE.SET,]; MIX.SE <- MIX.SE[GENE.SET,]
+HYB.SC <- HYB.SC[GENE.SET,]; HYB.SE <- HYB.SE[GENE.SET,]
+
+# Comparability check. Retained depth should differ by dataset while the
+# implied mean count floor scales with depth.
+QC.SUMMARY <- data.frame(
+  n_cells  = c(ncol(MIX.SC), ncol(MIX.SE), ncol(HYB.SC), ncol(HYB.SE)),
+  reads_per_cell = c(sum(MIX.SC)/ncol(MIX.SC), sum(MIX.SE)/ncol(MIX.SE), sum(HYB.SC)/ncol(HYB.SC), sum(HYB.SE)/ncol(HYB.SE)),
+  mean_count_floor = unname(GENE.QC$exp_mean),
+  row.names = c("MIX.SC", "MIX.SE", "HYB.SC", "HYB.SE"))
+cat("Cell and gene QC summary\n"); print(round(QC.SUMMARY, 3))
+cat(sprintf("Genes retained: %d, minimum detected cells: %d\n", length(GENE.SET), GENE.QC$n_min))
 
 # Checkpoint
-save(MIX.SC, MIX.SE, HYB.SC, HYB.SE, file = ckpt_path(1))
+save(MIX.SC, MIX.SE, HYB.SC, HYB.SE, QC.SUMMARY, file = ckpt_path(1))
 
 console_start(2)   # copies this section's console output to results/console
 ##############################################################################
@@ -316,12 +344,13 @@ PILOT.MATS  <- list(MIX.SC = MIX.SC, MIX.SE = MIX.SE, HYB.SC = HYB.SC, HYB.SE = 
 PILOT.EXPOS <- list(MIX.SC = EXPO.MIX.SC, MIX.SE = EXPO.MIX.SE, HYB = EXPO.HYB)
 PILOT.GENES <- raw_gene_prefilter(PILOT.MATS, min_mean = 0.001, min_expr_frac = 0.10)
 
+## ---- Cluster round trip: Rscript gene_pilot.R ----
+## Reads gene_pilot_inputs.rda (saved below), writes gene_pilot_output.rda (PILOT.SE)
 save(PILOT.MATS, PILOT.EXPOS, PILOT.GENES, N.BOOT, SEED.BOOT, file = file.path(INPUT.DIR, "gene_pilot_inputs.rda"))
-# Run on the cluster: Rscript gene_pilot.R
-# Reads gene_pilot_inputs.rda, writes gene_pilot_output.rda
+load(file.path(OUTPUT.DIR, "gene_pilot_output.rda"))
+## ---- end cluster round trip ----
 
 # Estimate split fraction for mean and noise
-load(file.path(OUTPUT.DIR, "gene_pilot_output.rda"))  
 SPLIT.FRAC <- estimate_f_star(PILOT.SE, n_h = ncol(HYB.SC))
 
 ## 2.2 Split-dependent NB fits
@@ -353,7 +382,7 @@ SPLIT.FIT.EXPOS <- list(
   HYC.SC = EXPO.HYC, HYC.SE = EXPO.HYC, HYT.SC = EXPO.HYT, HYT.SE = EXPO.HYT,
   HYC.SC.N = EXPO.HYC.N, HYC.SE.N = EXPO.HYC.N, HYT.SC.N = EXPO.HYT.N, HYT.SE.N = EXPO.HYT.N)
 
-# NB fits for each of the 13 datasets
+## ---- Local parallel cluster: NB fits for the 13 split datasets ----
 NUM.CORES.LOCAL <- max(1, detectCores() - 1)
 cl <- makeCluster(NUM.CORES.LOCAL, type = "PSOCK")
 clusterExport(cl, "FUNCTIONS.FILE")
@@ -369,6 +398,7 @@ cat(sprintf("[%s] fitting %-10s %d genes, %d cells\n", format(Sys.time(), "%H:%M
 }
 cat(sprintf("split fits done: %d datasets in %.1f min\n", length(SPLIT.FIT.RESULTS), as.numeric(difftime(Sys.time(), t0, units = "mins"))))
 stopCluster(cl)
+## ---- end local parallel cluster ----
 
 # Reorders the 13 fits into split-independent, then f_mean and f_disp
 SPLIT.FITS <- SPLIT.FIT.RESULTS[c("MIX.SC", "MIX.SE", "HYC.SC", "HYC.SE", "HYT.SC", "HYT.SE", "HYC.SC.N", "HYC.SE.N", "HYT.SC.N", "HYT.SE.N", "HYB.SC", "HYB.SE", "HYB.COMB")]
@@ -377,9 +407,11 @@ NCELLS <- c(MIX.SC = ncol(MIX.SC), MIX.SE = ncol(MIX.SE), HYC.SC = ncol(HYC.SC),
 
 ## 2.3 Per-gene contrasts, bootstrap SEs, and permutation null
 # Gene filter: requires a converged NB fit with a finite, non-degenerate
-# dispersion estimate, a mean count of at least min_mean, and detection
-# in at least min_expr_frac of cells, in every one of the 13 datasets
-GS    <- build_gene_sets(SPLIT.FITS, NCELLS, min_mean = 0.001, min_expr_frac = 0.10)
+# dispersion estimate, a mean count above a floor that scales with dataset
+# depth, and detection in an absolute number of cells set from the smallest
+# dataset, in every one of the 13 datasets
+SPLIT.DEPTH <- vapply(SPLIT.FIT.MATS, function(m) sum(m) / ncol(m), numeric(1))
+GS    <- build_gene_sets(SPLIT.FITS, NCELLS, depth = SPLIT.DEPTH, min_mean = 0.001, min_expr_frac = 0.10)
 GENES <- GS$sets$full
 
 # Create bootstrap and permutation input files  
@@ -406,21 +438,23 @@ PLOIDY.SHIFT <- ploidy_shift(CONTRAST.MATS, CONTRAST.EXPOS)[GENES]
 DRAWS <- make_draws(NCELLS, N.BOOT, SEED.BOOT)
 PERMS <- make_perms(NCELLS, N.PERM, SEED.PERM)
 
-# Save bootstrap and permutation input files
+# gene_boot.R and gene_perm.R each load a fixed object name (DRAWS, PERMS)
+# from their own input file, so DRAWS is saved here under the primary seed
 save(CONTRAST.MATS, CONTRAST.EXPOS, CONTRAST.FITS, GENES, DRAWS, N.BOOT, SEED.BOOT, file = file.path(INPUT.DIR, "gene_boot1_inputs.rda"))
 save(CONTRAST.MATS, CONTRAST.EXPOS, CONTRAST.FITS, GENES, PERMS, N.PERM, SEED.PERM, PLOIDY.SHIFT, file = file.path(INPUT.DIR, "gene_perm_inputs.rda"))
 
-# Second seed, same N.BOOT, for the adequacy check in 2.4.
-# Run separately: Rscript gene_boot.R 2
+# DRAWS then reassigned to a second seed (same N.BOOT, used only for the
+# bootstrap adequacy check in 2.4) and saved again
 DRAWS <- make_draws(NCELLS, N.BOOT, SEED.BOOT + 1)
 save(CONTRAST.MATS, CONTRAST.EXPOS, CONTRAST.FITS, GENES, DRAWS, N.BOOT, file = file.path(INPUT.DIR, "gene_boot2_inputs.rda"))
 
-# Cluster jobs: 
-# Rscript gene_boot.R    reads gene_boot1_inputs.rda, writes gene_boot1_output.rda (BOOT.CONTRASTS)
-# Rscript gene_boot.R 2  reads gene_boot2_inputs.rda, writes gene_boot2_output.rda (BOOT.CONTRASTS)
-# Rscript gene_perm.R    reads gene_perm_inputs.rda,  writes gene_perm_output.rda  (PERM.RESULTS)
+## ---- Cluster round trip: Rscript gene_boot.R / gene_boot.R 2 / gene_perm.R ----
+## gene_boot.R    reads gene_boot1_inputs.rda, writes gene_boot1_output.rda (BOOT.CONTRASTS)
+## gene_boot.R 2  reads gene_boot2_inputs.rda, writes gene_boot2_output.rda (BOOT.CONTRASTS, loaded in 2.4)
+## gene_perm.R    reads gene_perm_inputs.rda,  writes gene_perm_output.rda  (PERM.RESULTS)
 load(file.path(OUTPUT.DIR, "gene_boot1_output.rda"))           # BOOT.CONTRASTS
 load(file.path(OUTPUT.DIR, "gene_perm_output.rda"))            # PERM.RESULTS
+## ---- end cluster round trip (gene_boot2_output.rda is loaded in 2.4) ----
 
 # BURST.CONTRASTS holds, per gene, the bootstrap point estimate and SE for the mean
 # and dispersion (disp) contrasts in each of the eight modes, plus two derived
