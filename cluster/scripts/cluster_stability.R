@@ -23,7 +23,7 @@ suppressPackageStartupMessages({
   library(org.Sc.sgd.db)
 })
 
-source("Functions.R")
+source("functions.R")
 load("cluster_stability_inputs.rda")
 
 NUM.CORES <- as.integer(Sys.getenv("SLURM_CPUS_PER_TASK", unset = detectCores()))

@@ -21,7 +21,7 @@
 library('parallel')
 library('MASS')
 
-source("Functions.R")
+source("functions.R")
 load("gene_split_inputs.rda")  # SPLIT.FIT.MATS, SPLIT.FIT.EXPOS
 
 NUM.CORES <- as.integer(Sys.getenv("SLURM_CPUS_PER_TASK", unset = detectCores()))

@@ -21,7 +21,7 @@ suppressPackageStartupMessages({
 })
 register(SerialParam())   # one process per job, parallelism comes from mclapply
 
-source("Functions.R")
+source("functions.R")
 load("go_enrich_inputs.rda")
 NUM.CORES <- as.integer(Sys.getenv("SLURM_CPUS_PER_TASK", unset = detectCores()))
 

@@ -19,7 +19,7 @@
 library('parallel')
 library('NuPoP')
 
-source("Functions.R")
+source("functions.R")
 
 load("nupop_inputs.rda")     # NUPOP.INPUTS.SC, NUPOP.INPUTS.SE
 

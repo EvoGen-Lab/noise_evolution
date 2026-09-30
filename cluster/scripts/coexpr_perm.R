@@ -23,7 +23,7 @@
 
 library('parallel')
 
-source("Functions.R")
+source("functions.R")
 
 ## Optional args: Rscript coexpr_perm.R [input.rda] [output.rda]
 ARGS        <- commandArgs(trailingOnly = TRUE)

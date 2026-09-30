@@ -16,7 +16,7 @@
 library('parallel')
 library('MASS')
 
-source("Functions.R")
+source("functions.R")
 load("gene_pilot_inputs.rda")  # PILOT.MATS, PILOT.EXPOS, PILOT.GENES, N.BOOT, SEED.BOOT
 
 NUM.CORES <- as.integer(Sys.getenv("SLURM_CPUS_PER_TASK", unset = detectCores()))

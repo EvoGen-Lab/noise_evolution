@@ -7,8 +7,10 @@
 #SBATCH --partition=cpu
 #SBATCH --cpus-per-task=24
 #SBATCH --qos=normal
-#SBATCH --time=7:00:00
+#SBATCH --time=48:00:00
 #SBATCH --job-name power
+#SBATCH --array=1-16
+#SBATCH --output=power_%A_%a.out
 
 module load r/4.2.2
 

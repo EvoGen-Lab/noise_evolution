@@ -94,7 +94,7 @@ renv::status()   #reports whether the installed library matches renv.lock
 #here() anchors every path to the project root (the folder holding the .Rproj),
 #so the script runs unchanged on any machine that clones the repository.
 library(here)
-stopifnot(file.exists(here("R", "Functions.R")))
+stopifnot(file.exists(here("R", "functions.R")))
 
 #data/ holds everything read from disk. cluster_inputs and cluster_outputs
 #carry *_inputs.rda and *_output.rda to and from the SLURM cluster.
@@ -121,8 +121,8 @@ for (d in c(INPUT.DIR, OUTPUT.DIR, CHECKPOINT.DIR, CONSOLE.DIR, TABLE.DIR,
   dir.create(d, recursive = TRUE, showWarnings = FALSE)
 }
 
-#One Functions.R path lets this script and the parallel workers load identical code
-FUNCTIONS.FILE <- here("R", "Functions.R")
+#One functions.R path lets this script and the parallel workers load identical code
+FUNCTIONS.FILE <- here("R", "functions.R")
 
 #Packages
 suppressWarnings(suppressPackageStartupMessages({
@@ -148,11 +148,36 @@ source(FUNCTIONS.FILE)
 
 REG.CLASS <- c("Conserved", "Cis", "Trans", "Cis + Trans", "Compensatory")
 DOM.CLASS <- c("Conserved", "Sc.Dominant", "Se.Dominant", "Overdominant", "Underdominant", "Additive")
+# BH FDR level for every class-overlap heatmap (regulatory, dominance, and their
+# cross-comparisons). Each heatmap is adjusted across its own cells, never across heatmaps.
+OVERLAP.FDR <- 0.01
 
-COLOR.LIST.1 <- c("#000000","#8f4a4e","#88CDEA","#C39966","#6E8B5A"); names(COLOR.LIST.1) <- REG.CLASS
-COLOR.LIST.2 <- c("#000000","#C1282D","#FBB03C","#BFBFBF","#3f5e7b","#754c29"); names(COLOR.LIST.2) <- DOM.CLASS
-COLOR.LIST.3 <- c("#67001f","#b2182b","#d6604d","#f4a582","#fddbc7","#f7f7f7", "#d1e5f0","#92c5de","#4393c3","#2166ac","#053061")
-COLOR.LIST.4 <- c("#ddd6c8","#f4efe3","#5c6a47","#5E7A7A")
+## ---- Color palettes (single source of truth; every figure draws from these) ----
+## Species anchors reused wherever Sc/Se appear, so a species hue never means anything else.
+SPECIES.COLOR <- c(Sc = "#B5533C", Se = "#3E6B7A")
+
+## Regulatory classes avoid both species hues (Conserved grey, Cis ink, Trans wine, Cis + Trans ochre, Compensatory sage).
+COLOR.LIST.1 <- c("#D4D4CF","#2B2F42","#640B14","#E0A526","#5F8F5A"); names(COLOR.LIST.1) <- REG.CLASS
+## Dominance classes: the two parents inherit their species colors.
+COLOR.LIST.2 <- c("#D4D4CF", SPECIES.COLOR[["Sc"]], SPECIES.COLOR[["Se"]], "#7A2E4E","#D9A7BF","#8C8C86"); names(COLOR.LIST.2) <- DOM.CLASS
+## Diverging heatmap ramp (warm = enriched, cool = depleted, white center required by class_overlap_heatmap()).
+## The warm side is a segment of COLOR.SEQ and the cool side a segment of COLOR.CLUSTER, taken at matched
+## lightness (L* 75, 62, 48, 34) so positive and negative values carry equal visual weight.
+COLOR.LIST.3 <- colorRampPalette(c("#70453F","#A2623A","#C8893A","#DDB264","#F7F7F7","#D6ABD6","#BB82C3","#9D57AA","#6F3C79"))(11)
+
+## Warm ramp with monotone lightness, shared by the power heatmaps and the power-curve lines.
+SEQ.ANCHORS <- c("#F6F1E4","#E8C77A","#C98A3A","#8A4A3A","#33384A")
+COLOR.SEQ <- colorRampPalette(SEQ.ANCHORS)(100)
+## Cell-cycle phases as a light-to-dark blue ramp in cycle order, clear of every class color.
+COLOR.PHASE <- c(G1 = "#A9CBF2", S = "#3F63BF", G2M = "#132057")
+## Power-curve lines follow the same anchors as COLOR.SEQ, minus the cream end that vanishes on white (light to dark via line_colors()).
+POWER.COLOR <- SEQ.ANCHORS[-1]
+## Plum ramp for cluster labels; it also supplies the cool side of the diverging heatmap (light to dark via cluster_cols()).
+COLOR.CLUSTER <- c("#D7ACD7", "#A159AF", "#512B59")
+## Neutral charcoal for thresholds and reference lines (separated by line type, not hue).
+COLOR.ACCENT <- "#3A3A3A"
+## Three grey tiers replace the previous mix of grey30 to grey85.
+COLOR.GREY <- c(light = "#DADAD5", mid = "#B0B0AB", dark = "#6E6E6A")
 
 console_start(1)   # copies this section's console output to results/console
 ##############################################################################
@@ -188,10 +213,10 @@ GENE.COUNT.THRESHOLD <- 0.20 #A gene needs to have at least 1 read per every 5 c
 GENE.CELL.THRESHOLD  <- 0.10 #A gene must be expressed in at least 10% of cells
 pdf(file.path(FIGURE.DIR, "extra/S_gene_count_threshold_qc.pdf"), width = 8, height = 8, useDingbats = FALSE)
 par(mfrow=c(2,2))
-plot(rowSums(MIX.SC), rowSums(MIX.SC > 0), pch=19, cex=0.6, ylim=c(0,ncol(MIX.SC)), xlab="Count per Gene", ylab="Number of Cells", main= "Sc Parent"); abline(v=ncol(MIX.SC)*GENE.COUNT.THRESHOLD, col="red"); abline(h=ncol(MIX.SC)*GENE.CELL.THRESHOLD, col="red")
-plot(rowSums(MIX.SE), rowSums(MIX.SE > 0), pch=19, cex=0.6, ylim=c(0,ncol(MIX.SE)), xlab="Count per Gene", ylab="Number of Cells", main= "Se Parent"); abline(v=ncol(MIX.SE)*GENE.COUNT.THRESHOLD, col="red"); abline(h=ncol(MIX.SE)*GENE.CELL.THRESHOLD, col="red")
-plot(rowSums(HYB.SC), rowSums(HYB.SC > 0), pch=19, cex=0.6, ylim=c(0,ncol(HYB.SC)), xlab="Count per Gene", ylab="Number of Cells", main= "Sc Hybrid"); abline(v=ncol(HYB.SC)*GENE.COUNT.THRESHOLD, col="red"); abline(h=ncol(HYB.SC)*GENE.CELL.THRESHOLD, col="red")
-plot(rowSums(HYB.SE), rowSums(HYB.SE > 0), pch=19, cex=0.6, ylim=c(0,ncol(HYB.SE)), xlab="Count per Gene", ylab="Number of Cells", main= "Se Hybrid"); abline(v=ncol(HYB.SE)*GENE.COUNT.THRESHOLD, col="red"); abline(h=ncol(HYB.SE)*GENE.CELL.THRESHOLD, col="red")
+plot(rowSums(MIX.SC), rowSums(MIX.SC > 0), pch=19, cex=0.6, ylim=c(0,ncol(MIX.SC)), xlab="Count per Gene", ylab="Number of Cells", main= "Sc Parent"); abline(v=ncol(MIX.SC)*GENE.COUNT.THRESHOLD, col=COLOR.ACCENT, lty=2); abline(h=ncol(MIX.SC)*GENE.CELL.THRESHOLD, col=COLOR.ACCENT, lty=2)
+plot(rowSums(MIX.SE), rowSums(MIX.SE > 0), pch=19, cex=0.6, ylim=c(0,ncol(MIX.SE)), xlab="Count per Gene", ylab="Number of Cells", main= "Se Parent"); abline(v=ncol(MIX.SE)*GENE.COUNT.THRESHOLD, col=COLOR.ACCENT, lty=2); abline(h=ncol(MIX.SE)*GENE.CELL.THRESHOLD, col=COLOR.ACCENT, lty=2)
+plot(rowSums(HYB.SC), rowSums(HYB.SC > 0), pch=19, cex=0.6, ylim=c(0,ncol(HYB.SC)), xlab="Count per Gene", ylab="Number of Cells", main= "Sc Hybrid"); abline(v=ncol(HYB.SC)*GENE.COUNT.THRESHOLD, col=COLOR.ACCENT, lty=2); abline(h=ncol(HYB.SC)*GENE.CELL.THRESHOLD, col=COLOR.ACCENT, lty=2)
+plot(rowSums(HYB.SE), rowSums(HYB.SE > 0), pch=19, cex=0.6, ylim=c(0,ncol(HYB.SE)), xlab="Count per Gene", ylab="Number of Cells", main= "Se Hybrid"); abline(v=ncol(HYB.SE)*GENE.COUNT.THRESHOLD, col=COLOR.ACCENT, lty=2); abline(h=ncol(HYB.SE)*GENE.CELL.THRESHOLD, col=COLOR.ACCENT, lty=2)
 dev.off()
 
 MIX.SC <- MIX.SC[which(rowSums(MIX.SC)/ncol(MIX.SC) >= GENE.COUNT.THRESHOLD & rowSums(MIX.SC > 0)/ncol(MIX.SC) >= GENE.CELL.THRESHOLD ),]
@@ -204,10 +229,10 @@ CELL.COUNT.THRESHOLD <- 1 #A cell needs to have at least 1 read for every gene
 CELL.GENE.THRESHOLD <- 0.25 #A cell needs to express at least 25% of all genes
 pdf(file.path(FIGURE.DIR, "extra/S_cell_count_threshold_qc.pdf"), width = 8, height = 8, useDingbats = FALSE)
 par(mfrow=c(2,2))
-plot(colSums(MIX.SC), colSums(MIX.SC > 0), pch=19, cex=0.6, xlim=c(0,50000), ylim=c(0,nrow(MIX.SC)), xlab="Count per Cell", ylab="Number of Genes", main= "Sc Parent"); abline(v=nrow(MIX.SC)*CELL.COUNT.THRESHOLD, col="red"); abline(h=nrow(MIX.SC)*CELL.GENE.THRESHOLD, col="red")
-plot(colSums(MIX.SE), colSums(MIX.SE > 0), pch=19, cex=0.6, xlim=c(0,50000), ylim=c(0,nrow(MIX.SE)), xlab="Count per Cell", ylab="Number of Genes", main= "Se Parent"); abline(v=nrow(MIX.SE)*CELL.COUNT.THRESHOLD, col="red"); abline(h=nrow(MIX.SE)*CELL.GENE.THRESHOLD, col="red")
-plot(colSums(HYB.SC), colSums(HYB.SC > 0), pch=19, cex=0.6, xlim=c(0,50000), ylim=c(0,nrow(HYB.SC)), xlab="Count per Cell", ylab="Number of Genes", main= "Sc Hybrid"); abline(v=nrow(HYB.SC)*CELL.COUNT.THRESHOLD, col="red"); abline(h=nrow(HYB.SC)*CELL.GENE.THRESHOLD, col="red")
-plot(colSums(HYB.SE), colSums(HYB.SE > 0), pch=19, cex=0.6, xlim=c(0,50000), ylim=c(0,nrow(HYB.SE)), xlab="Count per Cell", ylab="Number of Genes", main= "Se Hybrid"); abline(v=nrow(HYB.SE)*CELL.COUNT.THRESHOLD, col="red"); abline(h=nrow(HYB.SE)*CELL.GENE.THRESHOLD, col="red")
+plot(colSums(MIX.SC), colSums(MIX.SC > 0), pch=19, cex=0.6, xlim=c(0,50000), ylim=c(0,nrow(MIX.SC)), xlab="Count per Cell", ylab="Number of Genes", main= "Sc Parent"); abline(v=nrow(MIX.SC)*CELL.COUNT.THRESHOLD, col=COLOR.ACCENT, lty=2); abline(h=nrow(MIX.SC)*CELL.GENE.THRESHOLD, col=COLOR.ACCENT, lty=2)
+plot(colSums(MIX.SE), colSums(MIX.SE > 0), pch=19, cex=0.6, xlim=c(0,50000), ylim=c(0,nrow(MIX.SE)), xlab="Count per Cell", ylab="Number of Genes", main= "Se Parent"); abline(v=nrow(MIX.SE)*CELL.COUNT.THRESHOLD, col=COLOR.ACCENT, lty=2); abline(h=nrow(MIX.SE)*CELL.GENE.THRESHOLD, col=COLOR.ACCENT, lty=2)
+plot(colSums(HYB.SC), colSums(HYB.SC > 0), pch=19, cex=0.6, xlim=c(0,50000), ylim=c(0,nrow(HYB.SC)), xlab="Count per Cell", ylab="Number of Genes", main= "Sc Hybrid"); abline(v=nrow(HYB.SC)*CELL.COUNT.THRESHOLD, col=COLOR.ACCENT, lty=2); abline(h=nrow(HYB.SC)*CELL.GENE.THRESHOLD, col=COLOR.ACCENT, lty=2)
+plot(colSums(HYB.SE), colSums(HYB.SE > 0), pch=19, cex=0.6, xlim=c(0,50000), ylim=c(0,nrow(HYB.SE)), xlab="Count per Cell", ylab="Number of Genes", main= "Se Hybrid"); abline(v=nrow(HYB.SE)*CELL.COUNT.THRESHOLD, col=COLOR.ACCENT, lty=2); abline(h=nrow(HYB.SE)*CELL.GENE.THRESHOLD, col=COLOR.ACCENT, lty=2)
 dev.off()
 MIX.SC <- MIX.SC[,which(colSums(MIX.SC)/nrow(MIX.SC) >= CELL.COUNT.THRESHOLD & colSums(MIX.SC > 0)/nrow(MIX.SC) >= CELL.GENE.THRESHOLD)]
 MIX.SE <- MIX.SE[,which(colSums(MIX.SE)/nrow(MIX.SE) >= CELL.COUNT.THRESHOLD & colSums(MIX.SE > 0)/nrow(MIX.SE) >= CELL.GENE.THRESHOLD)]
@@ -240,14 +265,14 @@ MITO.RATIO  <- log2(HYB.SC['MT_F',-MITO.IGNORE]/HYB.SE['MT_F',-MITO.IGNORE])
 pdf(file.path(FIGURE.DIR, "extra/S_mito_ratio_hybrid.pdf"), width = 6, height = 5, useDingbats = FALSE)
 par(mfrow=c(1,1))
 hist(MITO.RATIO,breaks=40,xlab="log2(Sc/Se) mitochondrial ratio in hybrid",main="")
-abline(v=mean(MITO.RATIO),col="red",lwd=2)
+abline(v=mean(MITO.RATIO),col=COLOR.ACCENT,lwd=2,lty=2)
 dev.off()
 cat("Mitochondrial log2(Sc/Se) ratio in hybrid, quantiles:\n")
 print(round(quantile(MITO.RATIO, probs = c(0, 0.25, 0.5, 0.75, 1)), 3))
 
 pdf(file.path(FIGURE.DIR, "extra/S_mito_ignore_depth.pdf"), width = 6, height = 5, useDingbats = FALSE)
 hist(colSums(HYB.SC[,-MITO.IGNORE]),breaks=seq(0,80000,2500), xlab="Hybrid Sc Reads/cell",main="")
-hist(colSums(HYB.SC[,MITO.IGNORE]),breaks=seq(0,80000,2500),col="red",add=TRUE)
+hist(colSums(HYB.SC[,MITO.IGNORE]),breaks=seq(0,80000,2500),col=COLOR.GREY[["dark"]],add=TRUE)
 dev.off()
 
 # Remove mitochondrial reads from remainder of analyses
@@ -280,7 +305,7 @@ EXPO.HYB    <- (colSums(HYB.SC) + colSums(HYB.SE))/DEPTH.REF
 
 # Seeds and resample counts for bootstrap, permutation, and coexpression steps
 N.BOOT <- 1000; SEED.BOOT <- 1            # bootstrap resamples
-N.PERM <- 500; SEED.PERM <- 1            # permutation shuffles
+N.PERM <- 10000; SEED.PERM <- 1          # permutation shuffles (p-value floor 1e-4, judged at BH FDR)
 N.COEXPR <- 5000; SEED.COEXPR <- 1        # Coexpression
 
 ## 2.1 Internal split fraction
@@ -373,12 +398,17 @@ CONTRAST.EXPOS <- list(MIX.SC = EXPO.MIX.SC, MIX.SE = EXPO.MIX.SE,
 
 CONTRAST.FITS <- lapply(SPLIT.FITS, function(fr) data.frame(MU   = as.numeric(as.character(fr[GENES, "MU"])), DISP = as.numeric(as.character(fr[GENES, "DISP"])), row.names = GENES))
 
+# Expected rise in bfreq when HYB.COMB sums the two hybrid alleles, per gene
+# in log2 units (0 to 1). The permutation job reads the dpar noise contrasts
+# against it, and ploidy_adjust_dpar() removes it from the dpar estimates below.
+PLOIDY.SHIFT <- ploidy_shift(CONTRAST.MATS, CONTRAST.EXPOS)[GENES]
+
 DRAWS <- make_draws(NCELLS, N.BOOT, SEED.BOOT)
 PERMS <- make_perms(NCELLS, N.PERM, SEED.PERM)
 
 # Save bootstrap and permutation input files
 save(CONTRAST.MATS, CONTRAST.EXPOS, CONTRAST.FITS, GENES, DRAWS, N.BOOT, SEED.BOOT, file = file.path(INPUT.DIR, "gene_boot1_inputs.rda"))
-save(CONTRAST.MATS, CONTRAST.EXPOS, CONTRAST.FITS, GENES, PERMS, N.PERM, SEED.PERM, file = file.path(INPUT.DIR, "gene_perm_inputs.rda"))
+save(CONTRAST.MATS, CONTRAST.EXPOS, CONTRAST.FITS, GENES, PERMS, N.PERM, SEED.PERM, PLOIDY.SHIFT, file = file.path(INPUT.DIR, "gene_perm_inputs.rda"))
 
 # Second seed, same N.BOOT, for the adequacy check in 2.4.
 # Run separately: Rscript gene_boot.R 2
@@ -396,8 +426,14 @@ load(file.path(OUTPUT.DIR, "gene_perm_output.rda"))            # PERM.RESULTS
 # and dispersion (disp) contrasts in each of the eight modes, plus two derived
 # quantities per mode: bfreq (burst frequency, the disp contrast
 # itself) and bsize (burst size, mean minus disp in log2 space)
-BURST.CONTRASTS <- add_burst_contrasts(BOOT.CONTRASTS)
+# The dpar noise estimates then leave the HYB.COMB allele-summing shift behind
+# (ploidy_adjust_dpar), with the raw values kept in the _est_raw columns.
+BURST.CONTRASTS <- ploidy_adjust_dpar(add_burst_contrasts(BOOT.CONTRASTS), CONTRAST.FITS, PLOIDY.SHIFT)
 PR <- PERM.RESULTS[match(BURST.CONTRASTS$gene, PERM.RESULTS$gene), ]   
+# Benjamini-Hochberg FDR across genes, one family per contrast and quantity.
+# Adds a _q column beside every _p column. All classification, plotting and
+# GO set construction below reads the _q columns at sig = 0.05.
+PR <- fdr_columns(PR)
 eiv_table(BURST.CONTRASTS, modes = c("cis", "trans", "total"))
 
 # Diagnostic panel, before classification exists: top row cis vs trans
@@ -431,7 +467,7 @@ do.call(rbind, lapply(names(SEED.CHECK), function(m) do.call(rbind, lapply(names
 # because Section 2 reorders their cells by depth, and loading checkpoints
 # 1 to 4 in order leaves this reordered version in place.
 save(GENES, HYB.COMB, CONTRAST.FITS, CONTRAST.MATS, CONTRAST.EXPOS, SPLIT.FITS,
-     BOOT.CONTRASTS, BURST.CONTRASTS, PERM.RESULTS, PR,
+     BOOT.CONTRASTS, BURST.CONTRASTS, PERM.RESULTS, PR, PLOIDY.SHIFT,
      HYB.SC, HYB.SE, EXPO.MIX.SC, EXPO.MIX.SE, EXPO.HYB, N.COEXPR, SEED.COEXPR,
      file = ckpt_path(2))
 
@@ -449,10 +485,10 @@ console_start(3)   # copies this section's console output to results/console
 # (bsize = mean - bfreq by construction), so classifying and comparing
 # them side by side mostly re-tests the size of bfreq's own variance
 # across genes, not biology. kbal and mean are the well-posed pair.
-REG.MEAN  <- classify_reg(PR$mean_cis_p,  PR$mean_trans_p,  BURST.CONTRASTS$mean_cis_est,  BURST.CONTRASTS$mean_trans_est,  sig = 0.05)
-REG.BFREQ <- classify_reg(PR$bfreq_cis_p, PR$bfreq_trans_p, BURST.CONTRASTS$bfreq_cis_est, BURST.CONTRASTS$bfreq_trans_est, sig = 0.05)
-REG.BSIZE <- classify_reg(PR$bsize_cis_p, PR$bsize_trans_p, BURST.CONTRASTS$bsize_cis_est, BURST.CONTRASTS$bsize_trans_est, sig = 0.05)
-REG.KBAL  <- classify_reg(PR$kbal_cis_p,  PR$kbal_trans_p,  BURST.CONTRASTS$kbal_cis_est,  BURST.CONTRASTS$kbal_trans_est,  sig = 0.05)
+REG.MEAN  <- classify_reg(PR$mean_cis_q,  PR$mean_trans_q,  BURST.CONTRASTS$mean_cis_est,  BURST.CONTRASTS$mean_trans_est,  sig = 0.05)
+REG.BFREQ <- classify_reg(PR$bfreq_cis_q, PR$bfreq_trans_q, BURST.CONTRASTS$bfreq_cis_est, BURST.CONTRASTS$bfreq_trans_est, sig = 0.05)
+REG.BSIZE <- classify_reg(PR$bsize_cis_q, PR$bsize_trans_q, BURST.CONTRASTS$bsize_cis_est, BURST.CONTRASTS$bsize_trans_est, sig = 0.05)
+REG.KBAL  <- classify_reg(PR$kbal_cis_q,  PR$kbal_trans_q,  BURST.CONTRASTS$kbal_cis_est,  BURST.CONTRASTS$kbal_trans_est,  sig = 0.05)
 REG.MEAN.CLASS  <- REG.MEAN$class;  REG.MEAN.COLOR  <- REG.MEAN$color
 REG.BFREQ.CLASS <- REG.BFREQ$class; REG.BFREQ.COLOR <- REG.BFREQ$color
 REG.BSIZE.CLASS <- REG.BSIZE$class; REG.BSIZE.COLOR <- REG.BSIZE$color
@@ -471,7 +507,7 @@ barplot(table(factor(REG.BSIZE.CLASS, levels = REG.CLASS)), col = COLOR.LIST.1, 
 dev.off()
 
 ## Figure 2: regulatory class overlap heatmaps, all pairings.
-# Cell text = fold enrichment (obs/exp); * = BH-corrected p < 0.05.
+# Cell text = fold enrichment (obs/exp); * = BH-corrected q < OVERLAP.FDR (0.01), adjusted across the cells of each heatmap.
 # Color ramp = log2(obs/exp), diverging through white at zero.
 # The third panel compares mean class to kinetic-balance class rather
 # than burst frequency class to burst size class directly: bsize is
@@ -494,30 +530,51 @@ dev.off()
 ## 3.2 Significance histograms for total, cis, and trans effects
 pdf(file.path(FIGURE.DIR, "extra/S_reg_sig_hist.pdf"), width = 12, height = 10, useDingbats = FALSE)
 par(mfrow = c(3, 3))
-sig_hist(BURST.CONTRASTS$mean_total_est,  PR$mean_total_p,                xlim = c(-5, 5),     ylim = c(0, 300), xlab = "parents log2(Sc/Se) mean")
-sig_hist(BURST.CONTRASTS$bfreq_total_est, PR$bfreq_total_p, brk = 0.05,   xlim = c(-2.5, 2.5), ylim = c(0, 600), xlab = "parents log2(Sc/Se) burst frequency")
-sig_hist(BURST.CONTRASTS$bsize_total_est, PR$bsize_total_p,               xlim = c(-5, 5),     ylim = c(0, 300), xlab = "parents log2(Sc/Se) burst size")
-sig_hist(BURST.CONTRASTS$mean_cis_est,    PR$mean_cis_p,                  xlim = c(-5, 5),     ylim = c(0, 400), xlab = "cis log2(Sc/Se) mean")
-sig_hist(BURST.CONTRASTS$bfreq_cis_est,   PR$bfreq_cis_p,   brk = 0.05,   xlim = c(-2.5, 2.5), ylim = c(0, 600), xlab = "cis log2(Sc/Se) burst frequency")
-sig_hist(BURST.CONTRASTS$bsize_cis_est,   PR$bsize_cis_p,                 xlim = c(-5, 5),     ylim = c(0, 400), xlab = "cis log2(Sc/Se) burst size")
-sig_hist(BURST.CONTRASTS$mean_trans_est,  PR$mean_trans_p,                xlim = c(-5, 5),     ylim = c(0, 400), xlab = "trans log2(Sc/Se) mean")
-sig_hist(BURST.CONTRASTS$bfreq_trans_est, PR$bfreq_trans_p, brk = 0.05,   xlim = c(-2.5, 2.5), ylim = c(0, 400), xlab = "trans log2(Sc/Se) burst frequency")
-sig_hist(BURST.CONTRASTS$bsize_trans_est, PR$bsize_trans_p,               xlim = c(-5, 5),     ylim = c(0, 400), xlab = "trans log2(Sc/Se) burst size")
+sig_hist(BURST.CONTRASTS$mean_total_est,  PR$mean_total_q,                xlim = c(-5, 5),     ylim = c(0, 300), xlab = "parents log2(Sc/Se) mean")
+sig_hist(BURST.CONTRASTS$bfreq_total_est, PR$bfreq_total_q, brk = 0.05,   xlim = c(-2.5, 2.5), ylim = c(0, 600), xlab = "parents log2(Sc/Se) burst frequency")
+sig_hist(BURST.CONTRASTS$bsize_total_est, PR$bsize_total_q,               xlim = c(-5, 5),     ylim = c(0, 300), xlab = "parents log2(Sc/Se) burst size")
+sig_hist(BURST.CONTRASTS$mean_cis_est,    PR$mean_cis_q,                  xlim = c(-5, 5),     ylim = c(0, 400), xlab = "cis log2(Sc/Se) mean")
+sig_hist(BURST.CONTRASTS$bfreq_cis_est,   PR$bfreq_cis_q,   brk = 0.05,   xlim = c(-2.5, 2.5), ylim = c(0, 600), xlab = "cis log2(Sc/Se) burst frequency")
+sig_hist(BURST.CONTRASTS$bsize_cis_est,   PR$bsize_cis_q,                 xlim = c(-5, 5),     ylim = c(0, 400), xlab = "cis log2(Sc/Se) burst size")
+sig_hist(BURST.CONTRASTS$mean_trans_est,  PR$mean_trans_q,                xlim = c(-5, 5),     ylim = c(0, 400), xlab = "trans log2(Sc/Se) mean")
+sig_hist(BURST.CONTRASTS$bfreq_trans_est, PR$bfreq_trans_q, brk = 0.05,   xlim = c(-2.5, 2.5), ylim = c(0, 400), xlab = "trans log2(Sc/Se) burst frequency")
+sig_hist(BURST.CONTRASTS$bsize_trans_est, PR$bsize_trans_q,               xlim = c(-5, 5),     ylim = c(0, 400), xlab = "trans log2(Sc/Se) burst size")
 dev.off()
 
 ## 3.3 Dominance classification: mean, burst frequency, burst size,
 ## kinetic balance
-# dpar contrasts are levels (combined hybrid against one parent). This carries 
-# the library-doubling factor that the depth offset does not remove and
-# the permutation p for these axes is descriptive only.
-DOM.MEAN  <- classify_dom(PR$mean_dpar_sc_p,  PR$mean_dpar_se_p,  BURST.CONTRASTS$mean_dpar_sc_est,  BURST.CONTRASTS$mean_dpar_se_est,  sig = 0.05)
-DOM.BFREQ <- classify_dom(PR$bfreq_dpar_sc_p, PR$bfreq_dpar_se_p, BURST.CONTRASTS$bfreq_dpar_sc_est, BURST.CONTRASTS$bfreq_dpar_se_est, sig = 0.05)
-DOM.BSIZE <- classify_dom(PR$bsize_dpar_sc_p, PR$bsize_dpar_se_p, BURST.CONTRASTS$bsize_dpar_sc_est, BURST.CONTRASTS$bsize_dpar_se_est, sig = 0.05)
-DOM.KBAL  <- classify_dom(PR$kbal_dpar_sc_p,  PR$kbal_dpar_se_p,  BURST.CONTRASTS$kbal_dpar_sc_est,  BURST.CONTRASTS$kbal_dpar_se_est,  sig = 0.05)
+# dpar contrasts compare the combined hybrid (both alleles, offset by the
+# full diploid library) with one haploid parent. The offset places both on a
+# share of library scale, so an additive gene sits at the midparent on the
+# mean axis and the library doubling cancels. On the noise axis the sum of two
+# alleles averages their intrinsic noise, so bfreq rises in the hybrid and cv2
+# falls. ploidy_adjust_dpar() removes that shift from the dpar estimates, and
+# the permutation job reports _p_ploidy (own shift) and _p_ind (shift of 1)
+# for bfreq, bsize, kbal and cv2. Classification reads the BH-adjusted q
+# columns, _q for mean and _q_ploidy for the noise quantities.
+DOM.MEAN  <- classify_dom(PR$mean_dpar_sc_q,  PR$mean_dpar_se_q,  BURST.CONTRASTS$mean_dpar_sc_est,  BURST.CONTRASTS$mean_dpar_se_est,  sig = 0.05)
+DOM.BFREQ <- classify_dom(PR$bfreq_dpar_sc_q_ploidy, PR$bfreq_dpar_se_q_ploidy, BURST.CONTRASTS$bfreq_dpar_sc_est, BURST.CONTRASTS$bfreq_dpar_se_est, sig = 0.05)
+DOM.BSIZE <- classify_dom(PR$bsize_dpar_sc_q_ploidy, PR$bsize_dpar_se_q_ploidy, BURST.CONTRASTS$bsize_dpar_sc_est, BURST.CONTRASTS$bsize_dpar_se_est, sig = 0.05)
+DOM.KBAL  <- classify_dom(PR$kbal_dpar_sc_q_ploidy,  PR$kbal_dpar_se_q_ploidy,  BURST.CONTRASTS$kbal_dpar_sc_est,  BURST.CONTRASTS$kbal_dpar_se_est,  sig = 0.05)
 DOM.MEAN.CLASS  <- DOM.MEAN$class
 DOM.BFREQ.CLASS <- DOM.BFREQ$class
 DOM.BSIZE.CLASS <- DOM.BSIZE$class
 DOM.KBAL.CLASS  <- DOM.KBAL$class
+
+# Sensitivity to the size of the shift. The _q_ind calls use s = 1 for every
+# gene, the upper bound for fully independent equal alleles. Classes that hold
+# under both bases do not depend on how private the allele noise is.
+DOM.BFREQ.CLASS.IND <- dom_class_vec(BURST.CONTRASTS, PR, "bfreq", basis = "ind")
+DOM.BSIZE.CLASS.IND <- dom_class_vec(BURST.CONTRASTS, PR, "bsize", basis = "ind")
+DOM.KBAL.CLASS.IND  <- dom_class_vec(BURST.CONTRASTS, PR, "kbal",  basis = "ind")
+PLOIDY.CHECK <- data.frame(
+  median_shift = median(PLOIDY.SHIFT, na.rm = TRUE),
+  raw_sc = median(BURST.CONTRASTS$bfreq_dpar_sc_est_raw, na.rm = TRUE),
+  adj_sc = median(BURST.CONTRASTS$bfreq_dpar_sc_est,     na.rm = TRUE),
+  raw_se = median(BURST.CONTRASTS$bfreq_dpar_se_est_raw, na.rm = TRUE),
+  adj_se = median(BURST.CONTRASTS$bfreq_dpar_se_est,     na.rm = TRUE))
+PLOIDY.CHECK   # adjusted medians sit nearer zero than the raw medians
+table(own = DOM.BFREQ.CLASS, ind = DOM.BFREQ.CLASS.IND)
 
 ## 3.4 Mean against burst frequency and burst size, parents and hybrids
 # Burst size is the composite of the two (bsize = mean - bfreq in log2
@@ -525,9 +582,10 @@ DOM.KBAL.CLASS  <- DOM.KBAL$class
 # its burst frequency divergence, its burst size divergence, or both.
 # Run on the parental contrast (total) and on both hybrid dpar contrasts
 # (hybrid against each parent)
-# The dpar contrasts carry the
-# library-doubling factor noted in Section 3.3 and could in principle
-# show a different relationship than the parental contrast does.
+# The mean axis of dpar shares the parental scale, so the three views compare
+# directly. The noise axis of dpar plots the ploidy-adjusted bfreq and bsize
+# estimates from Section 3.3, so the hybrid panels sit on the same per-genome
+# scale as the parental panel.
 # Figure 3 below reuses this same plot_mean_bfreq_class() call for the
 # total contrast only, as the two main-text panels
 pdf(file.path(FIGURE.DIR, "extra/S_mean_vs_bfreq_bsize_all_modes.pdf"), width = 13, height = 18, useDingbats = FALSE)
@@ -579,7 +637,7 @@ par(mfrow = c(1, 2), mar = c(5, 4.5, 2, 1))
 KS <- plot_burst_kinetics_sig(BURST.CONTRASTS, mode = "total")   # returns kbal_sig df
 bp_counts <- table(factor(KS$direction, levels = c("sig_pos","sig_neg","ns")))
 barplot(bp_counts,
-        col    = c(sig_pos = "black", sig_neg = "grey40", ns = "grey80"),
+        col    = c(sig_pos = "black", sig_neg = COLOR.GREY[["dark"]], ns = COLOR.GREY[["light"]]),
         names.arg = c("sig > 0", "sig < 0", "n.s."),
         ylab   = "# of genes", las = 1, border = NA)
 dev.off()
@@ -603,23 +661,23 @@ dev.off()
 # frequency-vs-size comparison and carries no structural artifact.
 pdf(file.path(FIGURE.DIR, "extra/S_class_heatmaps.pdf"), width = 13, height = 13, useDingbats = FALSE)
 par(mfrow = c(3, 3))
-class_heatmap(clean_reg(REG.MEAN.CLASS),  clean_reg(REG.BFREQ.CLASS), fdr = 0.05,
+class_heatmap(clean_reg(REG.MEAN.CLASS),  clean_reg(REG.BFREQ.CLASS), fdr = OVERLAP.FDR,
              ylab = "mean regulatory class", xlab = "burst frequency regulatory class")
-class_heatmap(clean_reg(REG.MEAN.CLASS),  clean_reg(REG.BSIZE.CLASS), fdr = 0.05,
+class_heatmap(clean_reg(REG.MEAN.CLASS),  clean_reg(REG.BSIZE.CLASS), fdr = OVERLAP.FDR,
              ylab = "mean regulatory class", xlab = "burst size regulatory class")
-class_heatmap(clean_reg(REG.MEAN.CLASS),  clean_reg(REG.KBAL.CLASS),  fdr = 0.05,
+class_heatmap(clean_reg(REG.MEAN.CLASS),  clean_reg(REG.KBAL.CLASS),  fdr = OVERLAP.FDR,
              ylab = "mean regulatory class", xlab = "frequency-size balance regulatory class")
-class_heatmap(DOM.MEAN.CLASS,  DOM.BFREQ.CLASS, fdr = 0.0001,
+class_heatmap(DOM.MEAN.CLASS,  DOM.BFREQ.CLASS, fdr = OVERLAP.FDR,
              ylab = "mean dominance class", xlab = "burst frequency dominance class")
-class_heatmap(DOM.MEAN.CLASS,  DOM.BSIZE.CLASS, fdr = 0.0001,
+class_heatmap(DOM.MEAN.CLASS,  DOM.BSIZE.CLASS, fdr = OVERLAP.FDR,
              ylab = "mean dominance class", xlab = "burst size dominance class")
-class_heatmap(DOM.MEAN.CLASS,  DOM.KBAL.CLASS,  fdr = 0.0001,
+class_heatmap(DOM.MEAN.CLASS,  DOM.KBAL.CLASS,  fdr = OVERLAP.FDR,
              ylab = "mean dominance class", xlab = "frequency-size balance dominance class")
-class_heatmap(clean_reg(REG.MEAN.CLASS),  DOM.MEAN.CLASS,  fdr = 0.001,
+class_heatmap(clean_reg(REG.MEAN.CLASS),  DOM.MEAN.CLASS,  fdr = OVERLAP.FDR,
              ylab = "mean regulatory class", xlab = "mean dominance class")
-class_heatmap(clean_reg(REG.BFREQ.CLASS), DOM.BFREQ.CLASS, fdr = 0.000001,
+class_heatmap(clean_reg(REG.BFREQ.CLASS), DOM.BFREQ.CLASS, fdr = OVERLAP.FDR,
              ylab = "burst frequency regulatory class", xlab = "burst frequency dominance class")
-class_heatmap(clean_reg(REG.KBAL.CLASS),  DOM.KBAL.CLASS,  fdr = 0.000001,
+class_heatmap(clean_reg(REG.KBAL.CLASS),  DOM.KBAL.CLASS,  fdr = OVERLAP.FDR,
              ylab = "frequency-size balance regulatory class", xlab = "frequency-size balance dominance class")
 dev.off()
 
@@ -661,8 +719,8 @@ for (ov in list(list(ov = REG.OVERLAP.MEAN.BFREQ,  lab = "mean vs burst frequenc
                 list(ov = REG.OVERLAP.MEAN.BSIZE,  lab = "mean vs burst size"),
                 list(ov = REG.OVERLAP.BFREQ.BSIZE, lab = "burst frequency vs burst size (structural)"),
                 list(ov = REG.OVERLAP.MEAN.KBAL,   lab = "mean vs frequency-size balance"))) {
-  hist(ov$ov$kappa_null, breaks = 40, col = "grey85", border = "white", main = paste0("Permutation null: ", ov$lab), xlab = "kappa (reshuffled labels)", xlim = range(c(ov$ov$kappa_null, ov$ov$kappa)))
-  abline(v = ov$ov$kappa, col = "#D62728", lwd = 2)
+  hist(ov$ov$kappa_null, breaks = 40, col = COLOR.GREY[["light"]], border = "white", main = paste0("Permutation null: ", ov$lab), xlab = "kappa (reshuffled labels)", xlim = range(c(ov$ov$kappa_null, ov$ov$kappa)))
+  abline(v = ov$ov$kappa, col = COLOR.ACCENT, lwd = 2, lty = 2)
   legend("topright", bty = "n", cex = 0.8, legend = sprintf("observed kappa = %.3f (p = %.4f)", ov$ov$kappa, ov$ov$kappa_p))
 }
 dev.off()
@@ -711,6 +769,17 @@ RESID <- list(
   HYB.SC = nb_residuals(HYB.SC[CO.GENES, ], EXPO.HYB,    CONTRAST.FITS$HYB.SC[CO.GENES, ]),
   HYB.SE = nb_residuals(HYB.SE[CO.GENES, ], EXPO.HYB,    CONTRAST.FITS$HYB.SE[CO.GENES, ]),
   HYB.COMB = nb_residuals(HYB.COMB[CO.GENES, ], EXPO.HYB, CONTRAST.FITS$HYB.COMB[CO.GENES, ]))
+
+# Summing the two hybrid alleles lowers each gene's latent variance and leaves
+# the between-gene covariance alone, so HYB.COMB residual correlations run
+# higher than a haploid genome's. ploidy_coexpr_factor() gives each gene the
+# factor f that rescales the hybrid correlation to R_ij * f_i * f_j. RESID
+# carries f as an attribute, so the bootstrap and permutation jobs read it
+# from their input files with no script changes. Genes without a finite
+# shift get f = 1 and are counted below.
+PLOIDY.F <- ploidy_coexpr_factor(CONTRAST.FITS$HYB.COMB[CO.GENES, ], PLOIDY.SHIFT[CO.GENES])
+attr(RESID, "ploidy_f") <- PLOIDY.F
+cat(sprintf("ploidy factor: median f = %.3f, %d of %d genes unadjusted\n", median(PLOIDY.F), sum(!is.finite(PLOIDY.SHIFT[CO.GENES])), length(CO.GENES)))
 
 # COEXPR.POINT is the point estimate of the pairwise residual correlation
 # matrix, decomposed into total (parents), cis (allele-specific within
@@ -880,6 +949,7 @@ for (ax in COEXPR.AXES) {
   cat(sprintf("\n-- %s: axis validation --\n", ax))
   VT <- VALIDATED.LIST[[ax]]$table
   VT$p_value <- signif(VT$p_value, 4)   # default rounding hides the permutation floor (1 / (N.PERM.COEXPR + 1)) as 0.000
+  VT$q_value <- signif(VT$q_value, 4)   # BH FDR across the candidate axes; validated axes are those with q below alpha
   print(VT)
   cat(sprintf("%s: validated axes = %s\n", ax, paste(VALIDATED.LIST[[ax]]$validated_axes, collapse = ", ")))
 }
@@ -922,7 +992,7 @@ summary(POS.MU.LOG2FC); summary(NEG.MU.LOG2FC)
 
 pdf(file.path(FIGURE.DIR, "extra/S_coexpr_growth_check.pdf"), width = 5, height = 5, useDingbats = FALSE)
 boxplot(list(POS = POS.MU.LOG2FC, NEG = NEG.MU.LOG2FC), ylab = "log2(Sc MU / Se MU)", main = "mean expression shift by loading group")
-abline(h = 0, lty = 2, col = "grey45")
+abline(h = 0, lty = 2, col = COLOR.GREY[["dark"]])
 dev.off()
 
 # Per-species mean expression level for the NEG group
@@ -939,7 +1009,7 @@ head(NEG.LOG2FC.SORTED, 15)   # most Sc-elevated / Se-depressed genes in the set
 
 pdf(file.path(FIGURE.DIR, "extra/S_coexpr_neg_log2fc_hist.pdf"), width = 6, height = 5, useDingbats = FALSE)
 hist(NEG.MU.LOG2FC, breaks = 30, xlab = "log2(Sc MU / Se MU)", main = "NEG group, per-gene expression shift")
-abline(v = 0, lty = 2, col = "grey45")
+abline(v = 0, lty = 2, col = COLOR.GREY[["dark"]])
 dev.off()
 
 # Enrichment for the genes at least 2-fold Sc-elevated within the NEG group
@@ -1014,9 +1084,9 @@ cat(sprintf("Mean vs frequency-size balance class concordance: genome-wide = %.3
 
 pdf(file.path(FIGURE.DIR, "extra/S_coexpr_burst_mechanism_heatmap.pdf"), width = 10, height = 5, useDingbats = FALSE)
 par(mfrow = c(1, 2))
-class_heatmap(clean_reg(CO.BFREQ.CLASS), clean_reg(CO.BSIZE.CLASS), fdr = 0.05,
+class_heatmap(clean_reg(CO.BFREQ.CLASS), clean_reg(CO.BSIZE.CLASS), fdr = OVERLAP.FDR,
              ylab = "burst frequency class (CO.GENES)", xlab = "burst size class (CO.GENES)")
-class_heatmap(clean_reg(CO.MEAN.CLASS),  clean_reg(CO.KBAL.CLASS),  fdr = 0.05,
+class_heatmap(clean_reg(CO.MEAN.CLASS),  clean_reg(CO.KBAL.CLASS),  fdr = OVERLAP.FDR,
              ylab = "mean class (CO.GENES)", xlab = "frequency-size balance class (CO.GENES)")
 dev.off()
 
@@ -1062,7 +1132,7 @@ for (ax_mode in c("cis", "trans")) {
 }
 
 # Checkpoint
-save(RESID, COEXPR.POINT, CB, CB2, CB.CLASS, CB.DOM.CLASS,
+save(RESID, PLOIDY.F, COEXPR.POINT, CB, CB2, CB.CLASS, CB.DOM.CLASS,
      RANK.CHECK.LIST, CANDIDATE.LIST, EXTRA.AXES.LIST, VALIDATED.LIST,
      AXIS1.CT, AXIS2.CT, BFREQ.BSIZE.OVERLAP.CO,
      file = ckpt_path(4))
@@ -1108,7 +1178,7 @@ RHO.PARTIAL <- sapply(INTR.SAMP, function(g) partial_cor_depth(RESID.ALLELE$HYB.
 
 pdf(file.path(FIGURE.DIR, "extra/S_intrinsic_depth_partial.pdf"), width = 5, height = 5, useDingbats = FALSE)
 plot(INTR.REL.CHECK$rho_obs, RHO.PARTIAL, pch = 19, cex = 0.5, xlab = "raw allele correlation", ylab = "allele correlation, depth partialled out")
-abline(0, 1, col = "red"); abline(h = 0, lty = 2)
+abline(0, 1, col = COLOR.ACCENT, lty = 2); abline(h = 0, lty = 2)
 dev.off()
 
 # How far the depth-partialled correlation moves from the raw correlation.
@@ -1144,8 +1214,8 @@ NOISE.DECOMP <- data.frame(gene = GENES.NOISE, rho_obs = RHO.OBS.FULL, attn = AT
 table(NOISE.DECOMP$clipped)
 
 pdf(file.path(FIGURE.DIR, "extra/S_extrinsic_fraction_hist.pdf"), width = 5, height = 5, useDingbats = FALSE)
-hist(NOISE.DECOMP$extrinsic_frac, breaks = 30, main = "Extrinsic noise fraction across genes", xlab = "estimated extrinsic fraction", col = "grey70", border = "white")
-abline(v = median(NOISE.DECOMP$extrinsic_frac), col = "red", lwd = 2)
+hist(NOISE.DECOMP$extrinsic_frac, breaks = 30, main = "Extrinsic noise fraction across genes", xlab = "estimated extrinsic fraction", col = COLOR.GREY[["mid"]], border = "white")
+abline(v = median(NOISE.DECOMP$extrinsic_frac), col = COLOR.ACCENT, lwd = 2, lty = 2)
 dev.off()
 
 summary(NOISE.DECOMP$extrinsic_frac)
@@ -1584,8 +1654,9 @@ for (nm in names(ELBOW.INPUTS)) {
   plot_df <- data.frame(pct = e$pct, cumu = e$cumu, rank = seq_along(e$pct))
   print(ggplot(plot_df, aes(cumu, pct, label = rank, color = rank > e$pcs)) +
     geom_text() +
-    geom_vline(xintercept = 90, color = "gray") +
-    geom_hline(yintercept = min(e$pct[e$pct > 5]), color = "gray") +
+    scale_color_manual(values = c("TRUE" = COLOR.GREY[["mid"]], "FALSE" = COLOR.ACCENT), name = "beyond chosen PCs") +
+    geom_vline(xintercept = 90, color = COLOR.GREY[["mid"]]) +
+    geom_hline(yintercept = min(e$pct[e$pct > 5]), color = COLOR.GREY[["mid"]]) +
     ggtitle(nm) +
     theme_bw())
 }
@@ -1649,7 +1720,7 @@ cat(sprintf("All four merged: chosen resolution = %.2f, %d clusters, mean silhou
 DS.NAMES   <- c("MIX.SC", "MIX.SE", "HYB.SC", "HYB.SE", "PARENT", "HYBRID", "MERGE")
 DS.LABELS  <- c(MIX.SC = "Sc parent", MIX.SE = "Se parent", HYB.SC = "Hybrid, Sc allele", HYB.SE = "Hybrid, Se allele",
                 PARENT = "Both parents combined", HYBRID = "Hybrid combined", MERGE = "All four merged")
-N.CLUSTER.BOOT <- 100; SEED.CLUSTER.BOOT <- 1
+N.CLUSTER.BOOT <- 500; SEED.CLUSTER.BOOT <- 1
 CSTAB.INPUTS <- cluster_stability_inputs(
   sweeps    = setNames(mget(paste0("RES.SWEEP.", DS.NAMES)), DS.NAMES),
   counts    = setNames(mget(DS.NAMES), DS.NAMES),
@@ -1675,25 +1746,25 @@ cat(sprintf("Sc parent: Manhattan vs Euclidean ARI = %.3f\n", METRIC.CHECK.MIX.S
 
 pdf(file.path(FIGURE.DIR, "extra/S_umap_clustering_checks.pdf"), width = 6, height = 5, useDingbats = FALSE)
 YSC.MIX.SC <- suppressWarnings(RunUMAP(YSC.MIX.SC, dims = 1:PCS.MIX.SC, verbose = FALSE))
-DimPlot(YSC.MIX.SC,reduction="umap") + ggtitle("Sc parent (mono-culture)")
+umap_plot(YSC.MIX.SC, "Sc parent (mono-culture)", group.by = "seurat_clusters")
 
 YSC.MIX.SE <- suppressWarnings(RunUMAP(YSC.MIX.SE, dims = 1:PCS.MIX.SE, verbose = FALSE))
-DimPlot(YSC.MIX.SE,reduction="umap") + ggtitle("Se parent (mono-culture)")
+umap_plot(YSC.MIX.SE, "Se parent (mono-culture)", group.by = "seurat_clusters")
 
 YSC.HYB.SC <- suppressWarnings(RunUMAP(YSC.HYB.SC, dims = 1:PCS.HYB.SC, verbose = FALSE))
-DimPlot(YSC.HYB.SC,reduction="umap") + ggtitle("Hybrid, Sc allele counts")
+umap_plot(YSC.HYB.SC, "Hybrid, Sc allele counts", group.by = "seurat_clusters")
 
 YSC.HYB.SE <- suppressWarnings(RunUMAP(YSC.HYB.SE, dims = 1:PCS.HYB.SE, verbose = FALSE))
-DimPlot(YSC.HYB.SE,reduction="umap") + ggtitle("Hybrid, Se allele counts")
+umap_plot(YSC.HYB.SE, "Hybrid, Se allele counts", group.by = "seurat_clusters")
 
 YSC.PARENT <- suppressWarnings(RunUMAP(YSC.PARENT, dims = 1:PCS.PARENT, verbose = FALSE))
-DimPlot(YSC.PARENT,reduction="umap") + ggtitle("Both parents combined (Sc + Se)")
+umap_plot(YSC.PARENT, "Both parents combined (Sc + Se)", group.by = "seurat_clusters")
 
 YSC.HYBRID <- suppressWarnings(RunUMAP(YSC.HYBRID, dims = 1:PCS.HYBRID, verbose = FALSE))
-DimPlot(YSC.HYBRID,reduction="umap") + ggtitle("Hybrid, both allele views combined")
+umap_plot(YSC.HYBRID, "Hybrid, both allele views combined", group.by = "seurat_clusters")
 
 YSC.MERGE <- suppressWarnings(RunUMAP(YSC.MERGE, dims = 1:PCS.MERGE, verbose = FALSE))
-DimPlot(YSC.MERGE,reduction="umap") + ggtitle("All four samples merged")
+umap_plot(YSC.MERGE, "All four samples merged, clusters", group.by = "seurat_clusters")
 dev.off()
 
 ## 7.4 Cluster composition: identity, marker enrichment, and consistency
@@ -1942,9 +2013,9 @@ COMP.BOUND.HYBRID <- species_composition_report(CC.SHARED.HYBRID$x1, CC.SHARED.H
 
 pdf(file.path(FIGURE.DIR, "extra/S_species_composition_bound.pdf"), width = 8, height = 5, useDingbats = FALSE)
 par(mfrow = c(1, 2), mar = c(8, 4.5, 3, 1))
-barplot(setNames(COMP.BOUND.PARENT$bound, COMP.BOUND.PARENT$axis), las = 2, col = "grey70", border = NA,
+barplot(setNames(COMP.BOUND.PARENT$bound, COMP.BOUND.PARENT$axis), las = 2, col = COLOR.GREY[["mid"]], border = NA,
         ylab = "bound on expected noise shift (fraction of residual SD)", main = "Sc vs Se parent")
-barplot(setNames(COMP.BOUND.HYBRID$bound, COMP.BOUND.HYBRID$axis), las = 2, col = "grey70", border = NA,
+barplot(setNames(COMP.BOUND.HYBRID$bound, COMP.BOUND.HYBRID$axis), las = 2, col = COLOR.GREY[["mid"]], border = NA,
         ylab = "bound on expected noise shift (fraction of residual SD)", main = "Hybrid, Sc vs Se allele")
 dev.off()
 
@@ -1970,19 +2041,19 @@ GO.QVAL <- 0.2
 # parent difference, split by direction
 MEAN.LFC       <- setNames(BURST.CONTRASTS$mean_total_est, BURST.CONTRASTS$gene)
 MEAN.ORD       <- sort(MEAN.LFC, decreasing = TRUE)
-SIG.MEAN.TOTAL <- setNames(PR$mean_total_p, BURST.CONTRASTS$gene)[names(MEAN.ORD)]
+SIG.MEAN.TOTAL <- setNames(PR$mean_total_q, BURST.CONTRASTS$gene)[names(MEAN.ORD)]
 MEAN.SC.UP     <- names(MEAN.ORD)[SIG.MEAN.TOTAL < GO.SIG & MEAN.ORD > 0]
 MEAN.SE.UP     <- names(MEAN.ORD)[SIG.MEAN.TOTAL < GO.SIG & MEAN.ORD < 0]
 
 BFREQ.LFC       <- setNames(BURST.CONTRASTS$bfreq_total_est, BURST.CONTRASTS$gene)
 BFREQ.ORD       <- sort(BFREQ.LFC, decreasing = TRUE)
-SIG.BFREQ.TOTAL <- setNames(PR$bfreq_total_p, BURST.CONTRASTS$gene)[names(BFREQ.ORD)]
+SIG.BFREQ.TOTAL <- setNames(PR$bfreq_total_q, BURST.CONTRASTS$gene)[names(BFREQ.ORD)]
 BFREQ.SC.UP     <- names(BFREQ.ORD)[SIG.BFREQ.TOTAL < GO.SIG & BFREQ.ORD > 0]
 BFREQ.SE.UP     <- names(BFREQ.ORD)[SIG.BFREQ.TOTAL < GO.SIG & BFREQ.ORD < 0]
 
 BSIZE.LFC       <- setNames(BURST.CONTRASTS$bsize_total_est, BURST.CONTRASTS$gene)
 BSIZE.ORD       <- sort(BSIZE.LFC, decreasing = TRUE)
-SIG.BSIZE.TOTAL <- setNames(PR$bsize_total_p, BURST.CONTRASTS$gene)[names(BSIZE.ORD)]
+SIG.BSIZE.TOTAL <- setNames(PR$bsize_total_q, BURST.CONTRASTS$gene)[names(BSIZE.ORD)]
 BSIZE.SC.UP     <- names(BSIZE.ORD)[SIG.BSIZE.TOTAL < GO.SIG & BSIZE.ORD > 0]
 BSIZE.SE.UP     <- names(BSIZE.ORD)[SIG.BSIZE.TOTAL < GO.SIG & BSIZE.ORD < 0]
 
@@ -2338,10 +2409,10 @@ pdf(file.path(FIGURE.DIR, "extra", "external_noise_validation.pdf"), width = 8, 
 for (src in names(EXT.MERGE)) {
   d <- EXT.MERGE[[src]]
   par(mfrow = c(1, 2))
-  plot(d$MU, d$Mean, log = "xy", pch = 19, cex = 0.5, col = "#5c6a47",
+  plot(d$MU, d$Mean, log = "xy", pch = 19, cex = 0.5, col = "black",
        xlab = "MIX.SC mean (MU)", ylab = paste(src, "mean"),
        main = paste(src, "mean vs MIX.SC mean"))
-  plot(d$CV2.x, d$CV2.y, log = "xy", pch = 19, cex = 0.5, col = "#8f4a4e",
+  plot(d$CV2.x, d$CV2.y, log = "xy", pch = 19, cex = 0.5, col = "black",
        xlab = "MIX.SC implied CV^2", ylab = paste(src, "CV^2"),
        main = paste(src, "noise vs MIX.SC noise"))
 }
@@ -2354,20 +2425,20 @@ for (src in names(NEW.SOURCES)) {
   d <- merge(NB.SC, ALL.RAW[[src]], by = "ORF")
   par(mfrow = c(1, 3))
 
-  plot(d$MU, d$Mean, log = "xy", pch = 19, cex = 0.5, col = "#5c6a47",
+  plot(d$MU, d$Mean, log = "xy", pch = 19, cex = 0.5, col = "black",
        xlab = "MIX.SC mean (MU)", ylab = paste(src, "mean"),
        main = paste(src, "mean"))
 
-  plot(d$CV2.x, d$CV2.y, log = "xy", pch = 19, cex = 0.5, col = "#8f4a4e",
+  plot(d$CV2.x, d$CV2.y, log = "xy", pch = 19, cex = 0.5, col = "black",
        xlab = "MIX.SC CV^2", ylab = paste(src, "CV^2"),
        main = paste(src, "raw noise"))
 
   ok <- is.finite(d$CV2_ADJ.x) & is.finite(d$CV2_ADJ.y)
-  plot(d$CV2_ADJ.x[ok], d$CV2_ADJ.y[ok], pch = 19, cex = 0.5, col = "#3f5f7a",
+  plot(d$CV2_ADJ.x[ok], d$CV2_ADJ.y[ok], pch = 19, cex = 0.5, col = "black",
        xlab = "MIX.SC mean-adjusted log CV^2",
        ylab = paste(src, "mean-adjusted log CV^2"),
        main = paste(src, "mean-adjusted noise"))
-  abline(h = 0, v = 0, col = "grey70", lty = 2)
+  abline(h = 0, v = 0, col = COLOR.GREY[["mid"]], lty = 2)
 }
 dev.off()
 
@@ -2383,15 +2454,16 @@ console_start(10)   # copies this section's console output to results/console
 ## 10. POWER ANALYSIS                                                       ##
 ##############################################################################
 # Run through 10.1 to build power_inputs.rda, then submit
-# power_grid.R to SLURM.Once power_output.rda exists, run 10.2 onward
-# to reshape it back into POWER and reproduce every plot.
+# power.sub (a SLURM job array) to the cluster. Once every power_output_<k>of<K>.rda
+# exists, run 10.2 onward to reshape them back into POWER and reproduce every plot.
 
 set.seed(1)
 
-#Significance level for power analysis
+#Significance level for power analysis. Power is judged at this Benjamini-Hochberg
+#FDR (q < ALPHA), matching the gene-level analysis.
 ALPHA <- 0.05
 #Average number of reads per cell, before per-cell capture-depth scaling.
-MEAN.READS <- c(0.25,0.5,1,2,4,8,16,32,64,128,256)
+MEAN.READS <- c(0.25,0.5,1,2,4,8,16,32,64,128)
 #Burst frequency (NB SIZE / dispersion parameter, theta) for the
 #reference group. 
 SIZE <- c(0.5,1,2,4,8,16,32,64,128,256)
@@ -2408,7 +2480,19 @@ CELL.RATIO <- 1
 EXPOSURE.CV <- 0.8
 
 NJ <- 1000 #Simulated datasets per row
-NI <- 100 #Permutations per dataset
+NI <- N.PERM #Permutations per dataset, matched to the gene-level analysis
+#Fraction of tested datasets that carry a true difference (PI1). BH itself needs
+#only the p-values, the number of tests, and alpha, but its cutoff moves with the
+#p-values it is given, so simulating power requires a mix of null and true-
+#difference datasets. PI1 is the share of genes the BH analysis itself calls in
+#the parental burst-frequency contrast (BH discoveries divided by tests, at
+#q < ALPHA), the contrast that matches the simulated SIZE ratio between species.
+#Discoveries miss some true differences, so this understates the true share and
+#keeps the simulated power conservative. It is bounded to 0.02-0.5 and falls back
+#to 0.1 when the gene-level results are not in memory.
+PI1 <- if (exists("PR")) min(0.5, max(0.02, mean(PR$bfreq_total_q < ALPHA, na.rm = TRUE))) else 0.1
+cat(sprintf("PI1 (fraction of genes called by BH at q < %.2f, parental burst frequency) = %.3f\n", ALPHA, PI1))
+N.MIX <- 50 #Random mixtures averaged per grid cell
 SEED.BASE <- 1
 
 ## 10.1 Grid definition and cluster submission
@@ -2419,15 +2503,26 @@ P <- 1:length(SIZE);       Q <- 1:length(SIZE.RATIO)
 
 GRID <- expand.grid(m = M, n = N, p = P)
 
-save(GRID, MEAN.READS, N.CELLS, SIZE, SIZE.RATIO, EXPOSURE.CV, CELL.RATIO, ALPHA, NJ, NI, SEED.BASE,
+save(GRID, MEAN.READS, N.CELLS, SIZE, SIZE.RATIO, EXPOSURE.CV, CELL.RATIO, ALPHA, NJ, NI, PI1, N.MIX, SEED.BASE,
      file = file.path(INPUT.DIR, "power_inputs.rda"))
 
 cat(sprintf("power grid inputs written: %d rows x %d SIZE.RATIO values\n", nrow(GRID), length(SIZE.RATIO)))
-cat("Submit power_grid.R to SLURM now; resume below once power_output.rda exists.\n")
+cat("Submit power.sub (job array) now; resume below once every power_output_<k>of<K>.rda exists.\n")
 
 ## 10.2 Reshape cluster output into the POWER array
-load(file.path(OUTPUT.DIR, "power_output.rda"))  # POWER.MAT: nrow(GRID) x length(SIZE.RATIO)
-POWER.COLOR <- c("#FED789FF", "#023743FF", "#72874EFF", "#476F84FF", "#A4BED5FF", "#453947FF")
+# Each array task writes the GRID rows it computed (ROWS.PART) and their power values
+# (POWER.PART). Rows are placed back in GRID order, so the result does not depend on
+# how many array tasks were used.
+PART.FILES <- list.files(OUTPUT.DIR, pattern = "^power_output_[0-9]+of[0-9]+\\.rda$", full.names = TRUE)
+stopifnot(length(PART.FILES) > 0)
+POWER.MAT <- matrix(NA_real_, nrow(GRID), length(SIZE.RATIO))
+ROW.DONE  <- logical(nrow(GRID))
+for (f in PART.FILES) {
+  e <- new.env(); load(f, envir = e)
+  POWER.MAT[e$ROWS.PART, ] <- e$POWER.PART
+  ROW.DONE[e$ROWS.PART]    <- TRUE
+}
+stopifnot(all(ROW.DONE))   # every array task must have finished before reshaping
 
 POWER <- array(NA_real_, dim = c(length(M), length(N), length(P), length(Q)))
 for (i in seq_len(nrow(GRID))) {
@@ -2593,7 +2688,7 @@ dev.off()
 
 ## 10.7 Heatmap A: power over mean expression x cell count, faceted by burst frequency
 HM.Q <- which.min(abs(SIZE.RATIO - 2))
-HM.COLS <- colorRampPalette(c("#023743FF","#FED789FF","#D7263D"))(100)
+HM.COLS <- COLOR.SEQ
 
 open_grid_pdf(file.path(FIGURE.DIR, "extended", "Power.Analysis.heatmap_mean_by_ncells.pdf"), ceiling(length(P)/2), 2, panel_w = 3.4, panel_h = 3.2)
 for (p in P) {
@@ -2604,7 +2699,7 @@ for (p in P) {
   axis(1, at = log2(MEAN.READS), labels = MEAN.READS, las = 2, cex.axis = 0.55)
   axis(2, at = N.CELLS, labels = N.CELLS, cex.axis = 0.65)
   if (any(mat >= 0.8, na.rm = TRUE) && any(mat < 0.8, na.rm = TRUE)) {
-    contour(log2(MEAN.READS), N.CELLS, mat, levels = 0.8, add = TRUE, col = "black", lwd = 1.5, labcex = 0.6)
+    contour(log2(MEAN.READS), N.CELLS, mat, levels = 0.8, add = TRUE, col = "white", lwd = 1.5, labcex = 0.6)
   }
 }
 dev.off()
@@ -2623,7 +2718,7 @@ dev.off()
 MDR <- array(NA_real_, dim = c(length(M), length(N), length(P)))
 for (m in M) for (n in N) for (p in P) MDR[m,n,p] <- min_detectable_ratio(POWER[m,n,p,], SIZE.RATIO)
 
-MDR.COLS <- rev(colorRampPalette(c("#023743FF","#FED789FF","#D7263D"))(100))
+MDR.COLS <- rev(COLOR.SEQ)   # more sensitive (lower ratio) reads darker, matching power
 MDR.ZLIM <- log2(range(SIZE.RATIO))
 
 open_grid_pdf(file.path(FIGURE.DIR, "extended", "Power.Analysis.min_detectable_ratio.pdf"), ceiling(length(P)/2), 2, panel_w = 3.4, panel_h = 3.2)
@@ -2647,7 +2742,7 @@ axis(1, at = log2(RATIO.TICKS), labels = RATIO.TICKS, cex.axis = 0.7)
 dev.off()
 
 # Checkpoint
-save(GRID, MEAN.READS, N.CELLS, SIZE, SIZE.RATIO, EXPOSURE.CV, CELL.RATIO, ALPHA, NJ, NI, SEED.BASE,
+save(GRID, MEAN.READS, N.CELLS, SIZE, SIZE.RATIO, EXPOSURE.CV, CELL.RATIO, ALPHA, NJ, NI, PI1, N.MIX, SEED.BASE,
      POWER, MDR, file = ckpt_path(10))
 
 console_stop()   # closes the Section 10 console file

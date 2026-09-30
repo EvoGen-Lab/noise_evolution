@@ -26,7 +26,7 @@
 
 library('parallel')
 
-source("Functions.R")
+source("functions.R")
 
 ## Tag arg picks which input/output pair to use, so the same script
 ## serves both the primary run and any additional-seed adequacy check
