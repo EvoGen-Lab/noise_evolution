@@ -224,7 +224,7 @@ MIX.SE['MT_F',] <- MIX.SE['MT_F',]+MIX.SE['MT_R',]; MIX.SE <- MIX.SE[!(row.names
 # Mitochondrial ratios in hybrid
 # MITO.IGNORE flags hybrid cells with zero Sc or Se mitochondrial reads.
 # The two histograms plot the per-cell log2(Sc/Se) mitochondrial read ratio, 
-# and total Sc read depth split by whether a cell was flagged in MITO.IGNORE (red).
+# and total Sc read depth split by whether a cell was flagged in MITO.IGNORE.
 HYB.MITO.CELLS <- intersect(colnames(HYB.SC), colnames(HYB.SE))
 HYB.SC.MITO <- HYB.SC['MT_F', HYB.MITO.CELLS]
 HYB.SE.MITO <- HYB.SE['MT_F', HYB.MITO.CELLS]
@@ -270,8 +270,6 @@ QC.STATS <- list(
   MIX.SE = list(lib = colSums(MIX.SE), det = colSums(MIX.SE > 0)),
   HYB    = list(lib = colSums(HYB.SC) + colSums(HYB.SE),
                 det = colSums(HYB.SC > 0) + colSums(HYB.SE > 0)))
-# Genes-detected floor was dropped entirely (too aggressive, especially on
-# the already-small MIX.SC dataset); library size alone now decides
 QC.CELLS <- lapply(QC.STATS, qc_cell_cutoff, k = CELL.MAD.K)
 QC.TITLES <- c(MIX.SC = "Sc Parent", MIX.SE = "Se Parent", HYB = "Hybrid (alleles pooled)")
 fig_pdf("extra/S_cell_count_threshold_qc.pdf", 12, 4)
@@ -1093,13 +1091,12 @@ DRAWS.PERM.COEXPR <- local({
   n_tot <- nSC + nSE
   lapply(seq_len(B), coexpr_perm_draw, nH = nH, nSC = nSC, nSE = nSE, n_tot = n_tot)
 })
-save(RESID, N.SC, N.SE, N.KEEP, DRAWS.PERM.COEXPR, file = file.path(INPUT.DIR, "coexpr_perm_inputs.rda"))
-
 ## ---- Cluster round trip: Rscript coexpr_perm.R ----
-## Reads coexpr_perm_inputs.rda (saved above), writes coexpr_perm_output.rda
-## (NULL.TOTAL.RANKS, NULL.CIS.RANKS, NULL.TRANS.RANKS, NULL.DPAR.SC.RANKS,
-## NULL.DPAR.SE.RANKS, loaded in 4.9)
-## ---- end cluster round trip (coexpr_perm_output.rda is loaded in 4.9) ----
+## Reads coexpr_perm_inputs.rda (saved below), writes coexpr_perm_output.rda
+## (NULL.TOTAL.RANKS, NULL.CIS.RANKS, NULL.TRANS.RANKS, NULL.DPAR.SC.RANKS, NULL.DPAR.SE.RANKS)
+save(RESID, N.SC, N.SE, N.KEEP, DRAWS.PERM.COEXPR, file = file.path(INPUT.DIR, "coexpr_perm_inputs.rda"))
+load(file.path(OUTPUT.DIR, "coexpr_perm_output.rda"))   # NULL.TOTAL.RANKS, NULL.CIS.RANKS, NULL.TRANS.RANKS, NULL.DPAR.SC.RANKS, NULL.DPAR.SE.RANKS
+## ---- end cluster round trip ----
 
 ## 4.7 Rank check and candidate axes
 # Runs coexpr_rank_check() on each of the five divergence matrices and
@@ -1214,8 +1211,6 @@ for (ax in COEXPR.AXES) {
 # Validates the candidate axes of each matrix: the k-th largest
 # candidate axis (by variance share) is tested against the null's own
 # k-th largest squared eigenvalue, rank-matched 
-load(file.path(OUTPUT.DIR, "coexpr_perm_output.rda"))   # NULL.TOTAL.RANKS, NULL.CIS.RANKS, NULL.TRANS.RANKS, NULL.DPAR.SC.RANKS, NULL.DPAR.SE.RANKS
-
 NULL.RANKS.LIST <- list(total = NULL.TOTAL.RANKS, cis = NULL.CIS.RANKS, trans = NULL.TRANS.RANKS, dpar_sc = NULL.DPAR.SC.RANKS, dpar_se = NULL.DPAR.SE.RANKS)
 
 VALIDATED.LIST <- list()
@@ -1700,10 +1695,10 @@ SCORE.SE <- score_promoters(PROM.SE)
 # and promoter coordinates.
 NUPOP.INPUTS.SC <- nupop_cluster_inputs(GENOME.SC, PROM.SC)
 NUPOP.INPUTS.SE <- nupop_cluster_inputs(GENOME.SE, PROM.SE)
-save(NUPOP.INPUTS.SC, NUPOP.INPUTS.SE, file = file.path(INPUT.DIR, "nupop_inputs.rda"))
 
 ## ---- Cluster round trip: Rscript nupop_occupancy.R ----
-## Reads nupop_inputs.rda (saved above), writes nupop_output.rda (NUPOP.OCC.SC, NUPOP.OCC.SE)
+## Reads nupop_inputs.rda (saved below), writes nupop_output.rda (NUPOP.OCC.SC, NUPOP.OCC.SE)
+save(NUPOP.INPUTS.SC, NUPOP.INPUTS.SE, file = file.path(INPUT.DIR, "nupop_inputs.rda"))
 load(file.path(OUTPUT.DIR, "nupop_output.rda"))
 ## ---- end cluster round trip ----
 OCC.SC <- score_promoters_nupop(PROM.SC, NUPOP.OCC.SC)
