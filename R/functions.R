@@ -6,10 +6,9 @@
 ### coexpr_boot.R, coexpr_perm.R, nupop_occupancy.R,
 ### cluster_stability.R, go_enrich.R, power_grid.R)
 ###
-### A function lives here when its code runs more than once: it is called from two or more places, or
-### analysis.R applies it across many items (Section 14b). Code that runs once is written inline where it
-### runs. analysis.R defines no functions. A function that only one cluster script uses is defined in that
-### script.
+### A function lives here when its code runs more than once: it is called from two or more places, or it is
+### applied across many items (Section 14b for analysis.R, Section 14c for the cluster scripts). Code that
+### runs once is written inline where it runs. analysis.R and the cluster scripts define no functions.
 ###
 ### Outline (function name - purpose), grouped by section:
 ###
@@ -181,6 +180,26 @@
 ###     n_sig_by_set() - number of significant terms (q-value below q) in every enrichment result of one gene-set list s.
 ###     mean_cv2_spearman() - Spearman correlation of log mean and log CV2 in one source table d, the share of CV2 variation that follows from abundance alone.
 ###     diet_for_markers() - strips a Seurat object to the counts and data layers FindMarkers needs, keeping the cluster job's input small.
+###   14c. FUNCTIONS THE CLUSTER SCRIPTS RUN
+###     pilot_split_se_one() - one gene's bootstrap SE of log(mu) and log(size) for the four datasets needed to compute A and B, plus the bootstrap.
+###     boot_contrasts_one() - one gene's bootstrap contrasts across all modes (the unit of work a cluster worker does).
+###     permute_contrasts_one() - one gene's permutation null: refits the relabeled groups for every mode and permutation, compares the observed.
+###     coexpr_bootstrap_one() - one bootstrap draw of the co-expression decomposition.
+###     coexpr_part_table() - estimate, bootstrap SE (from the running sums), z and two-sided normal p for decomposition nm, one row per gene pair.
+###     coexpr_perm_one() - one permutation draw of the five null spectra, for rank-matched testing of every candidate axis.
+###     nupop_occupancy_cluster() - Scores every chromosome in one species' inputs and returns each gene's.
+###     report_regions() - Summarizes the regions that needed fallback flanks or stayed unscored,.
+###     power_grid_row() - power of one grid row i (mean reads x cell count x burst-frequency size) over the SIZE.RATIO sweep.
+###     bootstrap_ari_job() - one bootstrap replicate (job j of the tasks x replicates table).
+###     par_apply() - mclapply over X with one forked process per element (mc.preschedule = FALSE hands elements to workers one at a time,.
+###     dataset_marker_enrichment() - for each cluster of dataset d at its final resolution, marker genes against the rest of the SAME dataset's.
+###     go_enrich_job() - one enrichment job k.
+###     ora_jobs() - one over-representation job per gene set in sets (named group::set), all against the same universe.
+###     pick_group() - the results in res whose job names start with group::, with the prefix removed from the names.
+###     scalar_or_na() - x if it is one number, else NA, so a worker that was lost leaves an NA slot in the replicate vector.
+###     acc_slots() - The running-sum and running-sum-of-squares slots for one decomposition in the co-expression accumulator.
+###     is_failed_result() - TRUE for a worker result that is a try-error or NULL.
+###     gse_job_set() - The rank-based enrichment jobs (BP, MF, CC) for one rank list.
 ###   15. UNUSED (no caller in analysis.R or cluster/scripts; kept for interactive use, not part of the run)
 ###     15a. Gene-fit calibration helpers
 ###       refine_by_boundary(), chk(), chk_prec() - Poisson/NB boundary reclassification and per-bin convergence/precision summaries.
@@ -3362,6 +3381,608 @@ mean_cv2_spearman <- function(d) cor(log(d$Mean), log(d$CV2), method = "spearman
 ## diet_for_markers: strips a Seurat object to the counts and data layers FindMarkers needs, keeping the cluster job's input small.
 diet_for_markers <- function(obj) {
   if (packageVersion("Seurat") >= "5.0.0") DietSeurat(obj, layers = c("counts", "data")) else DietSeurat(obj)
+}
+
+## ============================================================
+## 14c. FUNCTIONS THE CLUSTER SCRIPTS RUN
+## ============================================================
+## The per-item work that the cluster scripts distribute with parLapply or mclapply, and the helpers they share. Each function takes the
+## item first and the loaded inputs as named arguments, so the scripts hold only loading, chunking, progress and saving.
+
+## pilot_split_se_one: one gene's bootstrap SE of log(mu) and log(size) for the four datasets needed to compute A and B, plus the bootstrap
+## covariance between the two hybrid alleles. HYB.SC and HYB.SE are refit on the SAME resampled cell indices in each replicate because the
+## two alleles are measured in the same cells. The RNG is seeded from a hash of the gene's own name, so each gene's draws depend only on its
+## name and results are identical for any gene chunking or core count.
+pilot_split_se_one <- function(g, B, expos, mats, seed) {
+  set.seed(seed + sum(utf8ToInt(g)))
+  n.p.sc <- length(expos$MIX.SC); n.p.se <- length(expos$MIX.SE); n.h <- length(expos$HYB)
+  logmu <- matrix(NA_real_, B, 4, dimnames = list(NULL, c("MIX.SC", "MIX.SE", "HYB.SC", "HYB.SE")))
+  logsz <- logmu
+  for (b in seq_len(B)) {
+    i.p.sc <- sample.int(n.p.sc, n.p.sc, replace = TRUE)
+    i.p.se <- sample.int(n.p.se, n.p.se, replace = TRUE)
+    i.h    <- sample.int(n.h,    n.h,    replace = TRUE)
+    f.mc <- .fit_one(mats$MIX.SC[g, i.p.sc], expos$MIX.SC[i.p.sc])
+    f.me <- .fit_one(mats$MIX.SE[g, i.p.se], expos$MIX.SE[i.p.se])
+    f.hc <- .fit_one(mats$HYB.SC[g, i.h],    expos$HYB[i.h])
+    f.he <- .fit_one(mats$HYB.SE[g, i.h],    expos$HYB[i.h])
+    if (is.finite(f.mc["mu"])   && f.mc["mu"]   > 0) logmu[b, "MIX.SC"] <- log(f.mc["mu"])
+    if (is.finite(f.me["mu"])   && f.me["mu"]   > 0) logmu[b, "MIX.SE"] <- log(f.me["mu"])
+    if (is.finite(f.hc["mu"])   && f.hc["mu"]   > 0) logmu[b, "HYB.SC"] <- log(f.hc["mu"])
+    if (is.finite(f.he["mu"])   && f.he["mu"]   > 0) logmu[b, "HYB.SE"] <- log(f.he["mu"])
+    if (is.finite(f.mc["disp"]) && f.mc["disp"] > 0) logsz[b, "MIX.SC"] <- log(f.mc["disp"])
+    if (is.finite(f.me["disp"]) && f.me["disp"] > 0) logsz[b, "MIX.SE"] <- log(f.me["disp"])
+    if (is.finite(f.hc["disp"]) && f.hc["disp"] > 0) logsz[b, "HYB.SC"] <- log(f.hc["disp"])
+    if (is.finite(f.he["disp"]) && f.he["disp"] > 0) logsz[b, "HYB.SE"] <- log(f.he["disp"])
+  }
+  allele_cov <- function(m) {
+    ok <- is.finite(m[, "HYB.SC"]) & is.finite(m[, "HYB.SE"])
+    if (sum(ok) > 2) cov(m[ok, "HYB.SC"], m[ok, "HYB.SE"]) else NA_real_
+  }
+  data.frame(
+    gene = g,
+    MIX.SC_logmu_se   = sd(logmu[, "MIX.SC"], na.rm = TRUE),
+    MIX.SE_logmu_se   = sd(logmu[, "MIX.SE"], na.rm = TRUE),
+    HYB.SC_logmu_se   = sd(logmu[, "HYB.SC"], na.rm = TRUE),
+    HYB.SE_logmu_se   = sd(logmu[, "HYB.SE"], na.rm = TRUE),
+    MIX.SC_logdisp_se = sd(logsz[, "MIX.SC"], na.rm = TRUE),
+    MIX.SE_logdisp_se = sd(logsz[, "MIX.SE"], na.rm = TRUE),
+    HYB.SC_logdisp_se = sd(logsz[, "HYB.SC"], na.rm = TRUE),
+    HYB.SE_logdisp_se = sd(logsz[, "HYB.SE"], na.rm = TRUE),
+    HYB_logmu_cov     = allele_cov(logmu),
+    HYB_logdisp_cov   = allele_cov(logsz),
+    row.names = NULL, check.names = FALSE)
+}
+
+## boot_contrasts_one: one gene's bootstrap contrasts across all modes (the unit of work a cluster worker does). draws holds every resample
+## index set, drawn before any fit so replicates are independent.
+boot_contrasts_one <- function(g, expos, fits, mats, draws) {
+  ## The set of draws-list keys a mode's contrast is built from, e.g. "trans"
+  ## touches the MIX.SC/MIX.SE and HYT draws, "trans_n" the MIX.SC/MIX.SE and
+  ## HYT.N draws. Two modes share draws exactly when this set matches.
+  .mode_draw_keys <- function(mode) sort(unique(unname(.DRAW.KEY[.MODES[[mode]]])))
+
+  B <- length(draws); modes <- names(.MODES)
+  mcol <- paste0("m.", modes); scol <- paste0("s.", modes); ccol <- paste0("c.", modes)
+  M <- matrix(NA_real_, B, 3 * length(modes), dimnames = list(NULL, c(mcol, scol, ccol)))
+  for (b in seq_len(B)) {
+    d <- draws[[b]]
+    fg <- function(mat, ex, idx) .fit_one(mat[g, idx], ex[idx])
+    f <- list(
+      MIX.SC   = fg(mats$MIX.SC,   expos$MIX.SC, d$MIX.SC),
+      MIX.SE   = fg(mats$MIX.SE,   expos$MIX.SE, d$MIX.SE),
+      HYC.SC   = fg(mats$HYC.SC,   expos$HYC,    d$HYC),
+      HYC.SE   = fg(mats$HYC.SE,   expos$HYC,    d$HYC),
+      HYT.SC   = fg(mats$HYT.SC,   expos$HYT,    d$HYT),
+      HYT.SE   = fg(mats$HYT.SE,   expos$HYT,    d$HYT),
+      HYC.SC.N = fg(mats$HYC.SC.N, expos$HYC.N,  d$HYC.N),
+      HYC.SE.N = fg(mats$HYC.SE.N, expos$HYC.N,  d$HYC.N),
+      HYT.SC.N = fg(mats$HYT.SC.N, expos$HYT.N,  d$HYT.N),
+      HYT.SE.N = fg(mats$HYT.SE.N, expos$HYT.N,  d$HYT.N),
+      HYB.COMB = fg(mats$HYB.COMB, expos$HYB,    d$HYB),
+      HYB.SC   = fg(mats$HYB.SC,   expos$HYB,    d$HYB),
+      HYB.SE   = fg(mats$HYB.SE,   expos$HYB,    d$HYB))
+    gv.mu <- lapply(f, function(z) unname(z[["mu"]]))
+    gv.bf <- lapply(f, function(z) unname(z[["disp"]]))
+    gv.cv <- lapply(f, function(z) .cv2_of(z[["mu"]], z[["disp"]]))
+    for (k in seq_along(modes)) {
+      grp <- .MODES[[modes[k]]]
+      mu <- unlist(gv.mu[grp]); bf <- unlist(gv.bf[grp]); cv <- unlist(gv.cv[grp])
+      if (all(is.finite(mu) & mu > 0)) M[b, mcol[k]] <- .contrast_value(modes[k], gv.mu, "MU")
+      if (all(is.finite(bf) & bf > 0)) M[b, scol[k]] <- .contrast_value(modes[k], gv.bf, "BFREQ")
+      if (all(is.finite(cv) & cv > 0)) M[b, ccol[k]] <- .contrast_value(modes[k], gv.cv, "CV2")
+    }
+  }
+  se   <- apply(M, 2, sd, na.rm = TRUE)
+  bdry <- setNames(vapply(modes, function(md) mean(is.na(M[, paste0("s.", md)])), numeric(1)), modes)
+  point <- function(q, gv_fun) {
+    gv <- setNames(lapply(names(fits), function(grp) gv_fun(fits[[grp]][g, ])), names(fits))
+    vapply(modes, function(md) .contrast_value(md, gv, q), numeric(1))
+  }
+  pm <- point("MU",    function(row) row[["MU"]])
+  ps <- point("BFREQ", function(row) row[["DISP"]])
+  pc <- point("CV2",   function(row) .cv2_of(row[["MU"]], row[["DISP"]]))
+  out <- list(gene = g)
+  for (md in .OUT_MODES) {
+    smd <- .BFREQ_SOURCE[[md]]
+    out[[paste0("mean_", md, "_est")]]   <- unname(pm[md])
+    out[[paste0("mean_", md, "_se")]]    <- unname(se[paste0("m.", md)])
+    out[[paste0("bfreq_", md, "_est")]]  <- unname(ps[smd])
+    out[[paste0("bfreq_", md, "_se")]]   <- unname(se[paste0("s.", smd)])
+    out[[paste0("bfreq_", md, "_bdry")]] <- unname(bdry[smd])
+    out[[paste0("cv2_", md, "_est")]]    <- unname(pc[smd])
+    out[[paste0("cv2_", md, "_se")]]     <- unname(se[paste0("c.", smd)])
+    ## cor_<md>: correlation of the mean and bfreq bootstrap draws, defined when both contrasts are
+    ## built from the same resampled datasets (matching .mode_draw_keys). For cis and trans the bfreq
+    ## value comes from the noise split (HYC.N/HYT.N) and the mean from the mean split (HYC/HYT),
+    ## which are resampled with separate index vectors, so cor is NA and downstream code uses 0.
+    out[[paste0("cor_", md)]] <- if (identical(.mode_draw_keys(md), .mode_draw_keys(smd))) {
+      x <- M[, paste0("m.", md)]; y <- M[, paste0("s.", md)]; ok <- is.finite(x) & is.finite(y)
+      if (sum(ok) > 2) cor(x[ok], y[ok]) else NA_real_
+    } else NA_real_
+  }
+  .r2 <- function(c1, c2) {
+	x <- M[, c1]; y <- M[, c2]; ok <- is.finite(x) & is.finite(y)
+    if (sum(ok) > 2) cor(x[ok], y[ok]) else NA_real_
+  }
+  out$cor_dpar_mean  <- .r2("m.dpar_sc", "m.dpar_se")
+  out$cor_dpar_bfreq <- .r2("s.dpar_sc", "s.dpar_se")
+  data.frame(out, row.names = NULL, check.names = FALSE)
+}
+
+## permute_contrasts_one: one gene's permutation null: refits the relabeled groups for every mode and permutation, compares the observed
+## contrasts (mean, bfreq, CV2, bsize, kbal) with the null by a two-sided permutation p, and adds ploidy-adjusted p-values for the dpar
+## contrasts. bsize and kbal nulls recombine the mean and bfreq null draws of the same permutation.
+permute_contrasts_one <- function(g, expos, fits, mats, perms, ploidy_shift) {
+  l2 <- function(x) log2(x); B <- length(perms); modes <- names(.MODES)
+  Nm <- matrix(NA_real_, B, length(modes), dimnames = list(NULL, modes))
+  Ns <- matrix(NA_real_, B, length(modes), dimnames = list(NULL, modes))
+  Nc <- matrix(NA_real_, B, length(modes), dimnames = list(NULL, modes))
+  gv   <- setNames(lapply(names(fits), function(grp) fits[[grp]][g, ]), names(fits))
+  gvmu <- lapply(gv, function(z) z[["MU"]]); gvbf <- lapply(gv, function(z) z[["DISP"]])
+  gvcv <- lapply(gv, function(z) .cv2_of(z[["MU"]], z[["DISP"]]))
+  obs.m <- vapply(modes, function(m) .contrast_value(m, gvmu, "MU"),    numeric(1))
+  obs.s <- vapply(modes, function(m) .contrast_value(m, gvbf, "BFREQ"), numeric(1))
+  obs.c <- vapply(modes, function(m) .contrast_value(m, gvcv, "CV2"),   numeric(1))
+  cMIXsc <- mats$MIX.SC[g, ]; cMIXse <- mats$MIX.SE[g, ]
+  cHYCsc <- mats$HYC.SC[g, ]; cHYCse <- mats$HYC.SE[g, ]
+  cHYTsc <- mats$HYT.SC[g, ]; cHYTse <- mats$HYT.SE[g, ]
+  cHYCsc.N <- mats$HYC.SC.N[g, ]; cHYCse.N <- mats$HYC.SE.N[g, ]
+  cHYTsc.N <- mats$HYT.SC.N[g, ]; cHYTse.N <- mats$HYT.SE.N[g, ]
+  cHYBsc <- mats$HYB.SC[g, ]; cHYBse <- mats$HYB.SE[g, ]; cHYBc <- mats$HYB.COMB[g, ]
+  mp.m <- l2((gvmu[["MIX.SC"]] + gvmu[["MIX.SE"]]) / 2)
+  mp.s <- 0.5 * (l2(gvbf[["MIX.SC"]]) + l2(gvbf[["MIX.SE"]]))
+  mp.c <- 0.5 * (l2(gvcv[["MIX.SC"]]) + l2(gvcv[["MIX.SE"]]))
+  nSC <- length(cMIXsc); nSE <- length(cMIXse); nHYB <- length(cHYBc)
+  rat <- function(a, b, q) { x <- a[q]; y <- b[q]
+    if (is.finite(x) && x > 0 && is.finite(y) && y > 0) l2(x) - l2(y) else NA_real_ }
+  ## CV2 contrast of two .fit_one()/.fit_split() results
+  ratcv2 <- function(a, b) { x <- .cv2_of(a[["mu"]], a[["disp"]]); y <- .cv2_of(b[["mu"]], b[["disp"]])
+    if (is.finite(x) && x > 0 && is.finite(y) && y > 0) l2(x) - l2(y) else NA_real_ }
+  for (b in seq_len(B)) {
+    p <- perms[[b]]
+    sp <- .fit_split(c(cMIXsc, cMIXse), c(expos$MIX.SC, expos$MIX.SE), p$total, nSC)
+    Nm[b,"total"] <- rat(sp$a, sp$b, "mu"); Ns[b,"total"] <- rat(sp$a, sp$b, "disp"); Nc[b,"total"] <- ratcv2(sp$a, sp$b)
+
+    sc <- ifelse(p$cis, cHYCse, cHYCsc); se <- ifelse(p$cis, cHYCsc, cHYCse)
+    fa <- .fit_one(sc, expos$HYC); fb <- .fit_one(se, expos$HYC)
+    Nm[b,"cis"] <- rat(fa, fb, "mu"); Ns[b,"cis"] <- rat(fa, fb, "disp"); Nc[b,"cis"] <- ratcv2(fa, fb)
+
+    ## Noise-split (f_disp) version of the cis null, used only for
+    ## the bfreq_cis/cv2_cis output columns, mirroring cis_n in .MODES
+    sc.n <- ifelse(p$cis_n, cHYCse.N, cHYCsc.N); se.n <- ifelse(p$cis_n, cHYCsc.N, cHYCse.N)
+    fa.n <- .fit_one(sc.n, expos$HYC.N); fb.n <- .fit_one(se.n, expos$HYC.N)
+    Nm[b,"cis_n"] <- rat(fa.n, fb.n, "mu"); Ns[b,"cis_n"] <- rat(fa.n, fb.n, "disp"); Nc[b,"cis_n"] <- ratcv2(fa.n, fb.n)
+
+    sSC <- .fit_split(c(cMIXsc, cHYTsc), c(expos$MIX.SC, expos$HYT), p$transSC, nSC)
+    sSE <- .fit_split(c(cMIXse, cHYTse), c(expos$MIX.SE, expos$HYT), p$transSE, nSE)
+    Nm[b,"trans"] <- rat(sSC$a, sSE$a, "mu")   - rat(sSC$b, sSE$b, "mu")
+    Ns[b,"trans"] <- rat(sSC$a, sSE$a, "disp") - rat(sSC$b, sSE$b, "disp")
+    Nc[b,"trans"] <- ratcv2(sSC$a, sSE$a)      - ratcv2(sSC$b, sSE$b)
+
+    ## Noise-split version of the trans null, used only for the
+    ## bfreq_trans/cv2_trans output columns, mirroring trans_n in .MODES
+    sSC.n <- .fit_split(c(cMIXsc, cHYTsc.N), c(expos$MIX.SC, expos$HYT.N), p$transSC_n, nSC)
+    sSE.n <- .fit_split(c(cMIXse, cHYTse.N), c(expos$MIX.SE, expos$HYT.N), p$transSE_n, nSE)
+    Nm[b,"trans_n"] <- rat(sSC.n$a, sSE.n$a, "mu")   - rat(sSC.n$b, sSE.n$b, "mu")
+    Ns[b,"trans_n"] <- rat(sSC.n$a, sSE.n$a, "disp") - rat(sSC.n$b, sSE.n$b, "disp")
+    Nc[b,"trans_n"] <- ratcv2(sSC.n$a, sSE.n$a)      - ratcv2(sSC.n$b, sSE.n$b)
+
+    synth <- cMIXsc[p$dom_i] + cMIXse[p$dom_j]
+    es    <- expos$MIX.SC[p$dom_i] + expos$MIX.SE[p$dom_j]
+    fs <- .fit_one(synth, es)
+    if (is.finite(fs["mu"])   && fs["mu"]   > 0) Nm[b,"dom"] <- l2(fs["mu"])   - mp.m
+    if (is.finite(fs["disp"]) && fs["disp"] > 0) Ns[b,"dom"] <- l2(fs["disp"]) - mp.s
+    fs.cv <- .cv2_of(fs[["mu"]], fs[["disp"]])
+    if (is.finite(fs.cv) && fs.cv > 0) Nc[b,"dom"] <- l2(fs.cv) - mp.c
+    d1 <- .fit_split(c(cHYBc, cMIXsc), c(expos$HYB, expos$MIX.SC), p$dparSC, nHYB)
+    Nm[b,"dpar_sc"] <- rat(d1$a, d1$b, "mu"); Ns[b,"dpar_sc"] <- rat(d1$a, d1$b, "disp"); Nc[b,"dpar_sc"] <- ratcv2(d1$a, d1$b)
+    d2 <- .fit_split(c(cHYBc, cMIXse), c(expos$HYB, expos$MIX.SE), p$dparSE, nHYB)
+    Nm[b,"dpar_se"] <- rat(d2$a, d2$b, "mu"); Ns[b,"dpar_se"] <- rat(d2$a, d2$b, "disp"); Nc[b,"dpar_se"] <- ratcv2(d2$a, d2$b)
+    i1 <- .fit_split(c(cHYBsc, cMIXsc), c(expos$HYB, expos$MIX.SC), p$inhSC, nHYB)
+    Nm[b,"inh_sc"] <- rat(i1$a, i1$b, "mu"); Ns[b,"inh_sc"] <- rat(i1$a, i1$b, "disp"); Nc[b,"inh_sc"] <- ratcv2(i1$a, i1$b)
+    i2 <- .fit_split(c(cHYBse, cMIXse), c(expos$HYB, expos$MIX.SE), p$inhSE, nHYB)
+    Nm[b,"inh_se"] <- rat(i2$a, i2$b, "mu"); Ns[b,"inh_se"] <- rat(i2$a, i2$b, "disp"); Nc[b,"inh_se"] <- ratcv2(i2$a, i2$b)
+  }
+  out <- list(gene = g)
+  for (md in .OUT_MODES) {
+    smd <- .BFREQ_SOURCE[[md]]
+    out[[paste0("mean_", md, "_obs")]]  <- unname(obs.m[md])
+    out[[paste0("mean_", md, "_p")]]    <- perm_pval(obs.m[md], Nm[, md])
+    out[[paste0("bfreq_", md, "_obs")]] <- unname(obs.s[smd])
+    out[[paste0("bfreq_", md, "_p")]]   <- perm_pval(obs.s[smd], Ns[, smd])
+    out[[paste0("cv2_", md, "_obs")]]   <- unname(obs.c[smd])
+    out[[paste0("cv2_", md, "_p")]]     <- perm_pval(obs.c[smd], Nc[, smd])
+
+    ## bsize null: mean null minus bfreq null, permutation by permutation. Where md == smd the two
+    ## draws share one relabeling, so their correlation carries through. For cis and trans they come
+    ## from separate relabelings (mean split vs noise split) and are independent.
+    bs_null <- Nm[, md] - Ns[, smd]
+    obs.bs  <- unname(obs.m[md]) - unname(obs.s[smd])
+    out[[paste0("bsize_", md, "_obs")]] <- obs.bs
+    out[[paste0("bsize_", md, "_p")]]   <- perm_pval(obs.bs, bs_null)
+
+    ## kbal = bfreq - bsize; its null is the bfreq null minus the bsize null from the same draws, so
+    ## kbal gets a permutation p-value for every mode, usable by classify_reg()/classify_dom().
+    kbal_null <- Ns[, smd] - bs_null
+    obs.kbal  <- unname(obs.s[smd]) - obs.bs
+    out[[paste0("kbal_", md, "_obs")]] <- obs.kbal
+    out[[paste0("kbal_", md, "_p")]]   <- perm_pval(obs.kbal, kbal_null)
+
+    ## Ploidy-adjusted p-values for the hybrid-versus-parent noise contrasts.
+    ## HYB.COMB sums two alleles, which raises bfreq by the shift s (see
+    ## ploidy_shift). Removing s from the observed contrast and reading it
+    ## against the same zero-centred exchangeability null tests hybrid noise
+    ## at the per-genome scale of the parents. _p_ploidy uses this gene's own
+    ## s and _p_ind uses s = 1, the fully independent equal-allele bound.
+    ## bfreq falls by s, bsize rises by s, kbal falls by 2s, and cv2 rebuilds
+    ## with its latent term scaled by 2^s. The mean axis needs no adjustment.
+    if (md %in% c("dpar_sc", "dpar_se")) {
+      par.nm <- if (md == "dpar_sc") "MIX.SC" else "MIX.SE"
+      mh <- gvmu[["HYB.COMB"]]; kh <- gvbf[["HYB.COMB"]]; cvp <- gvcv[[par.nm]]
+      nulls <- list(bfreq = Ns[, smd], bsize = bs_null, kbal = kbal_null, cv2 = Nc[, smd])
+      s.own <- unname(ploidy_shift[g])
+      for (tag in c("ploidy", "ind")) {
+        s <- if (tag == "ploidy") s.own else 1
+        cvh <- if (is.finite(s) && is.finite(mh) && mh > 0 && is.finite(kh) && kh > 0) 1 / mh + 2^s / kh else NA_real_
+        cv2 <- if (is.finite(cvh) && cvh > 0 && is.finite(cvp) && cvp > 0) l2(cvh) - l2(cvp) else NA_real_
+        ob <- list(bfreq = unname(obs.s[smd]) - s, bsize = obs.bs + s, kbal = obs.kbal - 2 * s, cv2 = cv2)
+        for (q in names(nulls)) out[[paste0(q, "_", md, "_p_", tag)]] <- perm_pval(ob[[q]], nulls[[q]])
+      }
+    }
+  }
+  out$ploidy_shift <- unname(ploidy_shift[g])
+  data.frame(out, row.names = NULL, check.names = FALSE)
+}
+
+## coexpr_bootstrap_one: one bootstrap draw of the co-expression decomposition. draw (from make_coexpr_draws()) resamples the columns of each
+## resid dataset. HYB.SC, HYB.SE and HYB.COMB take the same H draw because they are the same cells, and the per-gene ploidy factors are
+## fixed, so every draw rescales Rhyb identically. Returns total/cis/trans/dpar_sc/dpar_se at the upper-triangle pair positions.
+coexpr_bootstrap_one <- function(draw, resid) {
+  d <- coexpr_decompose(list(
+    MIX.SC = resid$MIX.SC[, draw$SC], MIX.SE = resid$MIX.SE[, draw$SE],
+    HYB.SC = resid$HYB.SC[, draw$H],  HYB.SE = resid$HYB.SE[, draw$H],
+    HYB.COMB = resid$HYB.COMB[, draw$H]),
+    ploidy_f = attr(resid, "ploidy_f"))
+  up <- which(upper.tri(matrix(0, nrow(resid$MIX.SC), nrow(resid$MIX.SC))))
+  list(total = d$total[up], cis = d$cis[up], trans = d$trans[up], dpar_sc = d$dpar_sc[up], dpar_se = d$dpar_se[up])
+}
+
+## coexpr_part_table: estimate, bootstrap SE (from the running sums), z and two-sided normal p for decomposition nm, one row per gene pair.
+coexpr_part_table <- function(nm, point, acc, base) {
+  est <- point[[nm]][acc$up]
+  s   <- acc[[paste0("sum_", nm)]]; ss <- acc[[paste0("sumsq_", nm)]]
+  se  <- sqrt(pmax(0, (ss - s^2 / acc$n) / (acc$n - 1)))      # SD of the draws from the running sums
+  data.frame(base, est = est, se = se, z = est / se, p = 2 * pnorm(-abs(est / se)))
+}
+
+## coexpr_perm_one: one permutation draw of the five null spectra, for rank-matched testing of every candidate axis. draw: one element of
+## make_coexpr_perm_draws(). resid: the RESID list (including HYB.COMB). nSC, nSE: parent cell counts, used to split each pooled, reshuffled
+## pool back into groups of the original sizes. n_keep: ranks retained per decomposition. Returns the top n_keep squared eigenvalues by
+## magnitude, descending, for all five decompositions.
+coexpr_perm_one <- function(draw, n_keep, nSC, nSE, resid) {
+  pooled   <- cbind(resid$MIX.SC, resid$MIX.SE)
+  perm.sc  <- pooled[, draw$idx[seq_len(nSC)]]
+  perm.se  <- pooled[, draw$idx[-seq_len(nSC)]]
+  perm.hsc <- resid$HYB.SC; perm.hse <- resid$HYB.SE
+  perm.hsc[, draw$swap] <- resid$HYB.SE[, draw$swap]
+  perm.hse[, draw$swap] <- resid$HYB.SC[, draw$swap]
+
+  d <- coexpr_decompose(list(MIX.SC = perm.sc, MIX.SE = perm.se, HYB.SC = perm.hsc, HYB.SE = perm.hse))
+  topk <- function(m) {
+    ev <- eigen(m, symmetric = TRUE, only.values = TRUE)$values
+    (ev[order(abs(ev), decreasing = TRUE)][seq_len(n_keep)])^2
+  }
+
+  ## The dpar nulls are zero-centred exchangeability nulls on the raw pooled cells (no ploidy
+  ## rescale); the observed dpar matrices (COEXPR.POINT) carry the rescale from coexpr_decompose().
+  ## dpar_sc's null pools Sc-parent and allele-summed hybrid cells and reshuffles them into
+  ## pseudo-Sc / pseudo-hybrid groups of the original sizes, giving the leading eigenvalues of
+  ## "condition A minus condition B" when condition carries no information. dpar_se's null does the
+  ## same with Se-parent and hybrid cells.
+  pooled.sc <- cbind(resid$MIX.SC, resid$HYB.COMB)
+  perm.a.sc <- pooled.sc[, draw$idx_dpar_sc[seq_len(nSC)]]
+  perm.b.sc <- pooled.sc[, draw$idx_dpar_sc[-seq_len(nSC)]]
+  dpar_sc_null <- topk(shrink_cor(t(perm.b.sc)) - shrink_cor(t(perm.a.sc)))
+
+  pooled.se <- cbind(resid$MIX.SE, resid$HYB.COMB)
+  perm.a.se <- pooled.se[, draw$idx_dpar_se[seq_len(nSE)]]
+  perm.b.se <- pooled.se[, draw$idx_dpar_se[-seq_len(nSE)]]
+  dpar_se_null <- topk(shrink_cor(t(perm.b.se)) - shrink_cor(t(perm.a.se)))
+
+  list(total = topk(d$total), cis = topk(d$cis), trans = topk(d$trans), dpar_sc = dpar_sc_null, dpar_se = dpar_se_null)
+}
+
+## Scores every chromosome in one species' inputs and returns each gene's
+## promoter occupancy track. Rounds of windows run until every window is
+## scored or reaches min_core_bp. Minus-strand slices are reversed so the
+## promoter-proximal end sits at the end of every vector, matching
+## tata_box_score() and poly_at_tract() on the same gene's sequence. The
+## coords the tracks came from travel with the result, so
+## score_promoters_nupop() can confirm they match the current promoters.
+nupop_occupancy_cluster <- function(inputs, species = 7, model = 4,
+                                    window_bp = 250000, flank = 7000, fallback_flank = 2000,
+                                    min_core_bp = 5000, cores = 1) {
+  ## Runs a table of core windows (seqid, start, end) with `flank` bp of
+  ## context, one forked process per window, and returns one result per
+  ## row. A window whose process ends early returns NULL or a try-error,
+  ## which the caller reads as "split and rerun".
+  nupop_run_windows <- function(chroms, tasks, flank, species, model, cores, work_root) {
+    ## Predicts occupancy for one sequence in the current process and returns
+    ## positions core_from to core_to. Each call works in its own temporary
+    ## folder, because NuPoP writes its prediction file into the working
+    ## directory. The folder name carries the process ID, which is unique
+    ## among running processes, so forked workers that start from the same
+    ## tempfile() state still receive separate folders. The folders sit under
+    ## work_root, which nupop_occupancy_cluster() places beside R's session
+    ## temp directory rather than inside it, so each worker's files stay
+    ## independent of every other worker.
+    parallel::mclapply(seq_len(nrow(tasks)), function(i) {
+      s  <- chroms[[tasks$seqid[i]]]
+      ws <- max(1, tasks$start[i] - flank)
+      we <- min(nchar(s), tasks$end[i] + flank)
+      local({
+        seg_seq <- substr(s, ws, we)
+        core_from <- tasks$start[i] - ws + 1
+        core_to <- tasks$end[i] - ws + 1
+        n <- nchar(seg_seq)
+        ## NuPoP scores sequences of at least 148 bp, one nucleosome plus one base
+        if (n < 148) return(rep(NA_real_, core_to - core_from + 1))
+        wd <- tempfile(pattern = sprintf("nupop_pid%d_", Sys.getpid()), tmpdir = work_root)
+        dir.create(wd, recursive = TRUE)
+        old_wd <- setwd(wd)
+        on.exit({ setwd(old_wd); unlink(wd, recursive = TRUE) }, add = TRUE)
+
+        st <- seq(1, n, by = 80)
+        writeLines(c(">window", substring(seg_seq, st, pmin(st + 79, n))), "window.fa")
+        invisible(utils::capture.output(NuPoP::predNuPoP("window.fa", species = species, model = model)))
+        pred <- paste0("window.fa_Prediction", model, ".txt")
+        if (!file.exists(pred)) return(NULL)
+
+        ## Columns are Position, P.start, Occup, N/L, Affinity. NULL skips a column.
+        tab  <- scan(pred, what = list(0L, NULL, 0, NULL, NULL), skip = 1, quiet = TRUE)
+        occ  <- rep(NA_real_, n)
+        keep <- tab[[1]] >= 1 & tab[[1]] <= n & tab[[3]] >= 0
+        occ[tab[[1]][keep]] <- tab[[3]][keep]
+        occ[core_from:core_to]
+      })
+    }, mc.cores = cores, mc.preschedule = FALSE)
+  }
+
+  chroms <- inputs$chroms
+  coords <- inputs$coords
+  occ    <- lapply(chroms, function(s) rep(NA_real_, nchar(s)))
+
+  ## Node-local scratch space for every window's files, removed at the end
+  work_root <- file.path(dirname(tempdir()), sprintf("nupop_work_%d", Sys.getpid()))
+  dir.create(work_root, recursive = TRUE, showWarnings = FALSE)
+  on.exit(unlink(work_root, recursive = TRUE), add = TRUE)
+
+  tasks <- do.call(rbind, lapply(names(chroms), function(sq) {
+    n <- nchar(chroms[[sq]])
+    s <- seq(1, n, by = window_bp)
+    data.frame(seqid = sq, start = s, end = pmin(s + window_bp - 1, n), stringsAsFactors = FALSE)
+  }))
+  window_ok <- function(r, t) is.numeric(r) && length(r) == t$end - t$start + 1
+
+  reduced <- NULL
+  failed  <- NULL
+  round   <- 0
+  while (nrow(tasks) > 0) {
+    round <- round + 1
+    t0    <- Sys.time()
+    res   <- nupop_run_windows(chroms, tasks, flank, species, model, cores, work_root)
+    ok    <- vapply(seq_len(nrow(tasks)), function(i) window_ok(res[[i]], tasks[i, ]), logical(1))
+    for (i in which(ok)) occ[[tasks$seqid[i]]][tasks$start[i]:tasks$end[i]] <- res[[i]]
+
+    bad   <- tasks[!ok, , drop = FALSE]
+    small <- bad[bad$end - bad$start + 1 <= min_core_bp, , drop = FALSE]
+    big   <- bad[bad$end - bad$start + 1 >  min_core_bp, , drop = FALSE]
+
+    if (nrow(small) > 0) {
+      res2 <- nupop_run_windows(chroms, small, fallback_flank, species, model, cores, work_root)
+      ok2  <- vapply(seq_len(nrow(small)), function(i) window_ok(res2[[i]], small[i, ]), logical(1))
+      for (i in which(ok2)) occ[[small$seqid[i]]][small$start[i]:small$end[i]] <- res2[[i]]
+      if (any(ok2))  reduced <- rbind(reduced, cbind(small[ok2, , drop = FALSE], flank = fallback_flank))
+      if (any(!ok2)) failed  <- rbind(failed, small[!ok2, , drop = FALSE])
+    }
+
+    mid   <- (big$start + big$end) %/% 2
+    tasks <- rbind(data.frame(seqid = big$seqid, start = big$start, end = mid,     stringsAsFactors = FALSE),
+                   data.frame(seqid = big$seqid, start = mid + 1,   end = big$end, stringsAsFactors = FALSE))
+    cat(sprintf("[%s] round %d: %d windows scored, %d split for the next round, %.1f min\n",
+                format(Sys.time(), "%H:%M:%S"), round, sum(ok), nrow(big),
+                as.numeric(difftime(Sys.time(), t0, units = "mins"))))
+    flush.console()
+  }
+
+  out <- setNames(vector("list", nrow(coords)), coords$gene)
+  for (i in seq_len(nrow(coords))) {
+    s <- occ[[coords$seqid[i]]][coords$start[i]:coords$end[i]]
+    out[[coords$gene[i]]] <- if (coords$strand[i] == "-") rev(s) else s
+  }
+  attr(out, "coords")                <- coords
+  attr(out, "reduced_flank_regions") <- reduced
+  attr(out, "failed_regions")        <- failed
+  out
+}
+
+## Summarizes the regions that needed fallback flanks or stayed unscored,
+## so the job log records them next to the progress lines
+report_regions <- function(occ, label) {
+  red <- attr(occ, "reduced_flank_regions")
+  bad <- attr(occ, "failed_regions")
+  cat(sprintf("%s: %d promoters, %d region(s) scored with fallback flanks, %d region(s) unscored (%d bp)\n",
+              label, length(occ), if (is.null(red)) 0L else nrow(red),
+              if (is.null(bad)) 0L else nrow(bad),
+              if (is.null(bad)) 0L else sum(bad$end - bad$start + 1)))
+  if (!is.null(bad)) print(bad, row.names = FALSE)
+}
+
+## power_grid_row: power of one grid row i (mean reads x cell count x burst-frequency size) over the SIZE.RATIO sweep. The reference group's
+## counts and fit are drawn once per replicate and reused across the sweep, so the sweep isolates the effect of SIZE.RATIO.
+power_grid_row <- function(i, ALPHA, CELL.RATIO, EXPOSURE.CV, GRID, MEAN.READS, N.CELLS, N.MIX, NI, NJ, PI1, SEED.BASE, SIZE, SIZE.RATIO) {
+  ## size_log2_ratio: log2 ratio of the NB size (disp, the burst-frequency axis) between two
+  ## .fit_one() results, NA if either side is non-positive or non-finite.
+  size_log2_ratio <- function(fit_a, fit_b) {
+    a <- fit_a[["disp"]]; b <- fit_b[["disp"]]
+    if (is.finite(a) && a > 0 && is.finite(b) && b > 0) log2(a) - log2(b) else NA_real_
+  }
+
+  row <- GRID[i, ]
+  MEAN.READS.X <- MEAN.READS[row$m]
+  N.SC.X       <- N.CELLS[row$n]
+  N.SE.X       <- round(N.SC.X * CELL.RATIO)
+  SIZE.1.X     <- SIZE[row$p]
+
+  set.seed(SEED.BASE + 1e6 + row$n)  #shared draws, keyed only by cell count
+  sdlog <- sqrt(log(1 + EXPOSURE.CV^2))
+  EXPO.X.LIST <- lapply(seq_len(NJ), function(j) rlnorm(N.SC.X, meanlog = -0.5*sdlog^2, sdlog = sdlog))
+  EXPO.Y.LIST <- lapply(seq_len(NJ), function(j) rlnorm(N.SE.X, meanlog = -0.5*sdlog^2, sdlog = sdlog))
+  PERM.LIST   <- lapply(seq_len(NI), function(k) sample.int(N.SC.X + N.SE.X))
+
+  set.seed(SEED.BASE + i)  #row-specific draws (X depends on m, p, n)
+  X.LIST  <- vector("list", NJ)
+  FA.LIST <- vector("list", NJ)
+  for (j in seq_len(NJ)) {
+    X.LIST[[j]]  <- rnbinom(n = N.SC.X, size = SIZE.1.X, mu = MEAN.READS.X*EXPO.X.LIST[[j]])
+    FA.LIST[[j]] <- .fit_one(X.LIST[[j]], EXPO.X.LIST[[j]])  #shared across SIZE.RATIO below
+  }
+
+  P.ALL <- matrix(NA_real_, NJ, length(SIZE.RATIO))
+  for (qi in seq_along(SIZE.RATIO)) {
+    SIZE.2.X <- SIZE.1.X / SIZE.RATIO[qi]
+    for (j in seq_len(NJ)) {
+      EXPO.Y <- EXPO.Y.LIST[[j]]
+      Y  <- rnbinom(n = N.SE.X, size = SIZE.2.X, mu = MEAN.READS.X*EXPO.Y)
+      fb <- .fit_one(Y, EXPO.Y)   #same estimator as the null below
+      OBS <- size_log2_ratio(FA.LIST[[j]], fb)
+
+      XY <- c(X.LIST[[j]], Y); EXPO.XY <- c(EXPO.X.LIST[[j]], EXPO.Y)
+      NULL.DIST <- numeric(NI)
+      for (k in seq_len(NI)) {
+        sp <- .fit_split(XY, EXPO.XY, PERM.LIST[[k]], N.SC.X)  #same estimator as the observed contrast
+        NULL.DIST[k] <- size_log2_ratio(sp$a, sp$b)
+      }
+      P.ALL[j, qi] <- perm_pval(OBS, NULL.DIST)
+    }
+  }
+
+  i0     <- which(SIZE.RATIO == 1)
+  P.NULL <- P.ALL[, i0]
+  n_alt  <- min(NJ, round(NJ * PI1 / (1 - PI1)))
+  vapply(seq_along(SIZE.RATIO), function(qi) {
+    if (qi == i0) return(mean(P.NULL < ALPHA, na.rm = TRUE))
+    mean(replicate(N.MIX, {
+      q <- p.adjust(c(P.NULL, P.ALL[sample.int(NJ, n_alt), qi]), method = "BH")
+      mean(q[NJ + seq_len(n_alt)] < ALPHA, na.rm = TRUE)
+    }), na.rm = TRUE)
+  }, numeric(1))
+}
+
+## bootstrap_ari_job: one bootstrap replicate (job j of the tasks x replicates table). It resamples the cells of the dataset by the job's
+## index vector, applies the same preparation as to_seurat_counts() in analysis.R (underscore to dash in gene names, CsparseMatrix),
+## reruns Normalize/HVG/Scale/PCA/Neighbors/Clusters at the original settings, and scores the adjusted Rand index against the reference
+## clusters on the same resampled cells. A failed replicate returns NA and the job log names it.
+bootstrap_ari_job <- function(j, inputs, jobs, tasks) {
+  tk  <- tasks[jobs$k[j], ]
+  d   <- inputs$data[[tk$dataset]]
+  tryCatch({
+    idx <- inputs$idx[[tk$dataset]][, jobs$b[j]]
+    boot_counts <- d$counts[, idx]
+    rownames(boot_counts) <- gsub("_", "-", rownames(d$counts), fixed = TRUE)
+    colnames(boot_counts) <- make.unique(colnames(d$counts)[idx])
+    boot_counts <- as(boot_counts, "CsparseMatrix")
+    boot_obj <- CreateSeuratObject(counts = boot_counts)
+    boot_obj <- NormalizeData(boot_obj, normalization.method = "LogNormalize", scale.factor = 10000, verbose = FALSE)
+    boot_obj <- FindVariableFeatures(boot_obj, selection.method = "vst", nfeatures = d$nfeatures, verbose = FALSE)
+    boot_obj <- ScaleData(boot_obj, features = rownames(boot_obj), verbose = FALSE)
+    boot_obj <- RunPCA(boot_obj, features = VariableFeatures(boot_obj), verbose = FALSE)
+    boot_obj <- FindNeighbors(boot_obj, reduction = "pca", dims = 1:d$dims_n, annoy.metric = d$metric, verbose = FALSE)
+    boot_obj <- FindClusters(boot_obj, resolution = tk$res, verbose = FALSE)
+    adjustedRandIndex(as.integer(inputs$ref[[tk$task]][idx]), as.integer(Idents(boot_obj)))
+  }, error = function(e) { message(sprintf("%s replicate %d: %s", tk$task, jobs$b[j], conditionMessage(e))); NA_real_ })
+}
+
+## par_apply: mclapply over X with one forked process per element (mc.preschedule = FALSE hands elements to workers one at a time,
+## which keeps all cores busy when elements differ in cost). cores: number of forked workers.
+par_apply <- function(X, FUN, cores) mclapply(X, FUN, mc.cores = cores, mc.preschedule = FALSE)
+
+## dataset_marker_enrichment: for each cluster of dataset d at its final resolution, marker genes against the rest of the SAME dataset's
+## cells (FindMarkers with ident.2 left at its default) and GO/KEGG over-representation of the up and down markers (run_enrichment).
+## The object carries its own final, validated clustering in Idents, so the question answered is whether the clustering validated for
+## THIS dataset corresponds to distinguishable biology; no GSEA is computed. A dataset with fewer than two clusters gives NULL (with a
+## message); otherwise the entry is a list of markers/up/down/up_enrich/down_enrich/background/cluster_ids, one element per cluster.
+dataset_marker_enrichment <- function(d, ari, inputs, marker_objs, labels, kegg_data, cores) {
+  obj <- assemble_cluster_stability(inputs, ari, d, marker_objs[[d]])$final_obj
+  cat(sprintf("marker enrichment: %s, %d clusters\n", labels[[d]], length(levels(Idents(obj))))); flush.console()
+  cluster_ids <- sort(unique(as.character(Idents(obj))))
+  if (length(cluster_ids) < 2) {
+    cat(sprintf("%s: only one cluster found; skipping the per-cluster marker/enrichment comparison.\n", labels[[d]]))
+    return(NULL)
+  }
+
+  markers_list <- par_apply(cluster_ids, function(cc) {
+    m <- suppressWarnings(FindMarkers(obj, ident.1 = cc))
+    m[order(m$avg_log2FC, decreasing = TRUE), ]
+  }, cores = cores)
+  names(markers_list) <- cluster_ids
+
+  up_list   <- lapply(markers_list, function(m) m[abs(m$avg_log2FC) > log2(1.25) & -log10(m$p_val_adj) > 20 & m$avg_log2FC > 0, ])
+  down_list <- lapply(markers_list, function(m) m[abs(m$avg_log2FC) > log2(1.25) & -log10(m$p_val_adj) > 20 & m$avg_log2FC < 0, ])
+
+  ## avg_log2FC is selected by name: FindMarkers column order differs across Seurat versions.
+  gene_vec <- function(m) { v <- m[["avg_log2FC"]]; names(v) <- row.names(m); v }
+  background_list <- lapply(markers_list, gene_vec)
+  up_genes_list    <- lapply(up_list,   gene_vec)
+  down_genes_list  <- lapply(down_list, gene_vec)
+
+  enrich <- setNames(par_apply(cluster_ids, function(cc) list(
+    up   = run_enrichment(names(up_genes_list[[cc]]),   names(background_list[[cc]]), kegg_data = kegg_data),
+    down = run_enrichment(names(down_genes_list[[cc]]), names(background_list[[cc]]), kegg_data = kegg_data)), cores = cores), cluster_ids)
+  up_enrich   <- lapply(enrich, `[[`, "up")
+  down_enrich <- lapply(enrich, `[[`, "down")
+
+  list(markers = markers_list, up = up_list, down = down_list,
+       up_enrich = up_enrich, down_enrich = down_enrich,
+       background = background_list, cluster_ids = cluster_ids)
+}
+
+## go_enrich_job: one enrichment job k. Over-representation jobs call run_enrichment(); rank-based jobs call gseGO() with a job-specific
+## seed so permutation p-values reproduce. A failed job returns NULL and the job log names it.
+go_enrich_job <- function(k, go_inputs, jobs, kegg_data) {
+  tryCatch({
+    job <- jobs[[k]]
+    if (job$kind == "ora") {
+      run_enrichment(job$genes, job$universe, qval = go_inputs$GO.QVAL, kegg_data = kegg_data)
+    } else {
+      set.seed(go_inputs$SEED.GO + k)
+      suppressWarnings(gseGO(geneList = job$ranks, OrgDb = org.Sc.sgd.db, keyType = "ORF", ont = job$ont, nPermSimple = 100000))
+    }
+  }, error = function(e) { message(sprintf("%s: %s", names(jobs)[k], conditionMessage(e))); NULL })
+}
+
+## ora_jobs: one over-representation job per gene set in sets (named group::set), all against the same universe.
+ora_jobs <- function(sets, universe, group)
+  lapply(setNames(names(sets), paste0(group, "::", names(sets))),
+         function(s) list(kind = "ora", genes = sets[[s]], universe = universe))
+
+## pick_group: the results in res whose job names start with group::, with the prefix removed from the names.
+pick_group <- function(res, group) { r <- res[startsWith(names(res), paste0(group, "::"))]; setNames(r, sub("^[^:]+::", "", names(r))) }
+
+## scalar_or_na: x if it is one number, else NA, so a worker that was lost leaves an NA slot in the replicate vector.
+scalar_or_na <- function(x) if (is.numeric(x) && length(x) == 1) x else NA_real_
+
+## acc_slots: the running-sum and running-sum-of-squares slots (zero vectors z) for decomposition nm in the co-expression accumulator.
+acc_slots <- function(nm, z) setNames(list(z, z), paste0(c("sum_", "sumsq_"), nm))
+
+## is_failed_result: TRUE for a worker result that is a try-error or NULL.
+is_failed_result <- function(x) inherits(x, "try-error") || is.null(x)
+
+## gse_job_set: the rank-based enrichment jobs (BP, MF, CC) for rank list q of ranks_lists, named GSE::GO.GSE.<q>.<ontology>.
+gse_job_set <- function(q, ranks_lists) {
+  lapply(setNames(c("BP", "MF", "CC"), sprintf("GSE::GO.GSE.%s.%s", q, c("BP", "MF", "CC"))),
+         function(ont) list(kind = "gse", ranks = ranks_lists[[q]], ont = ont))
 }
 
 ## ============================================================

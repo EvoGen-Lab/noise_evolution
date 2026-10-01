@@ -28,27 +28,6 @@ library('parallel')
 
 source("functions.R")
 
-## coexpr_bootstrap_one: one bootstrap draw of the co-expression decomposition. draw (from make_coexpr_draws()) resamples the columns of each
-## resid dataset. HYB.SC, HYB.SE and HYB.COMB take the same H draw because they are the same cells, and the per-gene ploidy factors are
-## fixed, so every draw rescales Rhyb identically. Returns total/cis/trans/dpar_sc/dpar_se at the upper-triangle pair positions.
-coexpr_bootstrap_one <- function(draw, resid) {
-  d <- coexpr_decompose(list(
-    MIX.SC = resid$MIX.SC[, draw$SC], MIX.SE = resid$MIX.SE[, draw$SE],
-    HYB.SC = resid$HYB.SC[, draw$H],  HYB.SE = resid$HYB.SE[, draw$H],
-    HYB.COMB = resid$HYB.COMB[, draw$H]),
-    ploidy_f = attr(resid, "ploidy_f"))
-  up <- which(upper.tri(matrix(0, nrow(resid$MIX.SC), nrow(resid$MIX.SC))))
-  list(total = d$total[up], cis = d$cis[up], trans = d$trans[up], dpar_sc = d$dpar_sc[up], dpar_se = d$dpar_se[up])
-}
-
-## coexpr_part_table: estimate, bootstrap SE (from the running sums), z and two-sided normal p for decomposition nm, one row per gene pair.
-coexpr_part_table <- function(nm, point, acc, base) {
-  est <- point[[nm]][acc$up]
-  s   <- acc[[paste0("sum_", nm)]]; ss <- acc[[paste0("sumsq_", nm)]]
-  se  <- sqrt(pmax(0, (ss - s^2 / acc$n) / (acc$n - 1)))      # SD of the draws from the running sums
-  data.frame(base, est = est, se = se, z = est / se, p = 2 * pnorm(-abs(est / se)))
-}
-
 ## The five decompositions the co-expression bootstrap tracks, in the order each draw returns them.
 .COEXPR_PARTS <- c("total", "cis", "trans", "dpar_sc", "dpar_se")
 
@@ -93,7 +72,7 @@ ACC <- local({
   p <- nrow(RESID$MIX.SC)
   up <- which(upper.tri(matrix(0, p, p)))
   z  <- numeric(length(up))
-  sums <- unlist(lapply(.COEXPR_PARTS, function(nm) setNames(list(z, z), paste0(c("sum_", "sumsq_"), nm))), recursive = FALSE)
+  sums <- unlist(lapply(.COEXPR_PARTS, acc_slots, z = z), recursive = FALSE)
   c(list(up = up, n = 0L), sums)
 })
 

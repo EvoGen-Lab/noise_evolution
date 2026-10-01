@@ -39,9 +39,8 @@ Prefer fixes that avoid cluster reruns. Offer a local recompute path (for exampl
 - R files use Windows CRLF line endings. `.sub` SLURM files use Unix LF line endings. `.gitattributes` enforces both. Keep it intact.
 - Check scalar conditions. Use `&&` and `||` only with length-one logical values. A scan of the full codebase for violations is still unfinished.
 - Write a function only when its code runs more than once: it is called from two or more places, or it is applied across many items (`lapply`, `sapply`, `vapply`, `Map`, `mapply`, `apply`, `parLapply`, `mclapply`). Code that runs once is written inline where it runs, so a reader follows the steps in order.
-  - `analysis/analysis.R` defines no functions. A function it applies across items is a named function in `R/functions.R`, passed to the apply call with its other inputs as named arguments (`lapply(X, name, arg = value)`). Use `[[` for plain accessors. `tryCatch(error = function(e) ...)` handlers are the one function literal allowed.
-  - A once-used step in `analysis.R` is a block (`local({ ... })` when it needs private variables) with its concept comment above it.
-  - A function that only one cluster script uses is defined in that script, right after `source("functions.R")`. A function used by `analysis.R` and a script, or by two scripts, is in `R/functions.R`.
+  - `analysis/analysis.R` and the cluster scripts define no functions. Every function lives in `R/functions.R`. A function applied across items is passed to the apply call with its other inputs as named arguments (`lapply(X, name, arg = value)`). Use `[[` for plain accessors. `tryCatch(error = function(e) ...)` handlers are the one function literal allowed in a script.
+  - A once-used step in `analysis.R` or a cluster script is written inline (a `local({ ... })` block when it needs private variables), with its concept comment above it.
   - A function that PSOCK workers need by name must be a top-level function in `R/functions.R` (`neg_binom_fit_offset`, `.fit_one`); `fit_counts_offset()` finds such dependencies from the code.
   - Before adding a function, check that it will run more than once; inline it if not.
 - Select Seurat columns by name, never by position (Seurat v5 changes `FindMarkers` output order).

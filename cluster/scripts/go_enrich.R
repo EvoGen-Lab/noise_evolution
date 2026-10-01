@@ -23,30 +23,12 @@ register(SerialParam())   # one process per job, parallelism comes from mclapply
 
 source("functions.R")
 
-## go_enrich_job: one enrichment job k. Over-representation jobs call run_enrichment(); rank-based jobs call gseGO() with a job-specific
-## seed so permutation p-values reproduce. A failed job returns NULL and the job log names it.
-go_enrich_job <- function(k, go_inputs, jobs, kegg_data) {
-  tryCatch({
-    job <- jobs[[k]]
-    if (job$kind == "ora") {
-      run_enrichment(job$genes, job$universe, qval = go_inputs$GO.QVAL, kegg_data = kegg_data)
-    } else {
-      set.seed(go_inputs$SEED.GO + k)
-      suppressWarnings(gseGO(geneList = job$ranks, OrgDb = org.Sc.sgd.db, keyType = "ORF", ont = job$ont, nPermSimple = 100000))
-    }
-  }, error = function(e) { message(sprintf("%s: %s", names(jobs)[k], conditionMessage(e))); NULL })
-}
-
 load("go_enrich_inputs.rda")
 NUM.CORES <- as.integer(Sys.getenv("SLURM_CPUS_PER_TASK", unset = detectCores()))
 
 ## ---- Job list: rank-based runs first, since they take longest ----
-ora_jobs <- function(sets, universe, group)
-  lapply(setNames(names(sets), paste0(group, "::", names(sets))),
-         function(s) list(kind = "ora", genes = sets[[s]], universe = universe))
-gse_jobs <- unlist(lapply(names(GO.INPUTS$GSE.LISTS), function(q)
-  lapply(setNames(c("BP", "MF", "CC"), sprintf("GSE::GO.GSE.%s.%s", q, c("BP", "MF", "CC"))),
-         function(ont) list(kind = "gse", ranks = GO.INPUTS$GSE.LISTS[[q]], ont = ont))), recursive = FALSE)
+
+gse_jobs <- unlist(lapply(names(GO.INPUTS$GSE.LISTS), gse_job_set, ranks_lists = GO.INPUTS$GSE.LISTS), recursive = FALSE)
 JOBS <- c(gse_jobs,
           ora_jobs(GO.INPUTS$GO.SETS,         GO.INPUTS$GO.UNIVERSE,         "GO"),
           ora_jobs(GO.INPUTS$INTR.SETS,       GO.INPUTS$INTR.UNIVERSE,       "INTR"),
@@ -60,11 +42,11 @@ names(RES) <- names(JOBS)
 cat(sprintf("enrichment done in %.1f min\n", as.numeric(difftime(Sys.time(), t0, units = "mins"))))
 
 ## ---- Unpack into the objects Section 8 reads ----
-pick <- function(group) { r <- RES[startsWith(names(RES), paste0(group, "::"))]; setNames(r, sub("^[^:]+::", "", names(r))) }
-GO.ENRICH     <- pick("GO")[names(GO.INPUTS$GO.SETS)]
-INTR.GO       <- pick("INTR")[names(GO.INPUTS$INTR.SETS)]
-INTR.GO.CLEAN <- pick("INTR.CLEAN")[names(GO.INPUTS$INTR.SETS.CLEAN)]
-GO.GSE        <- pick("GSE")
+
+GO.ENRICH     <- pick_group(RES, "GO")[names(GO.INPUTS$GO.SETS)]
+INTR.GO       <- pick_group(RES, "INTR")[names(GO.INPUTS$INTR.SETS)]
+INTR.GO.CLEAN <- pick_group(RES, "INTR.CLEAN")[names(GO.INPUTS$INTR.SETS.CLEAN)]
+GO.GSE        <- pick_group(RES, "GSE")
 GO.KEY        <- GO.INPUTS
 
 save(GO.ENRICH, INTR.GO, INTR.GO.CLEAN, GO.GSE, GO.KEY, file = "go_enrich_output.rda")
