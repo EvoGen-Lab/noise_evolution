@@ -190,7 +190,7 @@ MIX.MINORITY.FRAC <- pmin(MIX.SC.SHARED.SUM, MIX.SE.SHARED.SUM) / (MIX.SC.SHARED
 # Sweep of minority-read-fraction thresholds
 MIX.FRAC.SWEEP <- 10^seq(log10(0.001), log10(0.5), length.out = 200)
 MINORITY.FRAC.THRESHOLD <- 0.005
-MIX.FRAC.SWEEP.N.EXCEED <- sapply(MIX.FRAC.SWEEP, function(t) sum(MIX.MINORITY.FRAC > t))
+MIX.FRAC.SWEEP.N.EXCEED <- sapply(MIX.FRAC.SWEEP, n_exceeding, x = MIX.MINORITY.FRAC)
 pdf(file.path(FIGURE.DIR, "extra/S_mix_shared_cell_contamination_sweep.pdf"), width = 6, height = 5, useDingbats = FALSE)
 plot(MIX.FRAC.SWEEP * 100, MIX.FRAC.SWEEP.N.EXCEED, log = "x", type = "l",
      xlab = "Minority-species read fraction threshold (%, log scale)",
@@ -272,16 +272,7 @@ QC.STATS <- list(
                 det = colSums(HYB.SC > 0) + colSums(HYB.SE > 0)))
 # Genes-detected floor was dropped entirely (too aggressive, especially on
 # the already-small MIX.SC dataset); library size alone now decides
-QC.CELLS <- lapply(QC.STATS, function(s) local({
-  lib <- s$lib
-  k <- CELL.MAD.K
-  min_reads <- 500
-  ## Lower cutoff on the log10 scale. Working in logs makes the rule
-  ## scale-free, so one setting adapts to any sequencing depth.
-  lx <- log10(lib[lib > 0])
-  lib_cut <- max(min_reads, 10^(median(lx) - k * mad(lx)))
-  list(keep = lib >= lib_cut, lib_cut = lib_cut)
-}))
+QC.CELLS <- lapply(QC.STATS, qc_cell_cutoff, k = CELL.MAD.K)
 QC.TITLES <- c(MIX.SC = "Sc Parent", MIX.SE = "Se Parent", HYB = "Hybrid (alleles pooled)")
 pdf(file.path(FIGURE.DIR, "extra/S_cell_count_threshold_qc.pdf"), width = 12, height = 4, useDingbats = FALSE)
 par(mfrow=c(1,3))
@@ -395,12 +386,6 @@ SPLIT.FRAC <- local({
   ## in (0, 0.5] is f* = [(2+r) - sqrt(r^2+4)] / (2r), r = B*Nh/A.
   ## r -> 0 (parent term negligible) recovers f* -> 0.5, the even
   ## split, correctly, since there is then no asymmetry to correct for.
-  .fstar_from_r <- function(r) {
-    out <- rep(0.5, length(r))
-    ok <- is.finite(r) & abs(r) > 1e-8
-    out[ok] <- ((2 + r[ok]) - sqrt(r[ok]^2 + 4)) / (2 * r[ok])
-    out
-  }
 
   cov_cols <- c("HYB_logmu_cov", "HYB_logdisp_cov")
   if (!all(cov_cols %in% names(pilot)))
@@ -417,7 +402,7 @@ SPLIT.FRAC <- local({
   r_mean <- median(B_mean[ok_mean]) * n_h / median(A_mean[ok_mean])
   r_disp <- median(B_disp[ok_disp]) * n_h / median(A_disp[ok_disp])
 
-  list(f_mean = .fstar_from_r(r_mean), f_disp = .fstar_from_r(r_disp),
+  list(f_mean = fstar_from_r(r_mean), f_disp = fstar_from_r(r_disp),
        r_mean = r_mean, r_disp = r_disp,
        n_genes_mean = sum(ok_mean), n_genes_disp = sum(ok_disp),
        cor_mean = median((pilot$HYB_logmu_cov   / (pilot$HYB.SC_logmu_se   * pilot$HYB.SE_logmu_se))[ok_mean],   na.rm = TRUE),
@@ -487,7 +472,7 @@ NCELLS <- c(MIX.SC = ncol(MIX.SC), MIX.SE = ncol(MIX.SE), HYC.SC = ncol(HYC.SC),
 # dispersion estimate, a mean count above a floor that scales with dataset
 # depth, and detection in an absolute number of cells set from the smallest
 # dataset, in every one of the 13 datasets
-SPLIT.DEPTH <- vapply(SPLIT.FIT.MATS, function(m) sum(m) / ncol(m), numeric(1))
+SPLIT.DEPTH <- vapply(SPLIT.FIT.MATS, depth_per_cell, numeric(1))
 GENES <- local({
   fits <- SPLIT.FITS
   ncells <- NCELLS
@@ -502,10 +487,7 @@ GENES <- local({
       stop("fit frames are not gene-aligned; reorder to a common gene set first")
   floor_mean <- min_mean * depth[groups] / min(depth[groups])
   n_min <- ceiling(min_expr_frac * min(ncells[groups]))
-  pass <- Reduce(`&`, lapply(groups, function(g) {
-    fit <- fits[[g]]
-    is.finite(fit$DISP) & fit$DISP < 1e6 & fit$MEAN_CT >= floor_mean[[g]] & fit$N_EXPR >= n_min
-  }))
+  pass <- Reduce(`&`, lapply(groups, gene_pass_group, fits = fits, floor_mean = floor_mean, n_min = n_min))
   genes[which(pass)]
 })
 
@@ -523,7 +505,7 @@ CONTRAST.EXPOS <- list(MIX.SC = EXPO.MIX.SC, MIX.SE = EXPO.MIX.SE,
              HYC.N = EXPO.HYC.N, HYT.N = EXPO.HYT.N,
              HYB = EXPO.HYB)
 
-CONTRAST.FITS <- lapply(SPLIT.FITS, function(fr) data.frame(MU   = as.numeric(as.character(fr[GENES, "MU"])), DISP = as.numeric(as.character(fr[GENES, "DISP"])), row.names = GENES))
+CONTRAST.FITS <- lapply(SPLIT.FITS, contrast_fit_frame, genes = GENES)
 
 # Expected rise in bfreq when HYB.COMB sums the two hybrid alleles, per gene
 # in log2 units (0 to 1). The permutation job reads the dpar noise contrasts
@@ -543,20 +525,7 @@ PERMS <- local({
   nHYC <- ncells[["HYC.SC"]]; nHYT <- ncells[["HYT.SC"]]
   nHYC.N <- ncells[["HYC.SC.N"]]; nHYT.N <- ncells[["HYT.SC.N"]]
   nHYB <- ncells[["HYB.COMB"]]
-  lapply(seq_len(NPERM), function(b) list(
-    total     = sample.int(nSC + nSE),
-    cis       = runif(nHYC) < 0.5,
-    cis_n     = runif(nHYC.N) < 0.5,
-    transSC   = sample.int(nSC + nHYT),
-    transSE   = sample.int(nSE + nHYT),
-    transSC_n = sample.int(nSC + nHYT.N),
-    transSE_n = sample.int(nSE + nHYT.N),
-    dom_i   = sample.int(nSC, nHYB, replace = TRUE),
-    dom_j   = sample.int(nSE, nHYB, replace = TRUE),
-    dparSC  = sample.int(nHYB + nSC),
-    dparSE  = sample.int(nHYB + nSE),
-    inhSC   = sample.int(nHYB + nSC),
-    inhSE   = sample.int(nHYB + nSE)))
+  lapply(seq_len(NPERM), perm_label_draw, nHYB = nHYB, nHYC = nHYC, nHYC.N = nHYC.N, nHYT = nHYT, nHYT.N = nHYT.N, nSC = nSC, nSE = nSE)
 })
 
 # gene_boot.R and gene_perm.R for the cluster
@@ -604,12 +573,11 @@ BURST.CONTRASTS <- local({
   for (sp in c("sc", "se")) {
     par  <- fits[[if (sp == "sc") "MIX.SC" else "MIX.SE"]][df$gene, ]
     cv_p <- 1 / par$MU + 1 / par$DISP
-    ec <- function(q) paste0(q, "_dpar_", sp, "_est")
-    for (q in c("bfreq", "bsize", "kbal", "cv2")) df[[paste0(ec(q), "_raw")]] <- df[[ec(q)]]
-    df[[ec("bfreq")]] <- df[[ec("bfreq")]] - s
-    df[[ec("bsize")]] <- df[[ec("bsize")]] + s
-    df[[ec("kbal")]]  <- df[[ec("kbal")]]  - 2 * s
-    df[[ec("cv2")]]   <- ifelse(is.finite(cv_h) & cv_h > 0 & is.finite(cv_p) & cv_p > 0, log2(cv_h) - log2(cv_p), NA_real_)
+    for (q in c("bfreq", "bsize", "kbal", "cv2")) df[[paste0(dpar_est_col(q, sp = sp), "_raw")]] <- df[[dpar_est_col(q, sp = sp)]]
+    df[[dpar_est_col("bfreq", sp = sp)]] <- df[[dpar_est_col("bfreq", sp = sp)]] - s
+    df[[dpar_est_col("bsize", sp = sp)]] <- df[[dpar_est_col("bsize", sp = sp)]] + s
+    df[[dpar_est_col("kbal", sp = sp)]]  <- df[[dpar_est_col("kbal", sp = sp)]]  - 2 * s
+    df[[dpar_est_col("cv2", sp = sp)]]   <- ifelse(is.finite(cv_h) & cv_h > 0 & is.finite(cv_p) & cv_p > 0, log2(cv_h) - log2(cv_p), NA_real_)
   }
   df
 })
@@ -628,22 +596,7 @@ local({
   B <- 2000
   ## Gene-resampling bootstrap CI for statistics of eiv_components(). The CI is NA when more than half
   ## of the draws are non-finite.
-  do.call(rbind, lapply(modes, function(m) {
-    e <- eiv_components(BURST.CONTRASTS, m)
-    set.seed(1); n <- nrow(BURST.CONTRASTS)
-    draws <- replicate(B, eiv_components(BURST.CONTRASTS[sample.int(n, n, TRUE), , drop = FALSE], m)["rho_mean_disp"])
-    ## Draws with negative Vm or Vs give NaN. When most draws fail, the survivors are a biased subset
-    ## that can fall outside [-1, 1], so the CI is reported as NA.
-    na_frac <- mean(!is.finite(draws))
-    ci <- quantile(draws, probs = c(0.025, 0.975), na.rm = TRUE)
-    if (na_frac > 0.5) ci[] <- NA_real_
-    b <- list(ci = ci, na_frac = na_frac)
-    data.frame(mode = m, n = e["n"],
-      rho_raw = round(e["rho_raw_mean_disp"], 3),
-      rho_mean_disp = round(e["rho_mean_disp"], 3),
-      ms_lo = round(b$ci[1], 3), ms_hi = round(b$ci[2], 3),
-      ms_na = round(b$na_frac, 3), row.names = NULL)
-  }))
+  do.call(rbind, lapply(modes, eiv_mode_ci_row, contrasts = BURST.CONTRASTS, B = B))
 })
 
 # Diagnostic panel, before classification exists: top row cis vs trans
@@ -663,14 +616,11 @@ BURST.CONTRASTS2 <- local({ load(file.path(OUTPUT.DIR, "gene_boot2_output.rda"))
 
 pdf(file.path(FIGURE.DIR, "extra/S_gene_seed_compare.pdf"), width = 6, height = 9, useDingbats = FALSE)
 par(mfrow = c(3, 2))
-SEED.CHECK <- setNames(lapply(c("total", "cis", "trans"), function(m) list(mean = gene_seed_compare(BURST.CONTRASTS, BURST.CONTRASTS2, "mean", m), bfreq = gene_seed_compare(BURST.CONTRASTS, BURST.CONTRASTS2, "bfreq", m))), c("total", "cis", "trans"))
+SEED.CHECK <- setNames(lapply(c("total", "cis", "trans"), gene_seed_check, bc1 = BURST.CONTRASTS, bc2 = BURST.CONTRASTS2), c("total", "cis", "trans"))
 dev.off()
 
 # Expect correlation 0.9+ and a tight SE ratio 
-do.call(rbind, lapply(names(SEED.CHECK), function(m) do.call(rbind, lapply(names(SEED.CHECK[[m]]), function(q) {
-  x <- SEED.CHECK[[m]][[q]]
-  data.frame(mode = m, quantity = q, cor = round(x$cor, 3), ratio_median = round(x$ratio_median, 3), ratio_iqr = round(x$ratio_iqr, 3), n_genes = x$n_genes)
-}))))
+do.call(rbind, lapply(names(SEED.CHECK), gene_seed_check_rows, checks = SEED.CHECK))
 
 # Checkpoint: the fitted NB models, per-gene contrasts, and every Section 2
 # object that later sections read.
@@ -1104,11 +1054,7 @@ REL.CHECK <- local({
   bin_y <- tapply(se,   bins, median)
   bin_n <- tapply(se,   bins, length)
 
-  floor_summary <- do.call(rbind, lapply(floors, function(f) {
-    keep <- attn >= f
-    data.frame(floor = f, n_pairs = sum(keep),
-               median_se = if (any(keep)) median(se[keep]) else NA_real_)
-  }))
+  floor_summary <- do.call(rbind, lapply(floors, se_floor_row, attn = attn, se = se))
 
  plot(attn, se, pch = 19, cex = 0.4, col = COLOR.GREY[["mid"]], xlab = expression(sqrt(rho[i] * rho[j])), ylab = "bootstrap SE", main = "Co-expression SE vs predicted reliability")
   lines(bin_x, bin_y, type = "b", pch = 19, lwd = 2)
@@ -1145,20 +1091,11 @@ local({
 ## contrast's SE to compare.
 pdf(file.path(FIGURE.DIR, "extra/S_coexpr_seed_compare.pdf"), width = 15, height = 3.2, useDingbats = FALSE)
 par(mfrow = c(1, 5))
-SEED.CHECK <- setNames(lapply(c("total", "cis", "trans", "dpar_sc", "dpar_se"), function(m) local({
-  cb1 <- CB
-  cb2 <- CB2
-  mode <- m
-  mode <- match.arg(mode, c("total", "cis", "trans", "dpar_sc", "dpar_se"))
-  seed_compare_core(cb1[[mode]]$se, cb2[[mode]]$se, main = sprintf("%s: bootstrap SE, two seeds", mode), count_label = "n_pairs")
-})), c("total", "cis", "trans", "dpar_sc", "dpar_se"))
+SEED.CHECK <- setNames(lapply(c("total", "cis", "trans", "dpar_sc", "dpar_se"), coexpr_seed_check, cb1 = CB, cb2 = CB2), c("total", "cis", "trans", "dpar_sc", "dpar_se"))
 dev.off()
 
 # expect correlation 0.9+ and a tight SE ratio
-do.call(rbind, lapply(names(SEED.CHECK), function(m) {
-  x <- SEED.CHECK[[m]]
-  data.frame(mode = m, cor = round(x$cor, 3), ratio_median = round(x$ratio_median, 3), ratio_iqr = round(x$ratio_iqr, 3), n_pairs = x$n_pairs)
-}))
+do.call(rbind, lapply(names(SEED.CHECK), seed_check_row, checks = SEED.CHECK))
 
 ## 4.5 Pair-level classification
 
@@ -1237,11 +1174,7 @@ DRAWS.PERM.COEXPR <- local({
   seed <- SEED.COEXPR
   set.seed(seed)
   n_tot <- nSC + nSE
-  lapply(seq_len(B), function(b) list(
-    idx  = sample(n_tot),
-    swap = sample(c(TRUE, FALSE), nH, replace = TRUE),
-    idx_dpar_sc = sample(nSC + nH),
-    idx_dpar_se = sample(nSE + nH)))
+  lapply(seq_len(B), coexpr_perm_draw, nH = nH, nSC = nSC, nSE = nSE, n_tot = n_tot)
 })
 save(RESID, N.SC, N.SE, N.KEEP, DRAWS.PERM.COEXPR, file = file.path(INPUT.DIR, "coexpr_perm_inputs.rda"))
 
@@ -1290,7 +1223,7 @@ for (ax in COEXPR.AXES) {
     n_candidate <- min(n_candidate, length(rank_check$values) - 1)
     axis_order  <- order(abs(rank_check$values), decreasing = TRUE)[1:n_candidate]
     axis_var    <- setNames(rank_check$values[axis_order]^2 / sum(rank_check$values^2), axis_order)
-    axis_pr     <- setNames(sapply(axis_order, function(k) 1 / sum(rank_check$vectors[, k]^4)), axis_order)
+    axis_pr     <- setNames(sapply(axis_order, axis_participation_ratio, vectors = rank_check$vectors), axis_order)
 
     sig_axes <- as.integer(names(axis_var)[axis_var >= var_floor])
     dropped  <- sig_axes[axis_pr[as.character(sig_axes)] < eff_genes_min]
@@ -1363,11 +1296,7 @@ for (ax in COEXPR.AXES) {
   })
 
   cat(sprintf("\n-- %s: axis mixture components --\n", ax))
-  print(round(sapply(EXTRA.AXES.LIST[[ax]], function(a) c(
-    var = a$var_explained, eff_genes = a$eff_genes,
-    mu_lo = a$mu[1], mu_hi = a$mu[2],
-    sigma_lo = a$sigma[1], sigma_hi = a$sigma[2],
-    n_lo = length(a$genes_lo), n_hi = length(a$genes_hi))), 3))
+  print(round(sapply(EXTRA.AXES.LIST[[ax]], axis_mixture_summary), 3))
 }
 
 ## 4.9 Permutation validation
@@ -1401,7 +1330,7 @@ for (ax in COEXPR.AXES) {
     ## draws: without it, mean(null >= obs) reports an exact 0 that
     ## overstates precision no finite permutation count can support,
     ## rather than the true floor of 1 / (n_perm + 1)
-    candidate_p    <- sapply(seq_along(candidate_raw), function(k) (1 + sum(null_ranks[, k] >= candidate_raw[k])) / (1 + nrow(null_ranks)))
+    candidate_p    <- sapply(seq_along(candidate_raw), rank_null_p, observed = candidate_raw, null_ranks = null_ranks)
 
     ## Benjamini-Hochberg FDR across the candidate axes of this matrix.
     ## Rank-matched nulls make the axis tests positively related, the
@@ -1453,9 +1382,8 @@ POS.ENRICH.KEGG <- enrichKEGG(gene = POS.LOAD.GENES, universe = CO.GENES, organi
 
 # Growth-rate check: log2 fold change in mean expression (Sc/Se) for
 # each loading group
-mu_log2fc <- function(genes) setNames(log2(CONTRAST.FITS$MIX.SC[genes, "MU"] / CONTRAST.FITS$MIX.SE[genes, "MU"]), genes)
-POS.MU.LOG2FC <- mu_log2fc(POS.LOAD.GENES)   # ribosome / translation
-NEG.MU.LOG2FC <- mu_log2fc(NEG.LOAD.GENES)   # glycolysis / fermentation
+POS.MU.LOG2FC <- mu_log2fc(POS.LOAD.GENES, fits = CONTRAST.FITS)   # ribosome / translation
+NEG.MU.LOG2FC <- mu_log2fc(NEG.LOAD.GENES, fits = CONTRAST.FITS)   # glycolysis / fermentation
 summary(POS.MU.LOG2FC); summary(NEG.MU.LOG2FC)
 
 pdf(file.path(FIGURE.DIR, "extra/S_coexpr_growth_check.pdf"), width = 5, height = 5, useDingbats = FALSE)
@@ -1516,9 +1444,8 @@ AXIS2.CT
 # For pairs within the ribosome group, within the
 # glycolysis/fermentation group, and pairs crossing between them, how do
 # they classify under the existing five-class scheme (CB.CLASS)?
-grp <- function(g) ifelse(g %in% POS.LOAD.GENES, "POS", ifelse(g %in% NEG.LOAD.GENES, "NEG", NA))
-CB.CLASS$grp_i <- grp(CB.CLASS$gene_i)
-CB.CLASS$grp_j <- grp(CB.CLASS$gene_j)
+CB.CLASS$grp_i <- loading_group(CB.CLASS$gene_i, pos_genes = POS.LOAD.GENES, neg_genes = NEG.LOAD.GENES)
+CB.CLASS$grp_j <- loading_group(CB.CLASS$gene_j, pos_genes = POS.LOAD.GENES, neg_genes = NEG.LOAD.GENES)
 CB.CLASS$pair_type <- with(CB.CLASS, ifelse(is.na(grp_i) | is.na(grp_j), NA, ifelse(grp_i == grp_j, paste0("within_", grp_i), "cross")))
 
 table(CB.CLASS$pair_type, CB.CLASS$class)
@@ -1559,13 +1486,7 @@ AXIS.POLE.GROUPS <- list(Axis1.Ribosome    = POS.LOAD.GENES,
                         Axis2.Bulk        = AXIS2.BULK.GENES)
 
 # Fraction of each pole classified any-trans on each burst-kinetics axis
-t(sapply(AXIS.POLE.GROUPS, function(g) {
-  i <- match(g, BURST.CONTRASTS$gene)
-  c(n              = length(g),
-    pct_bfreq_trans = mean(REG.BFREQ.CLASS[i] %in% c("Trans", "Cis + Trans"), na.rm = TRUE),
-    pct_bsize_trans = mean(REG.BSIZE.CLASS[i] %in% c("Trans", "Cis + Trans"), na.rm = TRUE),
-    pct_kbal_trans  = mean(REG.KBAL.CLASS[i]  %in% c("Trans", "Cis + Trans"), na.rm = TRUE))
-}))
+t(sapply(AXIS.POLE.GROUPS, pole_trans_fractions, contrasts = BURST.CONTRASTS, bfreq_class = REG.BFREQ.CLASS, bsize_class = REG.BSIZE.CLASS, kbal_class = REG.KBAL.CLASS))
 
 ## 4.13 Cis and trans candidate axes
 # Runs the detailed enrichment on
@@ -1633,7 +1554,7 @@ INTR.REL.CHECK <- local({
     ok    <- is.finite(attn)
     bins  <- cut(attn[ok], breaks = quantile(attn[ok], seq(0, 1, length.out = n_bins + 1)), include.lowest = TRUE)
     genes <- names(attn)[ok]
-    unname(unlist(tapply(genes, bins, function(g) sample(g, min(n_per_bin, length(g))))))
+    unname(unlist(tapply(genes, bins, sample_bin_genes, n_per_bin = n_per_bin)))
   })
 
   rho_obs <- row_cor(sc[samp, , drop = FALSE], se[samp, , drop = FALSE])
@@ -1645,16 +1566,7 @@ INTR.REL.CHECK <- local({
     se <- se[samp, , drop = FALSE]
     set.seed(seed)
     n <- ncol(sc)
-    vapply(seq_len(nrow(sc)), function(i) {
-      a <- sc[i, ]; b <- se[i, ]
-      r <- vapply(seq_len(B), function(k) {
-        idx <- sample.int(n, n, replace = TRUE)
-        x <- a[idx] - mean(a[idx]); y <- b[idx] - mean(b[idx])
-        den <- sqrt(sum(x^2) * sum(y^2))
-        if (den > 0) sum(x * y) / den else NA_real_
-      }, numeric(1))
-      sd(r, na.rm = TRUE)
-    }, numeric(1))
+    vapply(seq_len(nrow(sc)), allele_cor_boot_se_row, numeric(1), B = B, n = n, sc = sc, se = se)
   })
   a       <- attn[samp]
   rho_true <- rho_obs / a
@@ -1664,12 +1576,7 @@ INTR.REL.CHECK <- local({
   bins  <- cut(a, breaks = quantile(a, seq(0, 1, length.out = n_bins + 1)), include.lowest = TRUE)
   bin_x <- tapply(a, bins, median)
 
-  floor_summary <- do.call(rbind, lapply(floors, function(f) {
-    keep <- a >= f
-    data.frame(floor = f, n_genes = sum(keep),
-               median_se_obs  = if (any(keep)) median(se_obs[keep])  else NA_real_,
-               median_se_true = if (any(keep)) median(se_true[keep]) else NA_real_)
-  }))
+  floor_summary <- do.call(rbind, lapply(floors, reliability_floor_row, a = a, se_obs = se_obs, se_true = se_true))
 
   op <- par(mfrow = c(1, 2)); on.exit(par(op))
   plot(a, se_obs, pch = 19, cex = 0.4, col = COLOR.GREY[["mid"]], xlab = expression(sqrt(rho[Sc] * rho[Se])), ylab = "bootstrap SE, raw correlation", main = "Raw allele correlation")
@@ -1696,8 +1603,8 @@ INTR.REL.CHECK$floor_summary
 DEPTH.CELL <- EXPO.HYB
 INTR.SAMP  <- INTR.REL.CHECK$genes
 
-DEPTH.COR.SC <- sapply(INTR.SAMP, function(g) cor(RESID.ALLELE$HYB.SC[g, ], DEPTH.CELL))
-DEPTH.COR.SE <- sapply(INTR.SAMP, function(g) cor(RESID.ALLELE$HYB.SE[g, ], DEPTH.CELL))
+DEPTH.COR.SC <- sapply(INTR.SAMP, depth_cor, resid = RESID.ALLELE$HYB.SC, depth = DEPTH.CELL)
+DEPTH.COR.SE <- sapply(INTR.SAMP, depth_cor, resid = RESID.ALLELE$HYB.SE, depth = DEPTH.CELL)
 
 summary(DEPTH.COR.SC); summary(DEPTH.COR.SE)   # expect both centered near 0, no strong depth bias left in the residuals
 mean(DEPTH.COR.SC > 0); mean(DEPTH.COR.SE > 0)   # expect close to 0.5 if depth bias is not systematic in one direction
@@ -1708,13 +1615,7 @@ mean(DEPTH.COR.SC > 0); mean(DEPTH.COR.SE > 0)   # expect close to 0.5 if depth 
 ## offset failed to remove; if depth is the driver, this collapses toward
 ## zero relative to the raw correlation, and if not, it tracks the raw
 ## correlation closely.
-RHO.PARTIAL <- sapply(INTR.SAMP, function(g) local({
-  x <- RESID.ALLELE$HYB.SC[g, ]
-  y <- RESID.ALLELE$HYB.SE[g, ]
-  z <- DEPTH.CELL
-  rxy <- cor(x, y); rxz <- cor(x, z); ryz <- cor(y, z)
-  (rxy - rxz * ryz) / sqrt((1 - rxz^2) * (1 - ryz^2))
-}))
+RHO.PARTIAL <- sapply(INTR.SAMP, partial_cor_depth, resid = RESID.ALLELE, depth = DEPTH.CELL)
 
 pdf(file.path(FIGURE.DIR, "extra/S_intrinsic_depth_partial.pdf"), width = 5, height = 5, useDingbats = FALSE)
 plot(INTR.REL.CHECK$rho_obs, RHO.PARTIAL, pch = 19, cex = 0.5, xlab = "raw allele correlation", ylab = "allele correlation, depth partialled out")
@@ -1831,12 +1732,12 @@ ANOVA.BY.CLASS.CLEAN <- list(
   DOM.KBAL  = class_anova(NOISE.DECOMP.CLEAN.NOAMBIG$extrinsic_frac, DOM.KBAL.CLASS[class_idx_clean_noambig]))
 
 # Omnibus F, p, and eta-squared per classification
-t(sapply(ANOVA.BY.CLASS,       function(a) c(F = a$f, df1 = a$df1, df2 = a$df2, p = a$p, eta_sq = a$eta_sq)))
-t(sapply(ANOVA.BY.CLASS.CLEAN, function(a) c(F = a$f, df1 = a$df1, df2 = a$df2, p = a$p, eta_sq = a$eta_sq)))
+t(sapply(ANOVA.BY.CLASS,       anova_summary_row))
+t(sapply(ANOVA.BY.CLASS.CLEAN, anova_summary_row))
 
 # Pairwise Tukey tables
-lapply(ANOVA.BY.CLASS,       function(a) a$tukey)
-lapply(ANOVA.BY.CLASS.CLEAN, function(a) a$tukey)
+lapply(ANOVA.BY.CLASS,       `[[`, "tukey")
+lapply(ANOVA.BY.CLASS.CLEAN, `[[`, "tukey")
 
 ## intrinsic_fraction(mats, expos): intr / (intr + max(extr, 0)) per gene,
 ## the share of allele-pair noise that is private to each allele. A gene with no
@@ -1869,8 +1770,7 @@ local({
   h  <- hist(f, breaks=seq(0,1,length.out=brk+1), plot=FALSE)
   top <- max(h$counts)
   plot(h, col=COLOR.GREY[["light"]], border="white", xlim=c(0, 1), ylim=c(-top*0.06, top*1.20), xlab="intrinsic / (intrinsic + extrinsic)", ylab="# of genes", main=if(is.null(main)) "" else main)
-  med <- function(cls, lv) vapply(lv, function(k) median(f[cls==k],na.rm=TRUE), numeric(1))
-  rm <- med(rc, REG.CLASS); dm <- med(dc, DOM.CLASS)
+  rm <- class_median(rc, REG.CLASS, f = f); dm <- class_median(dc, DOM.CLASS, f = f)
   yR <- top*1.10; yD <- -top*0.04
   for (i in seq_along(rm))
     if (is.finite(rm[i])) segments(rm[i],0,rm[i],yR, col=COLOR.LIST.1[i], lty=3, lwd=0.7)
@@ -2109,10 +2009,6 @@ MERGE <- cbind(PARENT,HYBRID)
 
 # Convert a count matrix to a Seurat-ready sparse matrix with dash-
 # delimited feature names.
-to_seurat_counts <- function(mat) {
-  rownames(mat) <- gsub("_", "-", rownames(mat), fixed = TRUE)
-  as(mat, "CsparseMatrix")
-}
 YSC.MIX.SC <- CreateSeuratObject(counts = to_seurat_counts(MIX.SC))
 YSC.MIX.SE <- CreateSeuratObject(counts = to_seurat_counts(MIX.SE))
 YSC.HYB.SC <- CreateSeuratObject(counts = to_seurat_counts(HYB.SC))
@@ -2322,34 +2218,10 @@ CSTAB.INPUTS <- local({
   seed <- SEED.CLUSTER.BOOT
   metric <- "manhattan"
   ds <- names(sweeps)
-  tasks <- do.call(rbind, lapply(ds, function(d) {
-    ok <- sweeps[[d]]$grid[sweeps[[d]]$grid$ok, ]
-    ## plateau_coarsest: coarsest resolution on the plateau of the best grid
-    ## point. ok is the grid restricted to resolutions that passed the size
-    ## guard. Grid points are grouped into contiguous runs (in resolution
-    ## order) of equal n_clusters; the run containing the silhouette argmax is
-    ## the target plateau and its smallest resolution is returned. Grouping by
-    ## cluster count, a discrete quantity, keeps genuinely different partitions
-    ## (e.g. 3 vs. 5 clusters with nearly equal silhouette) on separate
-    ## plateaus, which a silhouette tolerance cannot guarantee.
-    rl <- unique(c(sweeps[[d]]$chosen_res, local({
-      ok  <- ok[order(ok$res), ]
-      grp <- cumsum(c(1, diff(ok$n_clusters) != 0))
-      target_grp <- grp[which.max(ok$sil)]
-      min(ok$res[grp == target_grp])
-    })))
-    data.frame(dataset = d, res = rl,
-               role = ifelse(rl == sweeps[[d]]$chosen_res, "chosen", "highest silhouette"),
-               sil = ok$sil[match(rl, ok$res)], n_clusters = ok$n_clusters[match(rl, ok$res)],
-               stringsAsFactors = FALSE)
-  }))
+  tasks <- do.call(rbind, lapply(ds, stability_task_rows, sweeps = sweeps))
   tasks$task <- sprintf("%s@%.2f", tasks$dataset, tasks$res)
-  ref <- setNames(lapply(seq_len(nrow(tasks)), function(k)
-    Idents(FindClusters(sweeps[[tasks$dataset[k]]]$obj, resolution = tasks$res[k], verbose = FALSE))), tasks$task)
-  data <- setNames(lapply(ds, function(d) {
-    stopifnot(ncol(counts[[d]]) == ncol(sweeps[[d]]$obj))
-    list(counts = as(counts[[d]], "CsparseMatrix"), nfeatures = nfeatures[[d]], dims_n = dims_n[[d]], metric = metric)
-  }), ds)
+  ref <- setNames(lapply(seq_len(nrow(tasks)), reference_partition, sweeps = sweeps, tasks = tasks), tasks$task)
+  data <- setNames(lapply(ds, stability_dataset_inputs, counts = counts, dims_n = dims_n, metric = metric, nfeatures = nfeatures, sweeps = sweeps), ds)
   ## ---- Cluster-stability bootstrap ----
   ## A stable partition survives resampling of the cells. Each replicate
   ## resamples cells with replacement from the raw count matrix (a fitted
@@ -2370,19 +2242,12 @@ CSTAB.INPUTS <- local({
   ## because RunPCA() reseeds the global RNG (seed.use = 42) inside every
   ## replicate. The same matrix serves every candidate resolution of a
   ## dataset, so the resolution comparison is paired on identical draws.
-  idx <- setNames(lapply(ds, function(d) local({
-    n <- ncol(counts[[d]])
-    set.seed(seed)
-    matrix(replicate(B, sample.int(n, n, replace = TRUE)), nrow = n)
-  })), ds)
+  idx <- setNames(lapply(ds, boot_resample_matrix, B = B, counts = counts, seed = seed), ds)
   key <- list(tasks = tasks, cells = lapply(counts, colnames), B = B, seed = seed)
   list(tasks = tasks, ref = ref, data = data, idx = idx, key = key)
 })
 MARKER.DS <- c("MIX.SC", "MIX.SE", "HYB.SC", "HYB.SE")
-CSTAB.MARKER.OBJS <- lapply(setNames(MARKER.DS, MARKER.DS), function(d) local({
-  obj <- get(paste0("YSC.", d))
-  if (packageVersion("Seurat") >= "5.0.0") DietSeurat(obj, layers = c("counts", "data")) else DietSeurat(obj)
-}))
+CSTAB.MARKER.OBJS <- lapply(setNames(mget(paste0("YSC.", MARKER.DS)), MARKER.DS), diet_for_markers)
 KEGG.DATA <- kegg_local("sce")
 
 ## ---- Cluster round trip: Rscript cluster_stability.R ----
@@ -2425,11 +2290,7 @@ METRIC.CHECK.MIX.SC <- local({
   dims <- 1:PCS.MIX.SC
   resolution <- BOOT.MIX.SC$final_res
   metrics <- c("manhattan", "euclidean")
-  cl <- lapply(metrics, function(m) {
-    o2 <- FindNeighbors(obj, reduction = "pca", dims = dims, annoy.metric = m, verbose = FALSE)
-    o2 <- FindClusters(o2, resolution = resolution, verbose = FALSE)
-    Idents(o2)
-  })
+  cl <- lapply(metrics, metric_clusters, dims = dims, obj = obj, resolution = resolution)
   names(cl) <- metrics
   list(clusters = cl, ari = adjustedRandIndex(as.integer(cl[[1]]), as.integer(cl[[2]])))
 })
@@ -2470,11 +2331,10 @@ SE.PAR.ID  <- (1+ncol(MIX.SC)):(ncol(MIX.SC)+ncol(MIX.SE))
 SC.HYB.ID  <- (1+ncol(MIX.SC)+ncol(MIX.SE)):(ncol(MIX.SC)+ncol(MIX.SE)+ncol(HYB.SC))
 SE.HYB.ID  <- (1+ncol(MIX.SC)+ncol(MIX.SE)+ncol(HYB.SC)):(ncol(MIX.SC)+ncol(MIX.SE)+ncol(HYB.SC)+ncol(HYB.SE))
 
-cluster_sizes <- function(id_range) { t <- table(YSC.IDENTS[id_range]); as.integer(names(t)[t >= MIN.CLUSTER.CELLS]) }
-SC.PAR.CLUSTERS <- cluster_sizes(SC.PAR.ID)
-SE.PAR.CLUSTERS <- cluster_sizes(SE.PAR.ID)
-SC.HYB.CLUSTERS <- cluster_sizes(SC.HYB.ID)
-SE.HYB.CLUSTERS <- cluster_sizes(SE.HYB.ID)
+SC.PAR.CLUSTERS <- cluster_sizes(SC.PAR.ID, idents = YSC.IDENTS, min_cells = MIN.CLUSTER.CELLS)
+SE.PAR.CLUSTERS <- cluster_sizes(SE.PAR.ID, idents = YSC.IDENTS, min_cells = MIN.CLUSTER.CELLS)
+SC.HYB.CLUSTERS <- cluster_sizes(SC.HYB.ID, idents = YSC.IDENTS, min_cells = MIN.CLUSTER.CELLS)
+SE.HYB.CLUSTERS <- cluster_sizes(SE.HYB.ID, idents = YSC.IDENTS, min_cells = MIN.CLUSTER.CELLS)
 cat(sprintf("Clusters with at least %d cells, by dataset:\n", MIN.CLUSTER.CELLS))
 cat("Sc parent:", SC.PAR.CLUSTERS, "\nSe parent:", SE.PAR.CLUSTERS, "\nHybrid Sc allele:", SC.HYB.CLUSTERS, "\nHybrid Se allele:", SE.HYB.CLUSTERS, "\n")
 
@@ -2537,19 +2397,15 @@ if (length(SE.PAR.CLUSTERS) == 1 && length(SC.PAR.VS.SE.COR) > 0) {
 # cells most often carry, kept as a pair only if that agreement runs
 # both ways.
 HYB.CROSSTAB <- table(Sc = YSC.IDENTS[SC.HYB.ID], Se = YSC.IDENTS[SE.HYB.ID])
-sc_best_se <- apply(HYB.CROSSTAB, 1, function(row) as.integer(names(which.max(row))))
-se_best_sc <- apply(HYB.CROSSTAB, 2, function(col) as.integer(names(which.max(col))))
-CONSISTENT.PAIRS <- do.call(rbind, lapply(names(sc_best_se), function(sc) {
-  sc_id <- as.integer(sc); se_id <- sc_best_se[[sc]]
-  if (!is.na(se_id) && identical(se_best_sc[[as.character(se_id)]], sc_id))
-    data.frame(sc = sc_id, se = se_id) else NULL
-}))
+sc_best_se <- apply(HYB.CROSSTAB, 1, best_partner)
+se_best_sc <- apply(HYB.CROSSTAB, 2, best_partner)
+CONSISTENT.PAIRS <- do.call(rbind, lapply(names(sc_best_se), consistent_pair_row, sc_best_se = sc_best_se, se_best_sc = se_best_sc))
 N.CONSISTENT.PAIRS <- nrow(CONSISTENT.PAIRS)
 cat(sprintf("%d mutually-consistent hybrid cluster pair(s) found. Sc-by-Se hybrid cluster crosstab:\n", N.CONSISTENT.PAIRS))
 print(HYB.CROSSTAB)
 print(CONSISTENT.PAIRS)
 
-HYBRID.CONSISTENT.CLUSTER.CELLS <- which(mapply(function(sc, se) any(CONSISTENT.PAIRS$sc == sc & CONSISTENT.PAIRS$se == se), YSC.IDENTS[SC.HYB.ID], YSC.IDENTS[SE.HYB.ID]))
+HYBRID.CONSISTENT.CLUSTER.CELLS <- which(mapply(is_consistent_pair, YSC.IDENTS[SC.HYB.ID], YSC.IDENTS[SE.HYB.ID], MoreArgs = list(pairs = CONSISTENT.PAIRS)))
 cat(sprintf("%d / %d hybrid cells (%.1f%%) fall in a consistent cluster pair\n", length(HYBRID.CONSISTENT.CLUSTER.CELLS), length(SC.HYB.ID), 100*length(HYBRID.CONSISTENT.CLUSTER.CELLS)/length(SC.HYB.ID)))
 HYB.SC.CONSISTENT <- HYB.SC[,HYBRID.CONSISTENT.CLUSTER.CELLS]
 HYB.SE.CONSISTENT <- HYB.SE[,HYBRID.CONSISTENT.CLUSTER.CELLS]
@@ -2836,10 +2692,10 @@ GO.SUMMARY <- local({
   data.frame(
     set     = names(sets),
     n_genes = vapply(sets, length, integer(1)),
-    GO_BP   = vapply(enrich, function(e) n_sig_terms(e$BP,   q), integer(1)),
-    GO_CC   = vapply(enrich, function(e) n_sig_terms(e$CC,   q), integer(1)),
-    GO_MF   = vapply(enrich, function(e) n_sig_terms(e$MF,   q), integer(1)),
-    KEGG    = vapply(enrich, function(e) n_sig_terms(e$KEGG, q), integer(1)),
+    GO_BP   = vapply(lapply(enrich, `[[`, "BP"), n_sig_terms, integer(1), q = q),
+    GO_CC   = vapply(lapply(enrich, `[[`, "CC"), n_sig_terms, integer(1), q = q),
+    GO_MF   = vapply(lapply(enrich, `[[`, "MF"), n_sig_terms, integer(1), q = q),
+    KEGG    = vapply(lapply(enrich, `[[`, "KEGG"), n_sig_terms, integer(1), q = q),
     row.names = NULL
   )
 })
@@ -2854,8 +2710,8 @@ list2env(GO.GSE, envir = environment())
 # Low, average, and high intrinsic-fraction sets,
 # enriched by go_enrich.R
 
-sapply(INTR.GO,       function(s) sapply(s, n_sig_terms, q = GO.QVAL))
-sapply(INTR.GO.CLEAN, function(s) sapply(s, n_sig_terms, q = GO.QVAL))
+sapply(INTR.GO,       n_sig_by_set, q = GO.QVAL)
+sapply(INTR.GO.CLEAN, n_sig_by_set, q = GO.QVAL)
 
 # Checkpoint
 save(GO.SETS, GO.ENRICH, GO.SUMMARY,
@@ -3024,21 +2880,11 @@ JARIANI <- fit_source(JARIANI.MAT, cl = NOISE.CL)
 parallel::stopCluster(NOISE.CL)
 
 NEW.SOURCES <- list(Gasch = GASCH, NadalRibelles = NADAL, Jackson = JACKSON, Jariani = JARIANI)
-NEW.MERGE   <- lapply(NEW.SOURCES, function(d) merge(NB.SC, d, by = "ORF"))
+NEW.MERGE   <- lapply(NEW.SOURCES, merge, x = NB.SC, by = "ORF")
 
 ## 9.4 Correlations against MIX.SC and among external sources
 # Mean-vs-mean and noise-vs-noise, each source against MIX.SC
-EXT.CORR <- do.call(rbind, lapply(names(EXT.MERGE), function(src) {
-  d <- EXT.MERGE[[src]]
-  mean_row  <- cor_row(log(d$MU),    log(d$Mean))
-  cv2_row   <- cor_row(log(d$CV2.x), log(d$CV2.y))
-  bfreq_row <- cor_row(log(d$BFREQ.x), log(d$BFREQ.y))
-  bsize_row <- cor_row(log(d$BSIZE.x), log(d$BSIZE.y))
-  out <- rbind(mean_row, cv2_row, bfreq_row, bsize_row)
-  out$source    <- src
-  out$statistic <- c("mean", "CV2", "burst_frequency", "burst_size")
-  out
-}))
+EXT.CORR <- do.call(rbind, lapply(names(EXT.MERGE), source_vs_mix_corr, merged = EXT.MERGE))
 EXT.CORR <- EXT.CORR[, c("source", "statistic", "n", "rho", "p")]
 
 # Newman's DM is a mean-corrected residual rather than a raw CV^2, so it
@@ -3051,17 +2897,7 @@ print(EXT.CORR, row.names = FALSE)
 print(NEWMAN.DM.CORR[, c("source", "statistic", "n", "rho", "p")], row.names = FALSE)
 
 # Each single-cell RNA-seq source against MIX.SC
-NEW.CORR <- do.call(rbind, lapply(names(NEW.MERGE), function(src) {
-  d <- NEW.MERGE[[src]]
-  mean_row  <- cor_row(log(d$MU),      log(d$Mean))
-  cv2_row   <- cor_row(log(d$CV2.x),   log(d$CV2.y))
-  bfreq_row <- cor_row(log(d$BFREQ.x), log(d$BFREQ.y))
-  bsize_row <- cor_row(log(d$BSIZE.x), log(d$BSIZE.y))
-  out <- rbind(mean_row, cv2_row, bfreq_row, bsize_row)
-  out$source    <- src
-  out$statistic <- c("mean", "CV2", "burst_frequency", "burst_size")
-  out
-}))
+NEW.CORR <- do.call(rbind, lapply(names(NEW.MERGE), source_vs_mix_corr, merged = NEW.MERGE))
 NEW.CORR <- NEW.CORR[, c("source", "statistic", "n", "rho", "p")]
 print(NEW.CORR, row.names = FALSE)
 
@@ -3069,25 +2905,12 @@ print(NEW.CORR, row.names = FALSE)
 EXT.RAW <- list(Newman = NEWMAN[, c("ORF", "Mean", "CV2", "BFREQ", "BSIZE")],
                 Keren  = KEREN[,  c("ORF", "Mean", "CV2", "BFREQ", "BSIZE")],
                 StewartOrnstein = STEWART[, c("ORF", "Mean", "CV2", "BFREQ", "BSIZE")])
-NEW.RAW <- lapply(NEW.SOURCES, function(d) {
-  data.frame(ORF = d$ORF, Mean = d$Mean, CV2 = d$CV2, BFREQ = d$BFREQ, BSIZE = d$BSIZE,
-             stringsAsFactors = FALSE)
-})
+NEW.RAW <- lapply(NEW.SOURCES, raw_source_table)
 ALL.RAW <- c(EXT.RAW, NEW.RAW)
 
 ALL.PAIRS <- combn(names(ALL.RAW), 2, simplify = FALSE)
 
-ALL.CORR.PAIRWISE <- do.call(rbind, lapply(ALL.PAIRS, function(p) {
-  d <- merge(ALL.RAW[[p[1]]], ALL.RAW[[p[2]]], by = "ORF")
-  mean_row  <- cor_row(log(d$Mean.x),  log(d$Mean.y))
-  cv2_row   <- cor_row(log(d$CV2.x),   log(d$CV2.y))
-  bfreq_row <- cor_row(log(d$BFREQ.x), log(d$BFREQ.y))
-  bsize_row <- cor_row(log(d$BSIZE.x), log(d$BSIZE.y))
-  out <- rbind(mean_row, cv2_row, bfreq_row, bsize_row)
-  out$comparison <- paste(p[1], "vs", p[2])
-  out$statistic  <- c("mean", "CV2", "burst_frequency", "burst_size")
-  out
-}))
+ALL.CORR.PAIRWISE <- do.call(rbind, lapply(ALL.PAIRS, pairwise_source_corr, all_raw = ALL.RAW))
 ALL.CORR.PAIRWISE <- ALL.CORR.PAIRWISE[, c("comparison", "statistic", "n", "rho", "p")]
 print(ALL.CORR.PAIRWISE, row.names = FALSE)
 
@@ -3096,25 +2919,17 @@ print(ALL.CORR.PAIRWISE, row.names = FALSE)
 # similar abundance in the same dataset, so the comparison below is of
 # gene-specific noise with each dataset's own abundance trend removed.
 NB.SC$CV2_ADJ <- mean_adjusted_noise(NB.SC$MU, NB.SC$CV2)
-ALL.RAW <- lapply(ALL.RAW, function(d) {
-  d$CV2_ADJ <- mean_adjusted_noise(d$Mean, d$CV2)
-  d
-})
+ALL.RAW <- lapply(ALL.RAW, add_cv2_adj)
 
 # How much of each source's raw CV^2 variation follows from abundance
 # alone.
 MEAN.CV2.LINK <- sapply(c(list(MIX.SC = transform(NB.SC, Mean = MU)), ALL.RAW),
-  function(d) cor(log(d$Mean), log(d$CV2), method = "spearman", use = "complete.obs"))
+  mean_cv2_spearman)
 print(round(MEAN.CV2.LINK, 2))
 
 # Agreement with MIX.SC in gene-specific noise, independent of agreement
 # in expression level.
-ADJ.CORR <- do.call(rbind, lapply(names(ALL.RAW), function(src) {
-  d <- merge(NB.SC[, c("ORF", "CV2_ADJ")], ALL.RAW[[src]][, c("ORF", "CV2_ADJ")], by = "ORF")
-  out <- cor_row(d$CV2_ADJ.x, d$CV2_ADJ.y)   # residuals are already on the log scale
-  out$source <- src
-  out
-}))
+ADJ.CORR <- do.call(rbind, lapply(names(ALL.RAW), adj_corr_row, all_raw = ALL.RAW, nb_sc = NB.SC))
 print(ADJ.CORR, row.names = FALSE)
 
 ## 9.6 Diagnostic plots
@@ -3242,7 +3057,7 @@ save(POWER, file = file.path(OUTPUT.DIR, "power.rda"))
 open_grid_pdf(file.path(FIGURE.DIR, "extended", "Power.Analysis.grid_mean_by_ncells.pdf"), length(N), length(M))
 for(n in N) {
   for(m in M) {
-    mat <- sapply(P, function(p) POWER[m,n,p,])
+    mat <- t(POWER[m,n,P,])
     plot_lines(log2(SIZE.RATIO), mat, xlab="SIZE Ratio", ylab="Power",
                main=paste0("Mean=",MEAN.READS[m]," Sc N.Cells=",N.CELLS[n]),
                x_at=log2(SIZE.RATIO), x_labels=SIZE.RATIO)
@@ -3254,7 +3069,7 @@ dev.off()
 open_grid_pdf(file.path(FIGURE.DIR, "extended", "Power.Analysis.1.pdf"), length(N), length(Q))
 for(n in N) {
   for(q in Q) {
-    mat <- sapply(P, function(p) POWER[,n,p,q])
+    mat <- POWER[,n,P,q]
     plot_lines(log2(MEAN.READS), mat, show_axes = FALSE)
     axis(2,at=c(0,0.2,0.4,0.6,0.8,1.0),las=1,labels=c("0%","20%","40%","60%","80%","100%"),cex.axis=0.6, mgp=c(3,0.6,0))
     title(ylab="Power",mgp=c(2,1,0))
@@ -3271,7 +3086,7 @@ dev.off()
 open_grid_pdf(file.path(FIGURE.DIR, "extended", "Power.Analysis.grid_ncells_by_mean.pdf"), length(Q), length(M))
 for(m in M) {
   for(q in Q) {
-    mat <- sapply(P, function(p) POWER[m,,p,q])
+    mat <- POWER[m,,P,q]
     plot_lines(N.CELLS, mat, xlab="Sc Cell Count", ylab="Power",
                main=paste0("Ratio=",SIZE.RATIO[q]," Mean=",MEAN.READS[m]))
   }
@@ -3282,7 +3097,7 @@ dev.off()
 open_grid_pdf(file.path(FIGURE.DIR, "extended", "Power.Analysis.grid_logmean_by_size_ratio.pdf"), length(P), length(Q))
 for(p in P) {
   for(q in Q) {
-    mat <- sapply(N, function(n) POWER[,n,p,q])
+    mat <- POWER[,N,p,q]
     plot_lines(log2(MEAN.READS), mat, xlab="log2(Mean Reads)", ylab="Power",
                main=paste0("SIZE=",SIZE[p]," Ratio=",SIZE.RATIO[q]))
   }
@@ -3293,7 +3108,7 @@ dev.off()
 open_grid_pdf(file.path(FIGURE.DIR, "extended", "Power.Analysis.grid_size_by_ratio.pdf"), length(M), length(Q))
 for(m in M) {
   for(q in Q) {
-    mat <- sapply(N, function(n) POWER[m,n,,q])
+    mat <- t(POWER[m,N,,q])
     plot_lines(log2(SIZE), mat, xlab=expression('log'[2]*'(SIZE)'), ylab="Power",
                main=paste0("MEAN=",MEAN.READS[m]," Ratio=",SIZE.RATIO[q]))
   }
@@ -3304,7 +3119,7 @@ dev.off()
 open_grid_pdf(file.path(FIGURE.DIR, "extended", "Power.Analysis.grid_sizeratio_by_mean.pdf"), length(P), length(M))
 for(p in P) {
   for(m in M) {
-    mat <- sapply(N, function(n) POWER[m,n,p,])
+    mat <- t(POWER[m,N,p,])
     plot_lines(log2(SIZE.RATIO), mat, xlab="SIZE.RATIO", ylab="Power",
                main=paste0("SIZE=",SIZE[p]," Mean=",MEAN.READS[m]),
                x_at=log2(SIZE.RATIO), x_labels=SIZE.RATIO)
@@ -3316,7 +3131,7 @@ dev.off()
 open_grid_pdf(file.path(FIGURE.DIR, "extended", "Power.Analysis.grid_sizeratio_by_ncells_full.pdf"), length(P), length(N))
 for(p in P) {
   for(n in N) {
-    mat <- sapply(M, function(m) POWER[m,n,p,])
+    mat <- t(POWER[M,n,p,])
     plot_lines(log2(SIZE.RATIO), mat, xlab="SIZE.RATIO", ylab="Power",
                main=paste0("SIZE=",SIZE[p]," Sc Cell Number=",N.CELLS[n]),
                x_at=log2(SIZE.RATIO), x_labels=SIZE.RATIO)
@@ -3328,7 +3143,7 @@ dev.off()
 open_grid_pdf(file.path(FIGURE.DIR, "extended", "Power.Analysis.grid_ncells_by_size_ratio_full.pdf"), length(P), length(Q))
 for(p in P) {
   for(q in Q) {
-    mat <- sapply(M, function(m) POWER[m,,p,q])
+    mat <- t(POWER[M,,p,q])
     plot_lines(N.CELLS, mat, xlab="Sc Cell Count", ylab="Power",
                main=paste0("SIZE=",SIZE[p]," Ratio=",SIZE.RATIO[q]))
   }
@@ -3340,7 +3155,7 @@ dev.off()
 open_grid_pdf(file.path(FIGURE.DIR, "extended", "Power.Analysis.2.pdf"), length(N), length(Q), mar = c(4.5, 3, 2, 1))
 for(n in N) {
   for(q in Q) {
-    mat <- sapply(M, function(m) POWER[m,n,,q])
+    mat <- t(POWER[M,n,,q])
     plot_lines(log2(SIZE), mat, show_axes = FALSE)
     axis(2,at=c(0,0.2,0.4,0.6,0.8,1.0),las=1,labels=c("0%","20%","40%","60%","80%","100%"),cex.axis=0.6, mgp=c(3,0.6,0))
     title(ylab="Power",mgp=c(2,1,0))
@@ -3355,7 +3170,7 @@ dev.off()
 open_grid_pdf(file.path(FIGURE.DIR, "extended", "Power.Analysis.grid_size_by_ncells_mean.pdf"), length(N), length(M))
 for(n in N) {
   for(m in M) {
-    mat <- sapply(Q, function(q) POWER[m,n,,q])
+    mat <- POWER[m,n,,Q]
     plot_lines(log2(SIZE), mat, xlab=expression('log'[2]*'(SIZE)'), ylab="Power",
                main=paste0("Sc Cell Number=",N.CELLS[n]," Mean=",MEAN.READS[m]))
   }
@@ -3366,7 +3181,7 @@ dev.off()
 open_grid_pdf(file.path(FIGURE.DIR, "extended", "Power.Analysis.grid_ncells_by_size_mean.pdf"), length(P), length(M))
 for(p in P) {
   for(m in M) {
-    mat <- sapply(Q, function(q) POWER[m,,p,q])
+    mat <- POWER[m,,p,Q]
     plot_lines(N.CELLS, mat, xlab="Sc Cell Count", ylab="Power",
                main=paste0("SIZE=",SIZE[p]," Mean=",MEAN.READS[m]))
   }
@@ -3378,7 +3193,7 @@ dev.off()
 open_grid_pdf(file.path(FIGURE.DIR, "extended", "Power.Analysis.3.pdf"), length(N), length(P))
 for(n in N) {
   for(p in P) {
-    mat <- sapply(Q, function(q) POWER[,n,p,q])
+    mat <- POWER[,n,p,Q]
     plot_lines(log2(MEAN.READS), mat, show_axes = FALSE)
     axis(2,at=c(0,0.2,0.4,0.6,0.8,1.0),las=1,labels=c("0%","20%","40%","60%","80%","100%"),cex.axis=0.6, mgp=c(3,0.6,0))
     title(ylab="Power",mgp=c(2,1,0))

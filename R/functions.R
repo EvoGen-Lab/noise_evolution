@@ -6,10 +6,10 @@
 ### coexpr_boot.R, coexpr_perm.R, nupop_occupancy.R,
 ### cluster_stability.R, go_enrich.R, power_grid.R)
 ###
-### A function lives here only when its code runs from two or more places. Code that runs from a single
-### place is written there (analysis.R, a cluster script, or the one function that uses it), so each
-### step reads in order where it happens. Functions used by one cluster script alone are defined in
-### that script.
+### A function lives here when its code runs more than once: it is called from two or more places, or
+### analysis.R applies it across many items (Section 14b). Code that runs once is written inline where it
+### runs. analysis.R defines no functions. A function that only one cluster script uses is defined in that
+### script.
 ###
 ### Outline (function name - purpose), grouped by section:
 ###
@@ -134,6 +134,53 @@
 ###     map_to_orf() / collapse_to_orf() - Resolve gene identifiers to systematic ORF names; sum rows that share an ORF.
 ###     fit_source() - Offset NB fit for one external count matrix, returned on the NB.SC layout (ORF, Mean, CV2, Fano, BFREQ, BSIZE).
 ###     mean_adjusted_noise() - Loess residual of log CV^2 on log mean: noise relative to genes of similar abundance.
+###   14b. FUNCTIONS APPLIED ACROSS ITEMS BY analysis.R
+###     qc_cell_cutoff() - library-size cell filter for one dataset s (a list with lib, the per-cell library.
+###     fstar_from_r() - closed-form split fraction f* = [(2+r) - sqrt(r^2+4)] / (2r) for r = B*Nh/A.
+###     gene_pass_group() - genes passing the filters in one group g: a finite NB dispersion, a mean count at or.
+###     perm_label_draw() - one permutation's relabelings for every mode.
+###     dpar_est_col() - name of the dpar estimate column for quantity q in species sp.
+###     eiv_mode_ci_row() - errors-in-variables correlation for one mode m with a gene-resampling bootstrap CI.
+###     gene_seed_check_rows() - summary rows (correlation, SE ratio median and IQR, gene count) of the two-seed.
+###     se_floor_row() - median bootstrap SE among pairs whose attenuation is at least floor f.
+###     coexpr_seed_check() - two-seed adequacy check for the co-expression bootstrap.
+###     seed_check_row() - one-row summary (correlation, SE ratio median and IQR, pair count) of the two-seed.
+###     coexpr_perm_draw() - one permutation draw for the co-expression null: the pooled-cell order (n_tot cells),.
+###     axis_mixture_summary() - variance explained, effective genes, mixture means and sigmas, and pole sizes of.
+###     mu_log2fc() - log2 fold change in mean expression (Sc/Se) for each gene, from the contrast fits.
+###     loading_group() - labels genes POS or NEG by membership in the two loading groups (NA for neither).
+###     pole_trans_fractions() - for one gene group g, its size and the fraction classified any-trans (Trans or.
+###     allele_cor_boot_se_row() - bootstrap SE of row i's allele-residual correlation between sc and se: B.
+###     reliability_floor_row() - median bootstrap SE of the raw (se_obs) and disattenuated (se_true) allele.
+###     partial_cor_depth() - correlation of gene g's Sc- and Se-allele residuals with cell depth partialled out.
+###     class_median() - median of f within each level lv of the class vector cls.
+###     to_seurat_counts() - converts a count matrix to a Seurat-ready sparse matrix with dash-delimited feature names.
+###     stability_task_rows() - the candidate resolutions to bootstrap for dataset d: the chosen resolution plus the.
+###     reference_partition() - the cluster labels of dataset/resolution task k, recomputed on the fitted neighbor.
+###     stability_dataset_inputs() - sparse counts and the fit settings (nfeatures, dims_n, metric) the cluster job.
+###     boot_resample_matrix() - draws every bootstrap resample of dataset d up front, one column per replicate,.
+###     metric_clusters() - clusters of a Seurat object at one resolution using the annoy distance metric m on the.
+###     cluster_sizes() - ids of the clusters holding at least min_cells of the cells in id_range (positions in idents).
+###     consistent_pair_row() - keeps Sc-hybrid cluster sc as a pair only when its best Se-hybrid partner picks it.
+###     source_vs_mix_corr() - correlation of one external source with MIX.SC (merged on ORF) for the mean, CV2,.
+###     raw_source_table() - the ORF, Mean, CV2, BFREQ and BSIZE columns of one fitted source, in the layout shared.
+###     pairwise_source_corr() - correlation of two published sources over their shared genes for the mean, CV2,.
+###     add_cv2_adj() - adds CV2_ADJ, the loess residual of log CV2 on log mean (mean_adjusted_noise()), to one.
+###     adj_corr_row() - agreement of source src's mean-adjusted noise (CV2_ADJ) with MIX.SC's (nb_sc) over the.
+###     n_exceeding() - number of values of x above the threshold t.
+###     depth_per_cell() - mean library size per cell of a genes x cells count matrix.
+###     contrast_fit_frame() - the MU and DISP columns of one fit frame fr for the given genes, as numeric.
+###     gene_seed_check() - two-seed comparison of the gene-level bootstrap SEs for mode m, for the mean and for burst frequency (bc1, bc2: the two BURST.CONTRASTS tables).
+###     axis_participation_ratio() - 1 / sum(v^4) for eigenvector k, the effective number of genes loading on the axis.
+###     rank_null_p() - add-one permutation p-value of candidate k's observed eigenvalue against the null spectra (rank-matched columns of null_ranks).
+###     sample_bin_genes() - up to n_per_bin genes drawn from the genes g of one attenuation bin.
+###     depth_cor() - correlation of gene g's residuals (rows of resid) with cell depth.
+###     anova_summary_row() - F statistic, degrees of freedom, p-value and eta squared of one class ANOVA a.
+###     best_partner() - the cluster id (as integer) with the largest count in one row or column v of a crosstab.
+###     is_consistent_pair() - whether the Sc-hybrid cluster sc and Se-hybrid cluster se form one of the mutually consistent pairs.
+###     n_sig_by_set() - number of significant terms (q-value below q) in every enrichment result of one gene-set list s.
+###     mean_cv2_spearman() - Spearman correlation of log mean and log CV2 in one source table d, the share of CV2 variation that follows from abundance alone.
+###     diet_for_markers() - strips a Seurat object to the counts and data layers FindMarkers needs, keeping the cluster job's input small.
 ###   15. UNUSED (no caller in analysis.R or cluster/scripts; kept for interactive use, not part of the run)
 ###     15a. Gene-fit calibration helpers
 ###       refine_by_boundary(), chk(), chk_prec() - Poisson/NB boundary reclassification and per-bin convergence/precision summaries.
@@ -2979,6 +3026,342 @@ mean_adjusted_noise <- function(mean, cv2, span = 0.3) {
   fit <- loess(lc[ok] ~ lm_[ok], span = span)   # smooth abundance trend, as in Newman's DM
   res[ok] <- lc[ok] - predict(fit)              # residual = noise beyond the expected level at that abundance
   res
+}
+
+## ============================================================
+## 14b. FUNCTIONS APPLIED ACROSS ITEMS BY analysis.R
+## ============================================================
+## Each function below runs the same code once per element of a vector or list in analysis.R (through
+## lapply, sapply, vapply, mapply or apply). It takes the element first and the objects it reads as named
+## arguments. Listed roughly in the order analysis.R uses them.
+
+## qc_cell_cutoff: library-size cell filter for one dataset s (a list with lib, the per-cell library
+## sizes). Cells below the larger of min_reads and the log10-scale median - k*MAD cutoff are dropped.
+## Working in logs makes the rule scale-free, so one setting adapts to any sequencing depth.
+qc_cell_cutoff <- function(s, k, min_reads = 500) {
+  lib <- s$lib
+  lx <- log10(lib[lib > 0])
+  lib_cut <- max(min_reads, 10^(median(lx) - k * mad(lx)))
+  list(keep = lib >= lib_cut, lib_cut = lib_cut)
+}
+
+## fstar_from_r: closed-form split fraction f* = [(2+r) - sqrt(r^2+4)] / (2r) for r = B*Nh/A. r -> 0
+## (parent term negligible) recovers the even split f* = 0.5, since there is then no asymmetry to correct for.
+fstar_from_r <- function(r) {
+  out <- rep(0.5, length(r))
+  ok <- is.finite(r) & abs(r) > 1e-8
+  out[ok] <- ((2 + r[ok]) - sqrt(r[ok]^2 + 4)) / (2 * r[ok])
+  out
+}
+
+## gene_pass_group: genes passing the filters in one group g: a finite NB dispersion, a mean count at or
+## above the group's depth-scaled floor, and expression in at least n_min cells. Returns a logical vector
+## over the rows of fits[[g]].
+gene_pass_group <- function(g, fits, floor_mean, n_min) {
+  fit <- fits[[g]]
+  is.finite(fit$DISP) & fit$DISP < 1e6 & fit$MEAN_CT >= floor_mean[[g]] & fit$N_EXPR >= n_min
+}
+
+## perm_label_draw: one permutation's relabelings for every mode. total, trans, dpar and inh shuffle
+## pooled cell labels, cis swaps alleles within each hybrid cell, and dom pairs random parent cells.
+## The cell counts (nSC, nSE parents; nHYC, nHYT hybrid cis and trans splits, .N for the noise split;
+## nHYB combined hybrid) set the size of each draw; b is the permutation index and is not used.
+perm_label_draw <- function(b, nHYB, nHYC, nHYC.N, nHYT, nHYT.N, nSC, nSE) list(
+  total     = sample.int(nSC + nSE),
+  cis       = runif(nHYC) < 0.5,
+  cis_n     = runif(nHYC.N) < 0.5,
+  transSC   = sample.int(nSC + nHYT),
+  transSE   = sample.int(nSE + nHYT),
+  transSC_n = sample.int(nSC + nHYT.N),
+  transSE_n = sample.int(nSE + nHYT.N),
+  dom_i   = sample.int(nSC, nHYB, replace = TRUE),
+  dom_j   = sample.int(nSE, nHYB, replace = TRUE),
+  dparSC  = sample.int(nHYB + nSC),
+  dparSE  = sample.int(nHYB + nSE),
+  inhSC   = sample.int(nHYB + nSC),
+  inhSE   = sample.int(nHYB + nSE))
+
+## dpar_est_col: name of the dpar estimate column for quantity q in species sp.
+dpar_est_col <- function(q, sp) paste0(q, "_dpar_", sp, "_est")
+
+## eiv_mode_ci_row: errors-in-variables correlation for one mode m with a gene-resampling bootstrap CI
+## (B resamples of the rows of contrasts). Draws with negative Vm or Vs give NaN; when more than half of
+## the draws are non-finite the survivors are a biased subset that can fall outside [-1, 1], so the CI is
+## reported as NA.
+eiv_mode_ci_row <- function(m, contrasts, B) {
+  e <- eiv_components(contrasts, m)
+  set.seed(1); n <- nrow(contrasts)
+  draws <- replicate(B, eiv_components(contrasts[sample.int(n, n, TRUE), , drop = FALSE], m)["rho_mean_disp"])
+  na_frac <- mean(!is.finite(draws))
+  ci <- quantile(draws, probs = c(0.025, 0.975), na.rm = TRUE)
+  if (na_frac > 0.5) ci[] <- NA_real_
+  b <- list(ci = ci, na_frac = na_frac)
+  data.frame(mode = m, n = e["n"],
+    rho_raw = round(e["rho_raw_mean_disp"], 3),
+    rho_mean_disp = round(e["rho_mean_disp"], 3),
+    ms_lo = round(b$ci[1], 3), ms_hi = round(b$ci[2], 3),
+    ms_na = round(b$na_frac, 3), row.names = NULL)
+}
+
+## gene_seed_check_rows: summary rows (correlation, SE ratio median and IQR, gene count) of the two-seed
+## comparison for mode m, one per quantity in checks[[m]].
+gene_seed_check_rows <- function(m, checks) do.call(rbind, lapply(names(checks[[m]]), function(q) {
+  x <- checks[[m]][[q]]
+  data.frame(mode = m, quantity = q, cor = round(x$cor, 3), ratio_median = round(x$ratio_median, 3), ratio_iqr = round(x$ratio_iqr, 3), n_genes = x$n_genes)
+}))
+
+## se_floor_row: median bootstrap SE among pairs whose attenuation is at least floor f.
+se_floor_row <- function(f, attn, se) {
+  keep <- attn >= f
+  data.frame(floor = f, n_pairs = sum(keep),
+             median_se = if (any(keep)) median(se[keep]) else NA_real_)
+}
+
+## coexpr_seed_check: two-seed adequacy check for the co-expression bootstrap. If SE has not converged at
+## this B, SEs underestimated by chance in one run can make many pairs look spuriously significant. cb1,
+## cb2: two CB objects at the same B and gene set that differ only in seed, with rows in the same
+## gene_i/gene_j order. mode: the contrast whose SE is compared.
+coexpr_seed_check <- function(mode, cb1, cb2) {
+  mode <- match.arg(mode, c("total", "cis", "trans", "dpar_sc", "dpar_se"))
+  seed_compare_core(cb1[[mode]]$se, cb2[[mode]]$se, main = sprintf("%s: bootstrap SE, two seeds", mode), count_label = "n_pairs")
+}
+
+## seed_check_row: one-row summary (correlation, SE ratio median and IQR, pair count) of the two-seed
+## co-expression comparison for mode m, read from checks[[m]].
+seed_check_row <- function(m, checks) {
+  x <- checks[[m]]
+  data.frame(mode = m, cor = round(x$cor, 3), ratio_median = round(x$ratio_median, 3), ratio_iqr = round(x$ratio_iqr, 3), n_pairs = x$n_pairs)
+}
+
+## coexpr_perm_draw: one permutation draw for the co-expression null: the pooled-cell order (n_tot cells),
+## per-cell allele swaps for the nH hybrid cells, and the two dpar pool orders. b is the draw index and is
+## not used.
+coexpr_perm_draw <- function(b, nH, nSC, nSE, n_tot) list(
+  idx  = sample(n_tot),
+  swap = sample(c(TRUE, FALSE), nH, replace = TRUE),
+  idx_dpar_sc = sample(nSC + nH),
+  idx_dpar_se = sample(nSE + nH))
+
+## axis_mixture_summary: variance explained, effective genes, mixture means and sigmas, and pole sizes of
+## one candidate axis a.
+axis_mixture_summary <- function(a) c(
+  var = a$var_explained, eff_genes = a$eff_genes,
+  mu_lo = a$mu[1], mu_hi = a$mu[2],
+  sigma_lo = a$sigma[1], sigma_hi = a$sigma[2],
+  n_lo = length(a$genes_lo), n_hi = length(a$genes_hi))
+
+## mu_log2fc: log2 fold change in mean expression (Sc/Se) for each gene, from the contrast fits.
+mu_log2fc <- function(genes, fits) setNames(log2(fits$MIX.SC[genes, "MU"] / fits$MIX.SE[genes, "MU"]), genes)
+
+## loading_group: labels genes POS or NEG by membership in the two loading groups (NA for neither).
+loading_group <- function(g, pos_genes, neg_genes) ifelse(g %in% pos_genes, "POS", ifelse(g %in% neg_genes, "NEG", NA))
+
+## pole_trans_fractions: for one gene group g, its size and the fraction classified any-trans (Trans or
+## Cis + Trans) on each burst-kinetics axis.
+pole_trans_fractions <- function(g, contrasts, bfreq_class, bsize_class, kbal_class) {
+  i <- match(g, contrasts$gene)
+  c(n              = length(g),
+    pct_bfreq_trans = mean(bfreq_class[i] %in% c("Trans", "Cis + Trans"), na.rm = TRUE),
+    pct_bsize_trans = mean(bsize_class[i] %in% c("Trans", "Cis + Trans"), na.rm = TRUE),
+    pct_kbal_trans  = mean(kbal_class[i]  %in% c("Trans", "Cis + Trans"), na.rm = TRUE))
+}
+
+## allele_cor_boot_se_row: bootstrap SE of row i's allele-residual correlation between sc and se: B
+## resamples of the n hybrid cells, with the SD of the resampled correlations returned.
+allele_cor_boot_se_row <- function(i, sc, se, n, B) {
+  a <- sc[i, ]; b <- se[i, ]
+  r <- vapply(seq_len(B), function(k) {
+    idx <- sample.int(n, n, replace = TRUE)
+    x <- a[idx] - mean(a[idx]); y <- b[idx] - mean(b[idx])
+    den <- sqrt(sum(x^2) * sum(y^2))
+    if (den > 0) sum(x * y) / den else NA_real_
+  }, numeric(1))
+  sd(r, na.rm = TRUE)
+}
+
+## reliability_floor_row: median bootstrap SE of the raw (se_obs) and disattenuated (se_true) allele
+## correlations among genes whose attenuation a is at least floor f.
+reliability_floor_row <- function(f, a, se_obs, se_true) {
+  keep <- a >= f
+  data.frame(floor = f, n_genes = sum(keep),
+             median_se_obs  = if (any(keep)) median(se_obs[keep])  else NA_real_,
+             median_se_true = if (any(keep)) median(se_true[keep]) else NA_real_)
+}
+
+## partial_cor_depth: correlation of gene g's Sc- and Se-allele residuals with cell depth partialled out.
+## If depth drove the allele-pair correlation this collapses toward zero relative to the raw correlation;
+## otherwise it tracks the raw correlation closely.
+partial_cor_depth <- function(g, resid, depth) {
+  x <- resid$HYB.SC[g, ]
+  y <- resid$HYB.SE[g, ]
+  z <- depth
+  rxy <- cor(x, y); rxz <- cor(x, z); ryz <- cor(y, z)
+  (rxy - rxz * ryz) / sqrt((1 - rxz^2) * (1 - ryz^2))
+}
+
+## class_median: median of f within each level lv of the class vector cls.
+class_median <- function(cls, lv, f) vapply(lv, function(k) median(f[cls==k],na.rm=TRUE), numeric(1))
+
+## to_seurat_counts: converts a count matrix to a Seurat-ready sparse matrix with dash-delimited feature names.
+to_seurat_counts <- function(mat) {
+  rownames(mat) <- gsub("_", "-", rownames(mat), fixed = TRUE)
+  as(mat, "CsparseMatrix")
+}
+
+## stability_task_rows: the candidate resolutions to bootstrap for dataset d: the chosen resolution plus the
+## coarsest resolution on the plateau around the highest silhouette. Grid points are grouped into contiguous
+## runs (in resolution order) of equal n_clusters, and the run holding the silhouette argmax is the plateau,
+## so genuinely different partitions (e.g. 3 vs 5 clusters at nearly equal silhouette) stay on separate
+## plateaus, which a silhouette tolerance cannot guarantee. ok is the grid restricted to resolutions that
+## passed the size guard.
+stability_task_rows <- function(d, sweeps) {
+  ok <- sweeps[[d]]$grid[sweeps[[d]]$grid$ok, ]
+  rl <- unique(c(sweeps[[d]]$chosen_res, local({
+    ok  <- ok[order(ok$res), ]
+    grp <- cumsum(c(1, diff(ok$n_clusters) != 0))
+    target_grp <- grp[which.max(ok$sil)]
+    min(ok$res[grp == target_grp])
+  })))
+  data.frame(dataset = d, res = rl,
+             role = ifelse(rl == sweeps[[d]]$chosen_res, "chosen", "highest silhouette"),
+             sil = ok$sil[match(rl, ok$res)], n_clusters = ok$n_clusters[match(rl, ok$res)],
+             stringsAsFactors = FALSE)
+}
+
+## reference_partition: the cluster labels of dataset/resolution task k, recomputed on the fitted neighbor
+## graph so the local and cluster sides share one labelling.
+reference_partition <- function(k, sweeps, tasks) Idents(FindClusters(sweeps[[tasks$dataset[k]]]$obj, resolution = tasks$res[k], verbose = FALSE))
+
+## stability_dataset_inputs: sparse counts and the fit settings (nfeatures, dims_n, metric) the cluster job
+## reuses for dataset d.
+stability_dataset_inputs <- function(d, counts, dims_n, metric, nfeatures, sweeps) {
+  stopifnot(ncol(counts[[d]]) == ncol(sweeps[[d]]$obj))
+  list(counts = as(counts[[d]], "CsparseMatrix"), nfeatures = nfeatures[[d]], dims_n = dims_n[[d]], metric = metric)
+}
+
+## boot_resample_matrix: draws every bootstrap resample of dataset d up front, one column per replicate,
+## from a single seeded stream. Fixing the draws before any Seurat call runs keeps each replicate an
+## independent resample, because RunPCA() reseeds the global RNG (seed.use = 42) inside every replicate.
+## The same matrix serves every candidate resolution of a dataset, so the resolution comparison is paired
+## on identical draws.
+boot_resample_matrix <- function(d, counts, B, seed) {
+  n <- ncol(counts[[d]])
+  set.seed(seed)
+  matrix(replicate(B, sample.int(n, n, replace = TRUE)), nrow = n)
+}
+
+## metric_clusters: clusters of a Seurat object at one resolution using the annoy distance metric m on the
+## first PCs (dims).
+metric_clusters <- function(m, obj, dims, resolution) {
+  o2 <- FindNeighbors(obj, reduction = "pca", dims = dims, annoy.metric = m, verbose = FALSE)
+  o2 <- FindClusters(o2, resolution = resolution, verbose = FALSE)
+  Idents(o2)
+}
+
+## cluster_sizes: ids of the clusters holding at least min_cells of the cells in id_range (positions in idents).
+cluster_sizes <- function(id_range, idents, min_cells) { t <- table(idents[id_range]); as.integer(names(t)[t >= min_cells]) }
+
+## consistent_pair_row: keeps Sc-hybrid cluster sc as a pair only when its best Se-hybrid partner picks it
+## back. sc: cluster id (character); sc_best_se and se_best_sc: best-partner lookups from the hybrid crosstab.
+consistent_pair_row <- function(sc, sc_best_se, se_best_sc) {
+  sc_id <- as.integer(sc); se_id <- sc_best_se[[sc]]
+  if (!is.na(se_id) && identical(se_best_sc[[as.character(se_id)]], sc_id))
+    data.frame(sc = sc_id, se = se_id) else NULL
+}
+
+## source_vs_mix_corr: correlation of one external source with MIX.SC (merged on ORF) for the mean, CV2,
+## burst frequency and burst size. src: source name; merged: list of per-source tables merged with NB.SC.
+source_vs_mix_corr <- function(src, merged) {
+  d <- merged[[src]]
+  mean_row  <- cor_row(log(d$MU),      log(d$Mean))
+  cv2_row   <- cor_row(log(d$CV2.x),   log(d$CV2.y))
+  bfreq_row <- cor_row(log(d$BFREQ.x), log(d$BFREQ.y))
+  bsize_row <- cor_row(log(d$BSIZE.x), log(d$BSIZE.y))
+  out <- rbind(mean_row, cv2_row, bfreq_row, bsize_row)
+  out$source    <- src
+  out$statistic <- c("mean", "CV2", "burst_frequency", "burst_size")
+  out
+}
+
+## raw_source_table: the ORF, Mean, CV2, BFREQ and BSIZE columns of one fitted source, in the layout shared
+## by all published sources.
+raw_source_table <- function(d) {
+  data.frame(ORF = d$ORF, Mean = d$Mean, CV2 = d$CV2, BFREQ = d$BFREQ, BSIZE = d$BSIZE,
+             stringsAsFactors = FALSE)
+}
+
+## pairwise_source_corr: correlation of two published sources over their shared genes for the mean, CV2,
+## burst frequency and burst size. p: the pair of source names; all_raw: list of per-source tables.
+pairwise_source_corr <- function(p, all_raw) {
+  d <- merge(all_raw[[p[1]]], all_raw[[p[2]]], by = "ORF")
+  mean_row  <- cor_row(log(d$Mean.x),  log(d$Mean.y))
+  cv2_row   <- cor_row(log(d$CV2.x),   log(d$CV2.y))
+  bfreq_row <- cor_row(log(d$BFREQ.x), log(d$BFREQ.y))
+  bsize_row <- cor_row(log(d$BSIZE.x), log(d$BSIZE.y))
+  out <- rbind(mean_row, cv2_row, bfreq_row, bsize_row)
+  out$comparison <- paste(p[1], "vs", p[2])
+  out$statistic  <- c("mean", "CV2", "burst_frequency", "burst_size")
+  out
+}
+
+## add_cv2_adj: adds CV2_ADJ, the loess residual of log CV2 on log mean (mean_adjusted_noise()), to one
+## source table d.
+add_cv2_adj <- function(d) {
+  d$CV2_ADJ <- mean_adjusted_noise(d$Mean, d$CV2)
+  d
+}
+
+## adj_corr_row: agreement of source src's mean-adjusted noise (CV2_ADJ) with MIX.SC's (nb_sc) over the
+## genes both report. The adjusted values are residuals on the log scale already, so no further transform.
+adj_corr_row <- function(src, all_raw, nb_sc) {
+  d <- merge(nb_sc[, c("ORF", "CV2_ADJ")], all_raw[[src]][, c("ORF", "CV2_ADJ")], by = "ORF")
+  out <- cor_row(d$CV2_ADJ.x, d$CV2_ADJ.y)
+  out$source <- src
+  out
+}
+
+## n_exceeding: number of values of x above the threshold t.
+n_exceeding <- function(t, x) sum(x > t)
+
+## depth_per_cell: mean library size per cell of a genes x cells count matrix.
+depth_per_cell <- function(m) sum(m) / ncol(m)
+
+## contrast_fit_frame: the MU and DISP columns of one fit frame fr for the given genes, as numeric.
+contrast_fit_frame <- function(fr, genes) data.frame(MU = as.numeric(as.character(fr[genes, "MU"])), DISP = as.numeric(as.character(fr[genes, "DISP"])), row.names = genes)
+
+## gene_seed_check: two-seed comparison of the gene-level bootstrap SEs for mode m, for the mean and for burst frequency (bc1, bc2: the two BURST.CONTRASTS tables).
+gene_seed_check <- function(m, bc1, bc2) list(mean = gene_seed_compare(bc1, bc2, "mean", m), bfreq = gene_seed_compare(bc1, bc2, "bfreq", m))
+
+## axis_participation_ratio: 1 / sum(v^4) for eigenvector k, the effective number of genes loading on the axis.
+axis_participation_ratio <- function(k, vectors) 1 / sum(vectors[, k]^4)
+
+## rank_null_p: add-one permutation p-value of candidate k's observed eigenvalue against the null spectra (rank-matched columns of null_ranks).
+rank_null_p <- function(k, observed, null_ranks) (1 + sum(null_ranks[, k] >= observed[k])) / (1 + nrow(null_ranks))
+
+## sample_bin_genes: up to n_per_bin genes drawn from the genes g of one attenuation bin.
+sample_bin_genes <- function(g, n_per_bin) sample(g, min(n_per_bin, length(g)))
+
+## depth_cor: correlation of gene g's residuals (rows of resid) with cell depth.
+depth_cor <- function(g, resid, depth) cor(resid[g, ], depth)
+
+## anova_summary_row: F statistic, degrees of freedom, p-value and eta squared of one class ANOVA a.
+anova_summary_row <- function(a) c(F = a$f, df1 = a$df1, df2 = a$df2, p = a$p, eta_sq = a$eta_sq)
+
+## best_partner: the cluster id (as integer) with the largest count in one row or column v of a crosstab.
+best_partner <- function(v) as.integer(names(which.max(v)))
+
+## is_consistent_pair: whether the Sc-hybrid cluster sc and Se-hybrid cluster se form one of the mutually consistent pairs.
+is_consistent_pair <- function(sc, se, pairs) any(pairs$sc == sc & pairs$se == se)
+
+## n_sig_by_set: number of significant terms (q-value below q) in every enrichment result of one gene-set list s.
+n_sig_by_set <- function(s, q) sapply(s, n_sig_terms, q = q)
+
+## mean_cv2_spearman: Spearman correlation of log mean and log CV2 in one source table d, the share of CV2 variation that follows from abundance alone.
+mean_cv2_spearman <- function(d) cor(log(d$Mean), log(d$CV2), method = "spearman", use = "complete.obs")
+
+## diet_for_markers: strips a Seurat object to the counts and data layers FindMarkers needs, keeping the cluster job's input small.
+diet_for_markers <- function(obj) {
+  if (packageVersion("Seurat") >= "5.0.0") DietSeurat(obj, layers = c("counts", "data")) else DietSeurat(obj)
 }
 
 ## ============================================================
