@@ -6,10 +6,10 @@
 ### coexpr_boot.R, coexpr_perm.R, nupop_occupancy.R,
 ### cluster_stability.R, go_enrich.R, power_grid.R)
 ###
-### A function that only a cluster script calls is defined in that script. Otherwise a function with
-### a single caller lives where it is used: nested inside that caller here (for
-### example .heatmap_legend inside class_overlap_heatmap), or, when the caller is analysis.R, defined in
-### analysis.R just above its first call. Search analysis.R for "<- function" to list those.
+### A function lives here only when its code runs from two or more places. Code that runs from a single
+### place is written there (analysis.R, a cluster script, or the one function that uses it), so each
+### step reads in order where it happens. Functions used by one cluster script alone are defined in
+### that script.
 ###
 ### Outline (function name - purpose), grouped by section:
 ###
@@ -18,12 +18,11 @@
 ###     console_start() / console_stop() - Per-section console transcript (section{N}_console.txt).
 ###   1. OFFSET NEGATIVE-BINOMIAL FIT
 ###     neg_binom_fit_offset() - Offset NB fit for one gene: rate (mu) and NB size (disp) from .fit_one(), with glm.nb asymptotic log-scale SEs; disp = Inf when a Poisson-vs-NB pre-check finds no overdispersion.
-###     fit_counts_offset() - Matrix version: fit_counts_offset_row() over every gene (row) against its exposure vector; optionally splits genes across a PSOCK cluster, shipping the functions the fit needs.
+###     fit_counts_offset() - Matrix version: one neg_binom_fit_offset() fit per gene (row) against its exposure vector; optionally splits genes across a PSOCK cluster, shipping the functions the fit needs.
 ###     .fit_one() - The pipeline's single NB estimator (mu = sum(y)/sum(exposure), disp by 1-D likelihood given mu): observed fits, every bootstrap and permutation replicate, and the power grid.
 ###     .fit_split() - Splits a pooled sample by a pre-drawn permutation and fits each half with `fit` (default .fit_one()); the gene-level null and the power grid share it.
 ###   1b. INTERNAL-PILOT SPLIT FRACTION (f*)
 ###     split_indices_by_depth() - Depth-matched split of depth-ordered hybrid cells at an arbitrary fraction.
-###     fit_counts_offset_row() - One gene's NB fit and derived columns (DISP, MU, VAR, FANO, CV, BFREQ, BSIZE), the single place those are built.
 ###   2. GENE FILTER (marginal information only; never on a contrast)
 ###     qc_gene_keep() - Cross-dataset gene QC with one relative abundance floor anchored to the shallowest dataset and an absolute detection floor, and sets the pilot gene pool.
 ###   3. PAIRED PER-GENE BOOTSTRAP OF CONTRASTS
@@ -108,8 +107,6 @@
 ###     plot_hvg_elbow() - Diagnostic plot for hvg_elbow()'s output: full curve, chosen cutoff, and floor marked.
 ###     sweep_cluster_resolution() - Resolution sweep with a minimum-cluster-size guard; picks the coarsest resolution with near-maximal silhouette width.
 ###     plot_resolution_sweep() - Diagnostic plot for sweep_cluster_resolution()'s output: silhouette vs. resolution, guard-excluded points and the chosen resolution marked.
-###     make_boot_idx() - Draws every bootstrap resample up front, one column per replicate, from one seeded stream.
-###     plateau_coarsest() - Coarsest resolution in the contiguous same-cluster-count run surrounding the grid's silhouette argmax.
 ###     assemble_cluster_stability() - Summarizes the returned ARI vectors per candidate resolution, picks the final resolution and relabels the object.
 ###     kegg_local() - Downloads the KEGG pathway map once, locally, for offline enrichment on cluster nodes.
 ###     load_cluster_output() - Loads a cluster result into the caller's environment, naming the script to run when the file is missing.
@@ -139,7 +136,7 @@
 ###     mean_adjusted_noise() - Loess residual of log CV^2 on log mean: noise relative to genes of similar abundance.
 ###   15. UNUSED (no caller in analysis.R or cluster/scripts; kept for interactive use, not part of the run)
 ###     15a. Gene-fit calibration helpers
-###       refine_by_boundary(), boot_disp_logse(), chk(), chk_prec() - Poisson/NB boundary reclassification and per-bin convergence/precision summaries.
+###       refine_by_boundary(), chk(), chk_prec() - Poisson/NB boundary reclassification and per-bin convergence/precision summaries.
 ###     15b. Diagnostics and plots for interactive use
 ###       coexpr_raw_cor(), coexpr_gene_degree(), plot_coexpr_pair(), report_cluster_marker_enrichment(), plot_geneset_direction_stack(), plot_palette_swatches().
 ###     15c. Method-of-moments alternative to the power-grid estimator
@@ -224,12 +221,11 @@ neg_binom_fit_offset <- function(y, exposure) {
   pearson <- sum((y - mu_i)^2 / mu_i) / (length(y) - 1)
   if (pearson <= 1) return(c(mu = mu_hat, disp = Inf))
 
-  ll <- function(ltheta) {
+  # NB log-likelihood in log(theta), with the means fixed at mu_i
+  opt <- tryCatch(optimize(function(ltheta) {
     th <- exp(ltheta)
     sum(lgamma(y + th) - lgamma(th) + th*log(th) - (th + y)*log(th + mu_i) + y*log(mu_i))
-  }
-
-  opt <- tryCatch(optimize(ll, c(-4, 15), maximum = TRUE), error = function(e) NULL)
+  }, c(-4, 15), maximum = TRUE), error = function(e) NULL)
   if (is.null(opt)) return(c(mu = mu_hat, disp = NA_real_))
 
   theta <- exp(opt$maximum)
@@ -251,15 +247,28 @@ neg_binom_fit_offset <- function(y, exposure) {
 ## cl is optional: NULL fits on one core; a PSOCK cluster from parallel::makeCluster() splits
 ## the genes into one chunk per worker, each chunk carrying all cells for its genes. A PSOCK
 ## worker starts with an empty workspace, so the functions the fit needs are sent to it here:
-## fit_counts_offset_row() and everything it reaches are found from the code itself
+## fit_counts_offset() and everything it reaches are found from the code itself
 ## (codetools::findGlobals), so a new dependency of the fit reaches the workers without
 ## editing a list. Genes are fit independently, so chunks need no communication.
 fit_counts_offset <- function(mat, exposure, cl = NULL) {
   stopifnot(ncol(mat) == length(exposure))
   if (is.null(cl))
-    return(do.call(rbind, lapply(seq_len(nrow(mat)), fit_counts_offset_row, mat = mat, exposure = exposure)))
+    return(do.call(rbind, lapply(seq_len(nrow(mat)), function(i) {
+      ## One NB fit per gene. DISP is the NB size parameter (theta), which this pipeline also reports
+      ## as burst frequency (BFREQ = DISP). BSIZE is the separate derived quantity MU / DISP (mean
+      ## count per burst); DISP and BSIZE are distinct quantities.
+      y <- mat[i, ]
+      f <- neg_binom_fit_offset(y, exposure)
+      disp <- f[["disp"]]; mu <- f[["mu"]]
+      data.frame(
+        DISP = disp, MU = mu, DISP_LOGSE = f[["disp_logse"]], MU_LOGSE = f[["mu_logse"]],
+        MEAN_CT = sum(y) / length(y), N_EXPR = sum(y > 0),
+        VAR = mu + mu^2 / disp, FANO = 1 + mu / disp, CV = sqrt(1 / disp + 1 / mu),
+        BFREQ = disp, BSIZE = mu / disp,
+        row.names = rownames(mat)[i])
+    })))
 
-  needed <- character(); todo <- "fit_counts_offset_row"
+  needed <- character(); todo <- "fit_counts_offset"
   while (length(todo)) {
     f <- todo[1]; todo <- todo[-1]
     if (f %in% needed) next
@@ -269,7 +278,7 @@ fit_counts_offset <- function(mat, exposure, cl = NULL) {
   chunk_id   <- cut(seq_len(nrow(mat)), length(cl), labels = FALSE)
   mat_chunks <- lapply(split(seq_len(nrow(mat)), chunk_id), function(i) mat[i, , drop = FALSE])
   parallel::clusterEvalQ(cl, suppressPackageStartupMessages(library(MASS)))
-  parallel::clusterExport(cl, c("fit_counts_offset", needed), envir = globalenv())
+  parallel::clusterExport(cl, needed, envir = globalenv())
   fit_chunks <- parallel::parLapply(cl, mat_chunks, fit_counts_offset, exposure = exposure)
   ## unname() before rbind() keeps the gene row names unprefixed by the chunk labels.
   do.call(rbind, unname(fit_chunks))
@@ -302,23 +311,6 @@ split_indices_by_depth <- function(n, f) {
   n_c <- max(1, round(f * n))
   c_pos <- unique(round(seq(1, n, length.out = n_c)))
   list(c = c_pos, t = setdiff(seq_len(n), c_pos))
-}
-
-## Single-gene version of fit_counts_offset() for parLapply: one NB fit per task spreads
-## genes across cores, and row-binding the results in gene order gives the same table.
-## DISP is the NB size parameter (theta), which this pipeline also reports as burst
-## frequency (BFREQ = DISP). BSIZE is the separate derived quantity MU / DISP (mean
-## count per burst); DISP and BSIZE are distinct quantities.
-fit_counts_offset_row <- function(i, mat, exposure) {
-  y <- mat[i, ]
-  f <- neg_binom_fit_offset(y, exposure)
-  disp <- f[["disp"]]; mu <- f[["mu"]]
-  data.frame(
-    DISP = disp, MU = mu, DISP_LOGSE = f[["disp_logse"]], MU_LOGSE = f[["mu_logse"]],
-    MEAN_CT = sum(y) / length(y), N_EXPR = sum(y > 0),
-    VAR = mu + mu^2 / disp, FANO = 1 + mu / disp, CV = sqrt(1 / disp + 1 / mu),
-    BFREQ = disp, BSIZE = mu / disp,
-    row.names = rownames(mat)[i])
 }
 
 ## ============================================================
@@ -1054,27 +1046,6 @@ dom_class_vec <- function(BURST.CONTRASTS, PR, quantity = c("mean", "bfreq", "bs
 ## same rng to related panels (e.g. the three regulatory overlap panels of Figure 2) makes a
 ## given color mean the same fold enrichment in all of them.
 class_overlap_heatmap <- function(class_a, class_b, levels_a = NULL, levels_b = NULL, brk = length(cols), fdr = 0.01, cols = COLOR.LIST.3, cex_axis = 0.75, cex_cell = NULL, fmt = NULL, star_frac = NULL, xlab = NULL, ylab = NULL, rng = NULL) {
-  ## --- class association heatmap ----------------------------------------
-  ## The heatmap shows the association between two class vectors as a grid of log2
-  ## observed-over-expected counts. Every cell is colored by its fold enrichment; a star marks
-  ## cells whose two-sided hypergeometric test is significant after BH. brk sets the number of
-  ## color bins.
-  ## .heatmap_legend draws a vertical color strip just outside the right edge of the plot
-  ## region, mapping the heatmap colors to fold enrichment. It runs right after image(), while
-  ## par("usr") still describes the heatmap's own 0-1 coordinate system.
-  .heatmap_legend <- function(pal, rng, brk) {
-    usr <- par("usr")
-    lx <- usr[2] + diff(usr[1:2]) * 0.12
-    rx <- usr[2] + diff(usr[1:2]) * 0.24
-    ys <- seq(usr[3], usr[4], length.out = brk + 1)
-    rect(lx, ys[-length(ys)], rx, ys[-1], col = pal, border = NA, xpd = NA)
-    rect(lx, usr[3], rx, usr[4], border = COLOR.GREY[["dark"]], xpd = NA)
-    text(rx, usr[4],         sprintf("%.2gx", 2^rng),  pos = 4, cex = 0.55, xpd = NA)
-    text(rx, mean(usr[3:4]), "1x",                      pos = 4, cex = 0.55, xpd = NA)
-    text(rx, usr[3],         sprintf("%.2gx", 2^-rng),  pos = 4, cex = 0.55, xpd = NA)
-    text(rx + diff(usr[1:2])*0.16, mean(usr[3:4]), "fold enrichment (obs/exp)", srt = 270, cex = 0.55, xpd = NA)
-  }
-
   explicit_levels <- !is.null(levels_a) || !is.null(levels_b)
   if (is.null(cex_cell))  cex_cell  <- if (explicit_levels) 0.7   else 0.65
   if (is.null(fmt))       fmt       <- if (explicit_levels) "%.1f" else "%.2g"
@@ -1121,7 +1092,26 @@ class_overlap_heatmap <- function(class_a, class_b, levels_a = NULL, levels_b = 
 
   if (!is.null(xlab)) mtext(xlab, side = 1, line = bottom_in/par("csi") - 1)
   if (!is.null(ylab)) mtext(ylab, side = 2, line = left_in/par("csi") - 1)
-  .heatmap_legend(pal, rng, brk)
+  ## --- class association heatmap ----------------------------------------
+  ## The heatmap shows the association between two class vectors as a grid of log2
+  ## observed-over-expected counts. Every cell is colored by its fold enrichment; a star marks
+  ## cells whose two-sided hypergeometric test is significant after BH. brk sets the number of
+  ## color bins.
+  ## .heatmap_legend draws a vertical color strip just outside the right edge of the plot
+  ## region, mapping the heatmap colors to fold enrichment. It runs right after image(), while
+  ## par("usr") still describes the heatmap's own 0-1 coordinate system.
+  local({
+    usr <- par("usr")
+    lx <- usr[2] + diff(usr[1:2]) * 0.12
+    rx <- usr[2] + diff(usr[1:2]) * 0.24
+    ys <- seq(usr[3], usr[4], length.out = brk + 1)
+    rect(lx, ys[-length(ys)], rx, ys[-1], col = pal, border = NA, xpd = NA)
+    rect(lx, usr[3], rx, usr[4], border = COLOR.GREY[["dark"]], xpd = NA)
+    text(rx, usr[4],         sprintf("%.2gx", 2^rng),  pos = 4, cex = 0.55, xpd = NA)
+    text(rx, mean(usr[3:4]), "1x",                      pos = 4, cex = 0.55, xpd = NA)
+    text(rx, usr[3],         sprintf("%.2gx", 2^-rng),  pos = 4, cex = 0.55, xpd = NA)
+    text(rx + diff(usr[1:2])*0.16, mean(usr[3:4]), "fold enrichment (obs/exp)", srt = 270, cex = 0.55, xpd = NA)
+  })
   invisible(list(table = tab, log2_obs_exp = lor, padj = padj))
 }
 
@@ -1351,13 +1341,11 @@ run_enrichment <- function(genes, universe, orgdb = org.Sc.sgd.db, keytype = "OR
   go_one <- function(ont) {
     tryCatch(simplify(enrichGO(gene = genes, universe = universe, OrgDb = orgdb, keyType = keytype, ont = ont, qvalueCutoff = qval)), error = function(e) NULL)
   }
-  kegg_one <- function() {
-    tryCatch(if (is.null(kegg_data)) enrichKEGG(gene = genes, universe = universe, organism = kegg_org, keyType = "kegg", qvalueCutoff = qval)
-             else enricher(gene = genes, universe = universe, TERM2GENE = kegg_data$KEGGPATHID2EXTID,
-                           TERM2NAME = kegg_data$KEGGPATHID2NAME, qvalueCutoff = qval),
-             error = function(e) NULL)
-  }
-  list(BP = go_one("BP"), CC = go_one("CC"), MF = go_one("MF"), KEGG = kegg_one())
+  kegg <- tryCatch(if (is.null(kegg_data)) enrichKEGG(gene = genes, universe = universe, organism = kegg_org, keyType = "kegg", qvalueCutoff = qval)
+                   else enricher(gene = genes, universe = universe, TERM2GENE = kegg_data$KEGGPATHID2EXTID,
+                                 TERM2NAME = kegg_data$KEGGPATHID2NAME, qvalueCutoff = qval),
+                   error = function(e) NULL)
+  list(BP = go_one("BP"), CC = go_one("CC"), MF = go_one("MF"), KEGG = kegg)
 }
 
 ## n_sig_terms: number of terms at qvalue < q in one enrichResult, 0 for a
@@ -1388,38 +1376,39 @@ print_enrich_brief <- function(e, q = 0.2, n_top = 10) {
 ## every cluster to one pdf via barplot_enrich_pair(); each page set is labeled with its
 ## "up" cluster so pages are identifiable out of context.
 plot_cluster_marker_enrichment <- function(res, label, pdf_path, width = 7, height = 5) {
-  ## barplot_enrich_pair: barplots each ontology (BP, MF, CC, KEGG) from a pair of
-  ## run_enrichment()-style lists (UP and DOWN gene sets), skipping any ontology that is NULL
-  ## or empty. Each plot is built and print()ed inside one tryCatch, because ggplot2 defers
-  ## scale training and stat transforms (where enrichplot's barplot() can fail on a
-  ## very-few-row enrichResult) until print(). A failed plot is reported to the console and
-  ## skipped, so the enclosing pdf() block still reaches dev.off() and later clusters are drawn.
-  ## label names the comparison (e.g. "Sc major vs minor cluster"), since "up"/"down" means
-  ## ident.1 vs ident.2 of the FindMarkers() call and that pairing differs across call sites.
-  barplot_enrich_pair <- function(enrich_up, enrich_down, show = 10, label = NULL) {
-    prefix <- if (is.null(label)) "" else paste0(label, " — ")
-    safe_plot <- function(e, tag) {
-      if (is.null(e) || is.null(e@result) || nrow(e@result) == 0) return(invisible(NULL))
-      ok <- tryCatch({
-        print(barplot(e, showCategory = show) + ggtitle(paste0(prefix, tag)))
-        TRUE
-      }, error = function(err) {
-        cat(sprintf("  (%s%s: enrichment barplot failed to render — %s; skipped)\n", prefix, tag, conditionMessage(err)))
-        FALSE
-      })
-      invisible(ok)
-    }
-    for (ont in c("BP", "MF", "CC", "KEGG")) {
-      safe_plot(enrich_up[[ont]],   paste0(ont, ", up"))
-      safe_plot(enrich_down[[ont]], paste0(ont, ", down"))
-    }
-  }
-
   if (is.null(res)) return(invisible(NULL))
   pdf(pdf_path, width = width, height = height, useDingbats = FALSE)
   for (cc in res$cluster_ids) {
-    barplot_enrich_pair(res$up_enrich[[cc]], res$down_enrich[[cc]],
-                         label = sprintf("%s cluster %s vs rest (up = higher in %s)", label, cc, cc))
+    ## barplot_enrich_pair: barplots each ontology (BP, MF, CC, KEGG) from a pair of
+    ## run_enrichment()-style lists (UP and DOWN gene sets), skipping any ontology that is NULL
+    ## or empty. Each plot is built and print()ed inside one tryCatch, because ggplot2 defers
+    ## scale training and stat transforms (where enrichplot's barplot() can fail on a
+    ## very-few-row enrichResult) until print(). A failed plot is reported to the console and
+    ## skipped, so the enclosing pdf() block still reaches dev.off() and later clusters are drawn.
+    ## label names the comparison (e.g. "Sc major vs minor cluster"), since "up"/"down" means
+    ## ident.1 vs ident.2 of the FindMarkers() call and that pairing differs across call sites.
+    local({
+      enrich_up <- res$up_enrich[[cc]]
+      enrich_down <- res$down_enrich[[cc]]
+      show <- 10
+      label <- sprintf("%s cluster %s vs rest (up = higher in %s)", label, cc, cc)
+      prefix <- if (is.null(label)) "" else paste0(label, " — ")
+      safe_plot <- function(e, tag) {
+        if (is.null(e) || is.null(e@result) || nrow(e@result) == 0) return(invisible(NULL))
+        ok <- tryCatch({
+          print(barplot(e, showCategory = show) + ggtitle(paste0(prefix, tag)))
+          TRUE
+        }, error = function(err) {
+          cat(sprintf("  (%s%s: enrichment barplot failed to render — %s; skipped)\n", prefix, tag, conditionMessage(err)))
+          FALSE
+        })
+        invisible(ok)
+      }
+      for (ont in c("BP", "MF", "CC", "KEGG")) {
+        safe_plot(enrich_up[[ont]],   paste0(ont, ", up"))
+        safe_plot(enrich_down[[ont]], paste0(ont, ", down"))
+      }
+    })
   }
   dev.off()
 }
@@ -1867,8 +1856,8 @@ read_gff_genes <- function(path, feature_type = "exon", id_field = "Name", id_su
 ##
 ## Every returned sequence reads 5' to 3' on its own gene's strand, with
 ## the end of the string nearest the start codon; minus-strand promoters
-## are reverse-complemented. Orientation matters for tata_box_score() (the
-## consensus is not a palindrome) but not for poly_at_tract() (an A/T run
+## are reverse-complemented. Orientation matters for score_promoters() (the
+## consensus is not a palindrome) but not for the poly(dA:dT) run length (an A/T run
 ## has the same length on either strand). The "coords" attribute holds
 ## each promoter's genomic seqid, start, end (start < end) and strand.
 extract_promoters <- function(genome, genes, max_bp = 300, min_bp = 50) {
@@ -1938,7 +1927,7 @@ TATA.PWM <- rbind(
 ## like; this window says where to look for one.
 TATA.WINDOW <- c(50, 200)
 
-## Applies tata_box_score() and poly_at_tract() to every sequence in a
+## Scores the TATA box and the longest poly(dA)/poly(dT) run of every sequence in a
 ## named vector and returns one row per gene, ready to merge across
 ## species. prom_len is the extracted promoter length, so short or empty
 ## promoters can be told apart from full-length ones that scored low.
@@ -1952,6 +1941,35 @@ TATA.WINDOW <- c(50, 200)
 ## polyat_delta separates an indel (same element at a shifted distance)
 ## from a substitution that changed which site scores best.
 score_promoters <- function(seqs, tata_window = TATA.WINDOW) {
+  ## Scans the Basehoar location window of a promoter sequence and scores
+  ## every 8-mer against TATA.PWM as a log2 odds ratio relative to a uniform
+  ## 25% base composition, returning the best-scoring 8-mer as a continuous
+  ## score. A pseudocount of 0.001 floors the matrix's zero cells, so one mismatch at an
+  ## otherwise conserved position lowers the score without forcing -Inf.
+  ## Each 8-mer lies entirely within the window. Directional: seq must be
+  ## oriented 5' to 3' relative to its own gene, with the promoter-proximal
+  ## end at the end of the string (see extract_promoters()). position is the
+  ## string index of the best 8-mer's first base and motif is its sequence.
+  ## Windows containing N or other non-ACGT bases score NA; ties go to the
+  ## most upstream 8-mer.
+  tata     <- lapply(seqs, function(seq) {
+    motif_len <- ncol(TATA.PWM)
+    n <- nchar(seq)
+    idx_lo <- max(1, n - tata_window[2] + 1)
+    idx_hi <- n - tata_window[1] - motif_len + 2
+    if (idx_hi < idx_lo) return(list(score = NA, position = NA, motif = NA))
+    starts <- idx_lo:idx_hi
+    pwm_adj <- pmax(TATA.PWM, 0.001)
+    scores <- sapply(starts, function(i) {
+      bases <- strsplit(substring(seq, i, i + motif_len - 1), "")[[1]]
+      row_idx <- match(bases, rownames(pwm_adj))
+      if (length(bases) < motif_len || any(is.na(row_idx))) return(NA)
+      sum(log2(pwm_adj[cbind(row_idx, seq_len(motif_len))] / 0.25))
+      })
+      if (all(is.na(scores))) return(list(score = NA, position = NA, motif = NA))
+      best <- which.max(scores)
+      list(score = scores[best], position = starts[best], motif = substring(seq, starts[best], starts[best] + motif_len - 1))
+  })
   ## Finds the longest poly(dA) or poly(dT) run in the sequence: a run is one repeated base,
   ## so A and T runs are measured separately and the longer wins, and a mixed stretch such as
   ## ATATAT does not count as a tract. These homopolymer runs, the two strands of a
@@ -1960,47 +1978,14 @@ score_promoters <- function(seqs, tata_window = TATA.WINDOW) {
   ## gives NA (no promoter to measure), so a missing promoter is not read as a measured length
   ## of 0 in polyat_delta. position is the string index of the tract's first base and tract is
   ## its sequence (its first base says whether it is a dA or a dT run).
-  poly_at_tract <- function(seq) {
+  polyat   <- lapply(seqs, function(seq) {
     if (nchar(seq) == 0) return(list(length = NA, position = NA, tract = NA))
     runs <- gregexpr("A+|T+", seq)[[1]]
     lens <- attr(runs, "match.length")
     if (runs[1] == -1) return(list(length = 0, position = NA, tract = NA))
     best <- which.max(lens)
     list(length = lens[best], position = runs[best], tract = substring(seq, runs[best], runs[best] + lens[best] - 1))
-  }
-
-  ## Scans the Basehoar location window of a promoter sequence and scores
-  ## every 8-mer against TATA.PWM as a log2 odds ratio relative to a uniform
-  ## 25% base composition, returning the best-scoring 8-mer as a continuous
-  ## score. pseudocount floors the matrix's zero cells, so one mismatch at an
-  ## otherwise conserved position lowers the score without forcing -Inf.
-  ## Each 8-mer lies entirely within the window. Directional: seq must be
-  ## oriented 5' to 3' relative to its own gene, with the promoter-proximal
-  ## end at the end of the string (see extract_promoters()). position is the
-  ## string index of the best 8-mer's first base and motif is its sequence.
-  ## Windows containing N or other non-ACGT bases score NA; ties go to the
-  ## most upstream 8-mer.
-  tata_box_score <- function(seq, window = TATA.WINDOW, pwm = TATA.PWM, pseudocount = 0.001) {
-    motif_len <- ncol(pwm)
-    n <- nchar(seq)
-    idx_lo <- max(1, n - window[2] + 1)
-    idx_hi <- n - window[1] - motif_len + 2
-    if (idx_hi < idx_lo) return(list(score = NA, position = NA, motif = NA))
-    starts <- idx_lo:idx_hi
-    pwm_adj <- pmax(pwm, pseudocount)
-    scores <- sapply(starts, function(i) {
-      bases <- strsplit(substring(seq, i, i + motif_len - 1), "")[[1]]
-      row_idx <- match(bases, rownames(pwm_adj))
-      if (length(bases) < motif_len || any(is.na(row_idx))) return(NA)
-      sum(log2(pwm_adj[cbind(row_idx, seq_len(motif_len))] / 0.25))
-    })
-    if (all(is.na(scores))) return(list(score = NA, position = NA, motif = NA))
-    best <- which.max(scores)
-    list(score = scores[best], position = starts[best], motif = substring(seq, starts[best], starts[best] + motif_len - 1))
-  }
-
-  tata     <- lapply(seqs, tata_box_score, window = tata_window)
-  polyat   <- lapply(seqs, poly_at_tract)
+  })
   len      <- nchar(seqs)
   tata_idx   <- sapply(tata,   `[[`, "position")
   polyat_idx <- sapply(polyat, `[[`, "position")
@@ -2086,12 +2071,18 @@ nupop_cluster_inputs <- function(genome, seqs) {
 ## Genes in an unscored region carry NA, and the region tables travel with
 ## the scores as attributes.
 score_promoters_nupop <- function(seqs, occ_list, window = TATA.WINDOW) {
+  coords <- attr(seqs, "coords")
+  if (is.null(coords))
+    stop("score_promoters_nupop() reads coords from the 'coords' attribute of extract_promoters()'s return value. Pass PROM.SC or PROM.SE directly as returned in Section 6.1.")
+  coords <- coords[!is.na(coords$start), c("gene", "seqid", "start", "end", "strand")]
+  if (!isTRUE(all.equal(coords, attr(occ_list, "coords"), check.attributes = FALSE)))
+    stop("score_promoters_nupop(): these promoters differ from the ones the cluster job scored. Save nupop_inputs.rda again in Section 6.1 and rerun nupop_occupancy.R.")
   ## Reduces each gene's occupancy track to the mean predicted occupancy
   ## over the Basehoar window used for the TATA score (50 to 200 bp
   ## upstream of the ATG), so all three architecture features read the
   ## same stretch of promoter. A window made entirely of NA positions
   ## returns NA.
-  nupop_window_score <- function(seqs, occ_list, window = TATA.WINDOW) {
+  occ_score <- local({
     vapply(names(seqs), function(g) {
       n      <- nchar(seqs[[g]])
       occ    <- occ_list[[g]]
@@ -2101,15 +2092,7 @@ score_promoters_nupop <- function(seqs, occ_list, window = TATA.WINDOW) {
       vals <- occ[idx_lo:idx_hi]
       if (all(is.na(vals))) NA_real_ else mean(vals, na.rm = TRUE)
     }, numeric(1))
-  }
-
-  coords <- attr(seqs, "coords")
-  if (is.null(coords))
-    stop("score_promoters_nupop() reads coords from the 'coords' attribute of extract_promoters()'s return value. Pass PROM.SC or PROM.SE directly as returned in Section 6.1.")
-  coords <- coords[!is.na(coords$start), c("gene", "seqid", "start", "end", "strand")]
-  if (!isTRUE(all.equal(coords, attr(occ_list, "coords"), check.attributes = FALSE)))
-    stop("score_promoters_nupop(): these promoters differ from the ones the cluster job scored. Save nupop_inputs.rda again in Section 6.1 and rerun nupop_occupancy.R.")
-  occ_score <- nupop_window_score(seqs, occ_list, window = window)
+  })
   scores    <- data.frame(gene = names(seqs), occ_score = unname(occ_score),
                           row.names = NULL, stringsAsFactors = FALSE)
   attr(scores, "reduced_flank_regions") <- attr(occ_list, "reduced_flank_regions")
@@ -2290,22 +2273,6 @@ promoter_noise_candidates <- function(BURST.CONTRASTS, PR, ARCH, reg_class, quan
 
   cis_flag <- reg_class %in% cis_classes
 
-## Columns shared by all three tables: gene, regulatory class and the
-## cis, trans and total estimates, p-values and q-values. Names carry the
-## quantity prefix (bfreq_, bsize_ or kbal_) so a table states which axis
-## it was built from.
-  context_cols <- function(keep) {
-    out <- data.frame(
-      gene      = BURST.CONTRASTS$gene[keep],
-      reg_class = reg_class[keep],
-      stringsAsFactors = FALSE)
-    out[[paste0(quantity, "_cis_est")]]   <- est_cis[keep];   out[[paste0(quantity, "_cis_p")]]   <- p_cis[keep]
-    out[[paste0(quantity, "_trans_est")]] <- est_trans[keep]; out[[paste0(quantity, "_trans_p")]] <- p_trans[keep]
-    out[[paste0(quantity, "_total_est")]] <- est_total[keep]; out[[paste0(quantity, "_total_p")]] <- p_total[keep]
-    ## FDR-adjusted values sit beside the raw p-values so a reader can see both
-    out[[paste0(quantity, "_cis_q")]] <- q_cis[keep]; out[[paste0(quantity, "_trans_q")]] <- q_trans[keep]; out[[paste0(quantity, "_total_q")]] <- q_total[keep]
-    out
-  }
   est_col <- paste0(quantity, "_cis_est")
 
   ## One table per promoter feature. delta names the shift that gates membership (at or above
@@ -2331,7 +2298,19 @@ promoter_noise_candidates <- function(BURST.CONTRASTS, PR, ARCH, reg_class, quan
     cut   <- quantile(abs(delta), arch_frac, na.rm = TRUE)
     keep  <- cis_flag & !is.na(delta) & abs(delta) >= cut
     keep[is.na(keep)] <- FALSE
-    out <- cbind(context_cols(keep), pick(spec$cols, keep),
+    ## Columns shared by all three tables: gene, regulatory class and the cis, trans and total
+    ## estimates, p-values and q-values. Names carry the quantity prefix (bfreq_, bsize_ or kbal_) so a
+    ## table states which axis it was built from.
+    ctx <- data.frame(
+      gene      = BURST.CONTRASTS$gene[keep],
+      reg_class = reg_class[keep],
+      stringsAsFactors = FALSE)
+    ctx[[paste0(quantity, "_cis_est")]]   <- est_cis[keep];   ctx[[paste0(quantity, "_cis_p")]]   <- p_cis[keep]
+    ctx[[paste0(quantity, "_trans_est")]] <- est_trans[keep]; ctx[[paste0(quantity, "_trans_p")]] <- p_trans[keep]
+    ctx[[paste0(quantity, "_total_est")]] <- est_total[keep]; ctx[[paste0(quantity, "_total_p")]] <- p_total[keep]
+    ## FDR-adjusted values sit beside the raw p-values so a reader can see both
+    ctx[[paste0(quantity, "_cis_q")]] <- q_cis[keep]; ctx[[paste0(quantity, "_trans_q")]] <- q_trans[keep]; ctx[[paste0(quantity, "_total_q")]] <- q_total[keep]
+    out <- cbind(ctx, pick(spec$cols, keep),
                  data.frame(concordant = sign(delta[keep]) == sign(est_cis[keep])),
                  pick(prom_cols, keep))
     out[order(-abs(out[[est_col]])), ]
@@ -2344,7 +2323,7 @@ promoter_noise_candidates <- function(BURST.CONTRASTS, PR, ARCH, reg_class, quan
 ## response names the column to test, DISP (burst frequency, the
 ## default and the axis used throughout the rest of this section) or
 ## BSIZE (MU/DISP, already computed on every fit object by
-## fit_counts_offset_row()); score is a named vector of a single
+## fit_counts_offset()); score is a named vector of a single
 ## feature (tata_score or polyat_len) for the same species, keyed the
 ## same way as fit's row names.
 ##
@@ -2505,46 +2484,6 @@ plot_resolution_sweep <- function(sweep, label, fig_dir, min_cells) {
   dev.off()
 }
 
-## ---- Cluster-stability bootstrap ----
-## A stable partition survives resampling of the cells. Each replicate
-## resamples cells with replacement from the raw count matrix (a fitted
-## Seurat object cannot represent a cell drawn twice), builds a fresh
-## Seurat object with uniquified barcodes, and reruns Normalize /
-## FindVariableFeatures / Scale / PCA / Neighbors / Clusters at the SAME
-## nfeatures, dims, resolution and metric as the original fit, so the
-## comparison isolates sampling variation. The resampled clustering is
-## compared with the original labels of the same resampled cells (in draw
-## order) by adjusted Rand index. A high mean ARI means the partition is
-## reproducible rather than a boundary Louvain draws through continuous
-## variation; a low or widely spread ARI marks the practical resolution
-## limit for the dataset's cell count.
-##
-## make_boot_idx: draws every bootstrap resample up front, one column
-## per replicate, from a single seeded stream. Fixing the draws before
-## any Seurat call runs keeps each replicate an independent resample,
-## because RunPCA() reseeds the global RNG (seed.use = 42) inside every
-## replicate. The same matrix serves every candidate resolution of a
-## dataset, so the resolution comparison is paired on identical draws.
-make_boot_idx <- function(n, B, seed = 1) {
-  set.seed(seed)
-  matrix(replicate(B, sample.int(n, n, replace = TRUE)), nrow = n)
-}
-
-## plateau_coarsest: coarsest resolution on the plateau of the best grid
-## point. ok is the grid restricted to resolutions that passed the size
-## guard. Grid points are grouped into contiguous runs (in resolution
-## order) of equal n_clusters; the run containing the silhouette argmax is
-## the target plateau and its smallest resolution is returned. Grouping by
-## cluster count, a discrete quantity, keeps genuinely different partitions
-## (e.g. 3 vs. 5 clusters with nearly equal silhouette) on separate
-## plateaus, which a silhouette tolerance cannot guarantee.
-plateau_coarsest <- function(ok) {
-  ok  <- ok[order(ok$res), ]
-  grp <- cumsum(c(1, diff(ok$n_clusters) != 0))
-  target_grp <- grp[which.max(ok$sil)]
-  min(ok$res[grp == target_grp])
-}
-
 ## assemble_cluster_stability: summarizes one dataset's returned ARI vectors.
 ## table has one row per candidate resolution (sil, n_clusters, mean/min/max
 ## ARI, n_ok = completed replicates); final_res is the candidate with the
@@ -2553,15 +2492,6 @@ plateau_coarsest <- function(ok) {
 ## final_res; ari keeps the raw vectors. report_bootstrap_compare() and the
 ## downstream code read this list.
 assemble_cluster_stability <- function(inputs, ari, dataset, obj) {
-  ## apply_cluster_labels: installs a partition on a Seurat object as its
-  ## identities, the same state FindClusters() leaves behind.
-  apply_cluster_labels <- function(obj, labels) {
-    stopifnot(identical(names(labels), colnames(obj)))
-    Idents(obj) <- labels
-    obj$seurat_clusters <- labels
-    obj
-  }
-
   rows <- inputs$tasks[inputs$tasks$dataset == dataset, ]
   a    <- ari[rows$task]
   table <- data.frame(res = rows$res, role = rows$role, sil = rows$sil, n_clusters = rows$n_clusters,
@@ -2570,7 +2500,15 @@ assemble_cluster_stability <- function(inputs, ari, dataset, obj) {
                       boot_max_ari  = vapply(a, max,  numeric(1), na.rm = TRUE),
                       n_ok = vapply(a, function(x) sum(is.finite(x)), integer(1)), row.names = NULL)
   win <- which.max(table$boot_mean_ari)
-  list(table = table, final_res = rows$res[win], final_obj = apply_cluster_labels(obj, inputs$ref[[rows$task[win]]]), ari = a)
+  ## apply_cluster_labels: installs a partition on a Seurat object as its
+  ## identities, the same state FindClusters() leaves behind.
+  list(table = table, final_res = rows$res[win], final_obj = local({
+    labels <- inputs$ref[[rows$task[win]]]
+    stopifnot(identical(names(labels), colnames(obj)))
+    Idents(obj) <- labels
+    obj$seurat_clusters <- labels
+    obj
+  }), ari = a)
 }
 
 ## ---- Shared helpers for cluster round trips ----
@@ -3052,7 +2990,7 @@ mean_adjusted_noise <- function(mean, cv2, span = 0.3) {
 ##
 ## 15a. Gene-fit calibration helpers for the Poisson/NB boundary and for
 ## convergence and precision by mean-count bin: refine_by_boundary(),
-## boot_disp_logse(), chk(), chk_prec().
+## chk(), chk_prec().
 ##
 ## 15b. Diagnostics and plots for interactive use.
 ##
@@ -3060,15 +2998,19 @@ mean_adjusted_noise <- function(mean, cv2, span = 0.3) {
 
 ## ---- 15a ----
 
-## Bootstrap-checks candidate genes near the Poisson/NB boundary:
-## refits each candidate gene B times per group and keeps it only if
-## every group's fraction of bootstrap replicates landing back on the
-## DISP = Inf boundary is at or below max_boundary.
+## Bootstrap-checks candidate genes near the Poisson/NB boundary: refits each candidate gene
+## B times per group (resampling cells with replacement) and keeps it only if every group's
+## fraction of bootstrap replicates landing back on the DISP = Inf boundary (boundary_frac) is at
+## or below max_boundary.
 refine_by_boundary <- function(mats, expos, candidates, max_boundary = 0.10, B = 200) {
   groups <- names(mats)
   keep <- vapply(candidates, function(gn) all(vapply(groups, function(g) {
-    bf <- boot_disp_logse(mats[[g]][gn, ], expos[[g]], B = B)["boundary_frac"]
-    is.finite(bf) && bf <= max_boundary
+    y <- mats[[g]][gn, ]; exposure <- expos[[g]]
+    if (!is.null(dim(y))) stop("refine_by_boundary() takes one gene's counts per candidate")
+    set.seed(1); n <- length(y)
+    lt <- replicate(B, log(neg_binom_fit_offset(y[sample.int(n, n, TRUE)], exposure[sample.int(n, n, TRUE)])["disp"]))
+    bf <- mean(!is.finite(lt))
+    bf <= max_boundary
   }, logical(1))), logical(1))
   candidates[keep]
 }
@@ -3088,18 +3030,6 @@ chk_prec <- function(fit) {
 }
 
 ## ---- 15a (continued) ----
-
-## Bootstrap uncertainty of one gene's NB dispersion: resamples cells with
-## replacement, refits, and returns the SD of the finite log dispersions
-## (disp_logse_boot) and the fraction of replicates with no finite dispersion
-## (boundary_frac, the Poisson/NB boundary).
-boot_disp_logse <- function(y, exposure, B = 200, seed = 1) {
-  if (!is.null(dim(y))) stop("boot_disp_logse() takes one gene's counts")
-  set.seed(seed); n <- length(y)
-  lt <- replicate(B, log(neg_binom_fit_offset(y[sample.int(n, n, TRUE)], exposure[sample.int(n, n, TRUE)])["disp"]))
-  finite <- is.finite(lt)
-  c(disp_logse_boot = if (sum(finite) > 1) sd(lt[finite]) else NA_real_, boundary_frac   = mean(!finite))
-}
 
 ## ---- 15b (continued) ----
 

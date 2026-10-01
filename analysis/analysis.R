@@ -278,12 +278,8 @@ QC.CELLS <- lapply(QC.STATS, function(s) local({
   min_reads <- 500
   ## Lower cutoff on the log10 scale. Working in logs makes the rule
   ## scale-free, so one setting adapts to any sequencing depth.
-  mad_lower <- function(x, k = 3) {
-    lx <- log10(x[x > 0])
-    10^(median(lx) - k * mad(lx))
-  }
-
-  lib_cut <- max(min_reads, mad_lower(lib, k))
+  lx <- log10(lib[lib > 0])
+  lib_cut <- max(min_reads, 10^(median(lx) - k * mad(lx)))
   list(keep = lib >= lib_cut, lib_cut = lib_cut)
 }))
 QC.TITLES <- c(MIX.SC = "Sc Parent", MIX.SE = "Se Parent", HYB = "Hybrid (alleles pooled)")
@@ -632,20 +628,16 @@ local({
   B <- 2000
   ## Gene-resampling bootstrap CI for statistics of eiv_components(). The CI is NA when more than half
   ## of the draws are non-finite.
-  eiv_boot_ci <- function(BURST.CONTRASTS, mode, B = 2000, seed = 1, probs = c(0.025, 0.975), stats = c("rho_mean_disp")) {
-    base <- eiv_components(BURST.CONTRASTS, mode); set.seed(seed); n <- nrow(BURST.CONTRASTS)
-    draws <- replicate(B, eiv_components(BURST.CONTRASTS[sample.int(n, n, TRUE), , drop = FALSE], mode)[stats])
-    if (length(stats) == 1) draws <- matrix(draws, nrow = 1, dimnames = list(stats, NULL))
-    na_frac <- vapply(stats, function(s) mean(!is.finite(draws[s, ])), numeric(1))
+  do.call(rbind, lapply(modes, function(m) {
+    e <- eiv_components(BURST.CONTRASTS, m)
+    set.seed(1); n <- nrow(BURST.CONTRASTS)
+    draws <- replicate(B, eiv_components(BURST.CONTRASTS[sample.int(n, n, TRUE), , drop = FALSE], m)["rho_mean_disp"])
     ## Draws with negative Vm or Vs give NaN. When most draws fail, the survivors are a biased subset
     ## that can fall outside [-1, 1], so the CI is reported as NA.
-    ci <- apply(draws, 1, quantile, probs = probs, na.rm = TRUE)
-    ci[, na_frac > 0.5] <- NA_real_
-    list(estimate = base[stats], ci = ci, na_frac = na_frac)
-  }
-
-  do.call(rbind, lapply(modes, function(m) {
-    e <- eiv_components(BURST.CONTRASTS, m); b <- eiv_boot_ci(BURST.CONTRASTS, m, B = B)
+    na_frac <- mean(!is.finite(draws))
+    ci <- quantile(draws, probs = c(0.025, 0.975), na.rm = TRUE)
+    if (na_frac > 0.5) ci[] <- NA_real_
+    b <- list(ci = ci, na_frac = na_frac)
     data.frame(mode = m, n = e["n"],
       rho_raw = round(e["rho_raw_mean_disp"], 3),
       rho_mean_disp = round(e["rho_mean_disp"], 3),
@@ -1631,10 +1623,26 @@ INTR.REL.CHECK <- local({
   B <- 300
   seed <- 1
   floors <- seq(0.05, 0.6, by = 0.05)
+  ## A reliability-stratified sample of genes for the calibration check: up to n_per_bin genes from each
+  ## quantile bin of the attenuation, so the low-reliability end (sparse among genes overall) is
+  ## represented well enough to see whether the SE flattens there. Seeded for reproducibility.
+  genes <- intersect(rownames(sc), rownames(se))
+  attn  <- sqrt(rho_sc[genes] * rho_se[genes])
+  samp  <- local({
+    set.seed(seed)
+    ok    <- is.finite(attn)
+    bins  <- cut(attn[ok], breaks = quantile(attn[ok], seq(0, 1, length.out = n_bins + 1)), include.lowest = TRUE)
+    genes <- names(attn)[ok]
+    unname(unlist(tapply(genes, bins, function(g) sample(g, min(n_per_bin, length(g))))))
+  })
+
+  rho_obs <- row_cor(sc[samp, , drop = FALSE], se[samp, , drop = FALSE])
   ## Bootstrap SE of each row's allele-residual correlation: B hybrid-cell resamples per gene, with the
   ## SD of the resampled correlations returned per row. Looped per gene since it runs on the few hundred
   ## genes of the calibration sample.
-  allele_cor_boot_se <- function(sc, se, B = 300, seed = 1) {
+  se_obs  <- local({
+    sc <- sc[samp, , drop = FALSE]
+    se <- se[samp, , drop = FALSE]
     set.seed(seed)
     n <- ncol(sc)
     vapply(seq_len(nrow(sc)), function(i) {
@@ -1647,25 +1655,7 @@ INTR.REL.CHECK <- local({
       }, numeric(1))
       sd(r, na.rm = TRUE)
     }, numeric(1))
-  }
-
-  ## A reliability-stratified sample of genes for the calibration check: up to n_per_bin genes from each
-  ## quantile bin of the attenuation, so the low-reliability end (sparse among genes overall) is
-  ## represented well enough to see whether the SE flattens there. Seeded for reproducibility.
-  stratified_rho_sample <- function(attn, n_per_bin = 40, n_bins = 10, seed = 1) {
-    set.seed(seed)
-    ok    <- is.finite(attn)
-    bins  <- cut(attn[ok], breaks = quantile(attn[ok], seq(0, 1, length.out = n_bins + 1)), include.lowest = TRUE)
-    genes <- names(attn)[ok]
-    unname(unlist(tapply(genes, bins, function(g) sample(g, min(n_per_bin, length(g))))))
-  }
-
-  genes <- intersect(rownames(sc), rownames(se))
-  attn  <- sqrt(rho_sc[genes] * rho_se[genes])
-  samp  <- stratified_rho_sample(attn, n_per_bin, n_bins, seed)
-
-  rho_obs <- row_cor(sc[samp, , drop = FALSE], se[samp, , drop = FALSE])
-  se_obs  <- allele_cor_boot_se(sc[samp, , drop = FALSE], se[samp, , drop = FALSE], B, seed)
+  })
   a       <- attn[samp]
   rho_true <- rho_obs / a
   ## Exact error propagation for a fixed-scale division: SE(x/a) = SE(x)/a
@@ -2334,7 +2324,20 @@ CSTAB.INPUTS <- local({
   ds <- names(sweeps)
   tasks <- do.call(rbind, lapply(ds, function(d) {
     ok <- sweeps[[d]]$grid[sweeps[[d]]$grid$ok, ]
-    rl <- unique(c(sweeps[[d]]$chosen_res, plateau_coarsest(ok)))
+    ## plateau_coarsest: coarsest resolution on the plateau of the best grid
+    ## point. ok is the grid restricted to resolutions that passed the size
+    ## guard. Grid points are grouped into contiguous runs (in resolution
+    ## order) of equal n_clusters; the run containing the silhouette argmax is
+    ## the target plateau and its smallest resolution is returned. Grouping by
+    ## cluster count, a discrete quantity, keeps genuinely different partitions
+    ## (e.g. 3 vs. 5 clusters with nearly equal silhouette) on separate
+    ## plateaus, which a silhouette tolerance cannot guarantee.
+    rl <- unique(c(sweeps[[d]]$chosen_res, local({
+      ok  <- ok[order(ok$res), ]
+      grp <- cumsum(c(1, diff(ok$n_clusters) != 0))
+      target_grp <- grp[which.max(ok$sil)]
+      min(ok$res[grp == target_grp])
+    })))
     data.frame(dataset = d, res = rl,
                role = ifelse(rl == sweeps[[d]]$chosen_res, "chosen", "highest silhouette"),
                sil = ok$sil[match(rl, ok$res)], n_clusters = ok$n_clusters[match(rl, ok$res)],
@@ -2347,7 +2350,31 @@ CSTAB.INPUTS <- local({
     stopifnot(ncol(counts[[d]]) == ncol(sweeps[[d]]$obj))
     list(counts = as(counts[[d]], "CsparseMatrix"), nfeatures = nfeatures[[d]], dims_n = dims_n[[d]], metric = metric)
   }), ds)
-  idx <- setNames(lapply(ds, function(d) make_boot_idx(ncol(counts[[d]]), B, seed)), ds)
+  ## ---- Cluster-stability bootstrap ----
+  ## A stable partition survives resampling of the cells. Each replicate
+  ## resamples cells with replacement from the raw count matrix (a fitted
+  ## Seurat object cannot represent a cell drawn twice), builds a fresh
+  ## Seurat object with uniquified barcodes, and reruns Normalize /
+  ## FindVariableFeatures / Scale / PCA / Neighbors / Clusters at the SAME
+  ## nfeatures, dims, resolution and metric as the original fit, so the
+  ## comparison isolates sampling variation. The resampled clustering is
+  ## compared with the original labels of the same resampled cells (in draw
+  ## order) by adjusted Rand index. A high mean ARI means the partition is
+  ## reproducible rather than a boundary Louvain draws through continuous
+  ## variation; a low or widely spread ARI marks the practical resolution
+  ## limit for the dataset's cell count.
+  ##
+  ## make_boot_idx: draws every bootstrap resample up front, one column
+  ## per replicate, from a single seeded stream. Fixing the draws before
+  ## any Seurat call runs keeps each replicate an independent resample,
+  ## because RunPCA() reseeds the global RNG (seed.use = 42) inside every
+  ## replicate. The same matrix serves every candidate resolution of a
+  ## dataset, so the resolution comparison is paired on identical draws.
+  idx <- setNames(lapply(ds, function(d) local({
+    n <- ncol(counts[[d]])
+    set.seed(seed)
+    matrix(replicate(B, sample.int(n, n, replace = TRUE)), nrow = n)
+  })), ds)
   key <- list(tasks = tasks, cells = lapply(counts, colnames), B = B, seed = seed)
   list(tasks = tasks, ref = ref, data = data, idx = idx, key = key)
 })
