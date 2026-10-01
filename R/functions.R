@@ -2810,11 +2810,6 @@ species_composition_report <- function(cc1, cc2, met1, met2, diag1, diag2, label
 }
 
 ## ============================================================
-## plot_geneset_direction_stack: stacked, class-coloured, cross-hatched
-## enrichment of one specific gene set (e.g. a GO/KEGG hit's core genes)
-## across the regulatory classification
-## ============================================================
-## ============================================================
 ## 9. PUBLICATION FIGURES
 ## ============================================================
 
@@ -5286,6 +5281,8 @@ report_cluster_marker_enrichment <- function(res, label, q = 0.2) {
   invisible(NULL)
 }
 
+## Stacked, class-coloured, cross-hatched enrichment of one specific gene set
+## (e.g. a GO/KEGG hit's core genes) across the regulatory classification.
 ## For each level of the regulatory classification (Conserved, Cis, Trans,
 ## Cis + Trans, Compensatory), shows how much of that class's membership in
 ## a pre-defined gene set comes from genes with significantly higher
