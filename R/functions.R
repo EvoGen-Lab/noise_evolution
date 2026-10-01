@@ -3046,14 +3046,21 @@ coexpr_seed_check <- function(mode, cb1, cb2) {
   seed_compare_core(cb1[[mode]]$se, cb2[[mode]]$se, main = sprintf("%s: bootstrap SE, two seeds", mode), count_label = "n_pairs")
 }
 
-## coexpr_perm_draw: one permutation draw for the co-expression null: the pooled-cell order (n_tot cells),
-## per-cell allele swaps for the nH hybrid cells, and the two dpar pool orders. b is the draw index and is
-## not used.
+## coexpr_perm_draw: one permutation draw for the co-expression null of total and cis: the pooled-cell order
+## (n_tot cells) and the per-cell allele swaps for the nH hybrid cells. b is the draw index and is not used.
 coexpr_perm_draw <- function(b, nH, nSC, nSE, n_tot) list(
   idx  = sample(n_tot),
-  swap = sample(c(TRUE, FALSE), nH, replace = TRUE),
-  idx_dpar_sc = sample(nSC + nH),
-  idx_dpar_se = sample(nSE + nH))
+  swap = sample(c(TRUE, FALSE), nH, replace = TRUE))
+
+## coexpr_null_draw: one draw of the within-group resamples for the dpar nulls (coexpr_null_dpar_one()):
+## cells of the Sc parent, the Se parent and the hybrid, each resampled with replacement within its own
+## group at the original size. The hybrid resample is shared by the dpar_sc and dpar_se nulls of the draw,
+## as the observed dpar_sc and dpar_se share one hybrid correlation matrix. b is the draw index and is not
+## used.
+coexpr_null_draw <- function(b, nSC, nSE, nH) list(
+  sc = sample.int(nSC, nSC, replace = TRUE),
+  se = sample.int(nSE, nSE, replace = TRUE),
+  h  = sample.int(nH,  nH,  replace = TRUE))
 
 ## axis_mixture_summary: variance explained, effective genes, mixture means and sigmas, and pole sizes of
 ## one candidate axis a.
@@ -3443,41 +3450,112 @@ coexpr_part_table <- function(nm, point, acc, base) {
   data.frame(base, est = est, se = se, z = est / se, p = 2 * pnorm(-abs(est / se)))
 }
 
-## coexpr_perm_one: one permutation draw of the five null spectra, for rank-matched testing of every candidate axis. draw: one element of
-## DRAWS.PERM.COEXPR in analysis.R. resid: the RESID list (including HYB.COMB). nSC, nSE: parent cell counts, used to split each pooled, reshuffled
-## pool back into groups of the original sizes. n_keep: ranks retained per decomposition. Returns the top n_keep squared eigenvalues by
-## magnitude, descending, for all five decompositions.
-coexpr_perm_one <- function(draw, n_keep, nSC, nSE, resid) {
+## top_sq_eigen: the n_keep largest squared eigenvalues of symmetric matrix m by magnitude, descending
+## (the rank-matched statistic of the axis tests in Section 4.9).
+top_sq_eigen <- function(m, n_keep) {
+  ev <- eigen(m, symmetric = TRUE, only.values = TRUE)$values
+  (ev[order(abs(ev), decreasing = TRUE)][seq_len(n_keep)])^2
+}
+
+## sym_mat_power: M^power for a symmetric positive definite matrix, from its eigendecomposition (power -0.5
+## whitens, 0.5 colors). Whitening needs a full-rank M, so the smallest eigenvalue must exceed tol; a smaller
+## one gets a ridge of size `ridge` on the diagonal first, reported on the console, and the check then
+## has to pass.
+sym_mat_power <- function(M, power, tol = 1e-8, ridge = 1e-6) {
+  stopifnot(is.matrix(M), nrow(M) == ncol(M), is.numeric(power), length(power) == 1, tol > 0, ridge > 0)
+  e <- eigen(M, symmetric = TRUE)
+  if (min(e$values) <= tol) {
+    cat(sprintf("sym_mat_power: smallest eigenvalue %.3g, adding a ridge of %.3g\n", min(e$values), ridge))
+    e <- eigen(M + ridge * diag(nrow(M)), symmetric = TRUE)
+  }
+  stopifnot(min(e$values) > 0)
+  e$vectors %*% (e$values^power * t(e$vectors))
+}
+
+## coexpr_null_dpar_setup: the null of one dpar contrast, built once. The contrast is the leading spectrum of
+## Rhyb_f - Rpar, where Rhyb_f is the hybrid's shrunken correlation on the per-genome scale of a haploid
+## parent (R_ij f_i f_j, unit diagonal; coexpr_decompose()) and Rpar the parent's shrunken correlation. A
+## pooled-label permutation forces both pseudo groups to share one noise level, which neither the
+## per-genome rescale nor the groups' different cell counts and correlation structure reproduce. This null
+## instead follows Beran and Srivastava (1985): each group keeps its own cells, and the cells are
+## recolored so that H0 (equal correlation structure on the per-genome scale) holds exactly in the data
+## the recipe sees. The recipe then runs unchanged on within-group resamples.
+##   Sigma0   pooled correlation of the two groups on the per-genome scale, weighted by cell count.
+##   parent   cells whitened by their own sample correlation and recolored by Sigma0^(1/2), so the recolored
+##            cells have sample correlation Sigma0 exactly.
+##   hybrid   cells whitened by their own sample correlation and recolored by T_H = C_H^(1/2), where
+##            C_H = (Sigma0 - diag(1 - f^2)) / (f f') is the hybrid correlation whose rescaled image is
+##            Sigma0 (the rescale is R_ij f_i f_j off the diagonal and 1 on it). When C_H is not
+##            positive semidefinite its negative eigenvalues are clipped and the diagonal restored.
+## zp, zh: parent and hybrid (HYB.COMB) Pearson residuals, genes x cells in one gene order; ploidy_f: named
+## per-gene factors (PLOIDY.F). Returns the recolored cells x genes matrices, f, and an identity check:
+## the recipe on the full recolored matrices should give a contrast near zero, and its remainder is the
+## difference in shrinkage intensity between the two groups (lambda_p - lambda_h), which scales Sigma0's
+## off-diagonal (predicted_rms_remainder). Whitening needs a full-rank sample correlation, so the groups
+## need more cells than genes; sym_mat_power() stops on a rank-deficient matrix after a small ridge.
+coexpr_null_dpar_setup <- function(zp, zh, ploidy_f) {
+  stopifnot(is.matrix(zp), is.matrix(zh), identical(rownames(zp), rownames(zh)), !is.null(rownames(zp)))
+  f <- unname(ploidy_f[rownames(zh)])
+  stopifnot(length(f) == nrow(zh), all(is.finite(f)), all(f > 0))
+  p <- nrow(zh); nP <- ncol(zp); nH <- ncol(zh)
+  stdz <- function(z) { s <- scale(t(z)); s[!is.finite(s)] <- 0; s }
+  Zp <- stdz(zp); Zh <- stdz(zh)
+  ff <- outer(f, f)
+  rescale <- function(R) { R <- R * ff; diag(R) <- 1; R }
+  Rp <- shrink_cor(t(zp)); Rh <- shrink_cor(t(zh))
+  Sigma0 <- (nP * Rp + nH * rescale(Rh)) / (nP + nH)
+  ## sample correlations of the standardized cells (unit diagonal also for a constant gene)
+  samp_cor <- function(Z) { R <- crossprod(Z) / (nrow(Z) - 1); diag(R) <- 1; R }
+  ## hybrid correlation whose rescaled image is Sigma0, projected onto the positive semidefinite cone
+  CH <- (Sigma0 - diag(1 - f^2, p)) / ff
+  e  <- eigen((CH + t(CH)) / 2, symmetric = TRUE)
+  n_clipped <- sum(e$values < 1e-6)
+  CH <- e$vectors %*% (pmax(e$values, 1e-6) * t(e$vectors))
+  d  <- sqrt(diag(CH)); CH <- CH / outer(d, d)
+  Zp_new <- Zp %*% sym_mat_power(samp_cor(Zp), -0.5) %*% sym_mat_power(Sigma0, 0.5)
+  Zh_new <- Zh %*% sym_mat_power(samp_cor(Zh), -0.5) %*% sym_mat_power(CH, 0.5)
+  colnames(Zp_new) <- colnames(Zh_new) <- rownames(zh)
+  ## identity check: recipe on the full recolored matrices
+  Rp_img <- shrink_cor(Zp_new); Rh_img <- shrink_cor(Zh_new)
+  contrast <- rescale(Rh_img) - Rp_img
+  up <- upper.tri(contrast)
+  lam_p <- attr(Rp_img, "lambda"); lam_h <- attr(Rh_img, "lambda")
+  list(Zp = Zp_new, Zh = Zh_new, f = f, Sigma0 = Sigma0,
+       check = c(max_abs_contrast = max(abs(contrast[up])), rms_contrast = sqrt(mean(contrast[up]^2)),
+                 rms_sigma0_offdiag = sqrt(mean(Sigma0[up]^2)), lambda_parent = lam_p, lambda_hybrid = lam_h,
+                 predicted_rms_remainder = abs(lam_h - lam_p) * sqrt(mean(Sigma0[up]^2)),
+                 n_clipped = n_clipped))
+}
+
+## coexpr_null_dpar_one: one draw of the dpar null spectrum. setup: coexpr_null_dpar_setup() for the
+## contrast. idx_p, idx_h: within-group cell resamples (coexpr_null_draw()). Applies the production recipe to
+## the resampled recolored cells (shrunken correlations, hybrid rescaled to the per-genome scale, hybrid minus
+## parent) and returns the top n_keep squared eigenvalues of that contrast.
+coexpr_null_dpar_one <- function(setup, idx_p, idx_h, n_keep) {
+  Rh <- shrink_cor(setup$Zh[idx_h, , drop = FALSE]) * outer(setup$f, setup$f); diag(Rh) <- 1
+  top_sq_eigen(Rh - shrink_cor(setup$Zp[idx_p, , drop = FALSE]), n_keep)
+}
+
+## coexpr_perm_one: one draw of the five null spectra, for rank-matched testing of every candidate axis. draw:
+## list(perm = element of DRAWS.PERM.COEXPR, null = element of DRAWS.NULL.COEXPR). resid: the RESID list.
+## nSC, nSE: parent cell counts, used to split each pooled, reshuffled pool back into groups of the original
+## sizes. n_keep: ranks retained per decomposition. dpar_setup: list(sc, se) of coexpr_null_dpar_setup()
+## results, built once by the cluster script. total and cis are permutation nulls (pooled parents, per-cell
+## allele swaps) and trans is their difference. dpar_sc and dpar_se are bootstrap nulls with H0 imposed
+## by recoloring (coexpr_null_dpar_setup()), on their own within-group resamples. Returns the top n_keep
+## squared eigenvalues by magnitude, descending, for all five decompositions.
+coexpr_perm_one <- function(draw, n_keep, nSC, nSE, resid, dpar_setup) {
   pooled   <- cbind(resid$MIX.SC, resid$MIX.SE)
-  perm.sc  <- pooled[, draw$idx[seq_len(nSC)]]
-  perm.se  <- pooled[, draw$idx[-seq_len(nSC)]]
+  perm.sc  <- pooled[, draw$perm$idx[seq_len(nSC)]]
+  perm.se  <- pooled[, draw$perm$idx[-seq_len(nSC)]]
   perm.hsc <- resid$HYB.SC; perm.hse <- resid$HYB.SE
-  perm.hsc[, draw$swap] <- resid$HYB.SE[, draw$swap]
-  perm.hse[, draw$swap] <- resid$HYB.SC[, draw$swap]
+  perm.hsc[, draw$perm$swap] <- resid$HYB.SE[, draw$perm$swap]
+  perm.hse[, draw$perm$swap] <- resid$HYB.SC[, draw$perm$swap]
 
   d <- coexpr_decompose(list(MIX.SC = perm.sc, MIX.SE = perm.se, HYB.SC = perm.hsc, HYB.SE = perm.hse))
-  topk <- function(m) {
-    ev <- eigen(m, symmetric = TRUE, only.values = TRUE)$values
-    (ev[order(abs(ev), decreasing = TRUE)][seq_len(n_keep)])^2
-  }
-
-  ## The dpar nulls are zero-centred exchangeability nulls on the raw pooled cells (no ploidy
-  ## rescale); the observed dpar matrices (COEXPR.POINT) carry the rescale from coexpr_decompose().
-  ## dpar_sc's null pools Sc-parent and allele-summed hybrid cells and reshuffles them into
-  ## pseudo-Sc / pseudo-hybrid groups of the original sizes, giving the leading eigenvalues of
-  ## "condition A minus condition B" when condition carries no information. dpar_se's null does the
-  ## same with Se-parent and hybrid cells.
-  pooled.sc <- cbind(resid$MIX.SC, resid$HYB.COMB)
-  perm.a.sc <- pooled.sc[, draw$idx_dpar_sc[seq_len(nSC)]]
-  perm.b.sc <- pooled.sc[, draw$idx_dpar_sc[-seq_len(nSC)]]
-  dpar_sc_null <- topk(shrink_cor(t(perm.b.sc)) - shrink_cor(t(perm.a.sc)))
-
-  pooled.se <- cbind(resid$MIX.SE, resid$HYB.COMB)
-  perm.a.se <- pooled.se[, draw$idx_dpar_se[seq_len(nSE)]]
-  perm.b.se <- pooled.se[, draw$idx_dpar_se[-seq_len(nSE)]]
-  dpar_se_null <- topk(shrink_cor(t(perm.b.se)) - shrink_cor(t(perm.a.se)))
-
-  list(total = topk(d$total), cis = topk(d$cis), trans = topk(d$trans), dpar_sc = dpar_sc_null, dpar_se = dpar_se_null)
+  list(total = top_sq_eigen(d$total, n_keep), cis = top_sq_eigen(d$cis, n_keep), trans = top_sq_eigen(d$trans, n_keep),
+       dpar_sc = coexpr_null_dpar_one(dpar_setup$sc, draw$null$sc, draw$null$h, n_keep),
+       dpar_se = coexpr_null_dpar_one(dpar_setup$se, draw$null$se, draw$null$h, n_keep))
 }
 
 ## Scores every chromosome in one species' inputs and returns each gene's

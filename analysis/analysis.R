@@ -21,10 +21,10 @@
 ###     4.3 Bootstrap reliability check
 ###     4.4 Bootstrap adequacy check
 ###     4.5 Pair-level classification
-###     4.6 Co-expression permutation null
+###     4.6 Co-expression null: permutation (total, cis) and recolored bootstrap (dpar)
 ###     4.7 Rank check and candidate axes
 ###     4.8 Mixture model and GO enrichment for candidate axes
-###     4.9 Permutation validation
+###     4.9 Axis validation against the null
 ###     4.10 Total Axis 1
 ###     4.11 Total Axis 2
 ###     4.12 Burst frequency/size consistency among co-expressed genes
@@ -997,38 +997,53 @@ dev.off()
 
 table(factor(CB.DOM.CLASS$class, levels = DOM.CLASS))
 
-## 4.6 Co-expression permutation null
+## 4.6 Co-expression null: permutation (total, cis) and recolored bootstrap (dpar)
 
-## Draws for the joint permutation null of the total, cis, trans, dpar_sc and dpar_se spectra
-## (rank-matched axis testing); one draw yields all five null spectra. idx: a random re-split of the
-## pooled parent cells into pseudo-Sc / pseudo-Se groups of the original sizes (total's null).
-## swap: an independent per-hybrid-cell coin flip of which allele is labelled Sc vs Se (cis's null).
-## idx_dpar_sc / idx_dpar_se: random re-splits of the pooled Sc-parent + hybrid cells (resp. Se-parent
-## + hybrid cells) into pseudo-parent and pseudo-hybrid groups of the original sizes. The total and
-## cis draws are independent, so trans null = total null - cis null carries the same independence as
-## the real estimates; the dpar nulls have no identity linking them to the other spectra.
+## Draws for the joint null of the total, cis, trans, dpar_sc and dpar_se spectra (rank-matched axis
+## testing); one draw yields all five null spectra. The nulls come in two kinds.
+## Permutation (total, cis; trans is their difference): idx is a random re-split of the pooled parent cells
+## into pseudo-Sc / pseudo-Se groups of the original sizes (total's null) and swap an independent
+## per-hybrid-cell coin flip of which allele is labelled Sc vs Se (cis's null). The total and cis draws are
+## independent, so trans null = total null - cis null carries the same independence as the real estimates.
+## Bootstrap with H0 imposed (dpar_sc, dpar_se): the hybrid and its parent differ in cell number, noise
+## level and ploidy rescale, so a pooled label shuffle (which gives both pseudo groups one noise level)
+## cannot reproduce the null of the rescaled contrast. Each group instead resamples its own cells, recolored
+## so that the two groups have the same correlation structure on the per-genome scale (the covariance-matrix
+## bootstrap test of Beran and Srivastava, 1985; coexpr_null_dpar_setup() in functions.R), and the recipe of
+## the observed contrast (shrinkage, ploidy rescale, hybrid minus parent) runs unchanged on every resample.
+## The within-group index sets (DRAWS.NULL.COEXPR) are pre-drawn from their own seed stream, apart from the
+## permutation draws and from the co-expression bootstrap (SEED.COEXPR), and the hybrid resample is shared
+## by the two dpar nulls of a draw. The cluster job builds the recolored matrices once per contrast.
 # Builds null distributions of candidate-axis magnitude for the total,
-# cis, and trans matrices. Rank-matched testing needs the null resolved
+# cis, trans, dpar_sc and dpar_se matrices. Rank-matched testing needs the null resolved
 # at every rank up to N.KEEP, the number of top candidate axes tested in Section 4.9
 N.SC  <- ncol(RESID$MIX.SC)
 N.SE  <- ncol(RESID$MIX.SE)
 N.HYB <- ncol(RESID$HYB.SC)
 N.KEEP        <- 15
 N.PERM.COEXPR <- 10000
+SEED.COEXPR.PERM <- 2     # permutation draws (total, cis)
+SEED.COEXPR.NULL <- 3     # within-group resamples of the dpar nulls
 DRAWS.PERM.COEXPR <- local({
   nSC <- N.SC
   nSE <- N.SE
   nH <- N.HYB
   B <- N.PERM.COEXPR
-  seed <- SEED.COEXPR
+  seed <- SEED.COEXPR.PERM
   set.seed(seed)
   n_tot <- nSC + nSE
   lapply(seq_len(B), coexpr_perm_draw, nH = nH, nSC = nSC, nSE = nSE, n_tot = n_tot)
 })
+DRAWS.NULL.COEXPR <- local({
+  B <- N.PERM.COEXPR
+  seed <- SEED.COEXPR.NULL
+  set.seed(seed)
+  lapply(seq_len(B), coexpr_null_draw, nSC = N.SC, nSE = N.SE, nH = N.HYB)
+})
 ## ---- Cluster round trip: Rscript coexpr_perm.R ----
-## Reads coexpr_perm_inputs.rda (saved below), writes coexpr_perm_output.rda
+## Reads coexpr_perm_inputs.rda (saved below; PLOIDY.F sets the dpar rescale), writes coexpr_perm_output.rda
 ## (NULL.TOTAL.RANKS, NULL.CIS.RANKS, NULL.TRANS.RANKS, NULL.DPAR.SC.RANKS, NULL.DPAR.SE.RANKS)
-save(RESID, N.SC, N.SE, N.KEEP, DRAWS.PERM.COEXPR, file = file.path(INPUT.DIR, "coexpr_perm_inputs.rda"))
+save(RESID, N.SC, N.SE, N.KEEP, DRAWS.PERM.COEXPR, DRAWS.NULL.COEXPR, PLOIDY.F, file = file.path(INPUT.DIR, "coexpr_perm_inputs.rda"))
 load(file.path(OUTPUT.DIR, "coexpr_perm_output.rda"))   # NULL.TOTAL.RANKS, NULL.CIS.RANKS, NULL.TRANS.RANKS, NULL.DPAR.SC.RANKS, NULL.DPAR.SE.RANKS
 ## ---- end cluster round trip ----
 
@@ -1141,7 +1156,7 @@ for (ax in COEXPR.AXES) {
   print(round(sapply(EXTRA.AXES.LIST[[ax]], axis_mixture_summary), 3))
 }
 
-## 4.9 Permutation validation
+## 4.9 Axis validation against the null
 # Validates the candidate axes of each matrix: the k-th largest
 # candidate axis (by variance share) is tested against the null's own
 # k-th largest squared eigenvalue, rank-matched 
@@ -1149,7 +1164,8 @@ NULL.RANKS.LIST <- list(total = NULL.TOTAL.RANKS, cis = NULL.CIS.RANKS, trans = 
 
 VALIDATED.LIST <- list()
 
-## Tests each of the top N.KEEP candidate axes against its own permutation null: the k-th largest
+## Tests each of the top N.KEEP candidate axes against its own null (permutation for total, cis and trans,
+## recolored bootstrap for dpar_sc and dpar_se): the k-th largest
 ## candidate axis (by variance share) against the null's k-th largest squared eigenvalue (rank-matched,
 ## no single shared threshold). p-values use the add-one rule, BH q-values run across the candidate
 ## axes, and the mixture-derived extra axes (EXTRA.AXES.LIST) are restricted to axes with q < alpha.
@@ -1168,7 +1184,7 @@ for (ax in COEXPR.AXES) {
     ## Add-one correction (as in class_identity_overlap()'s kappa_p),
     ## since a leading axis routinely beats every one of the permutation
     ## draws: without it, mean(null >= obs) reports an exact 0 that
-    ## overstates precision no finite permutation count can support,
+    ## overstates precision no finite number of null draws can support,
     ## rather than the true floor of 1 / (n_perm + 1)
     candidate_p    <- sapply(seq_along(candidate_raw), function(k) (1 + sum(null_ranks[, k] >= candidate_raw[k])) / (1 + nrow(null_ranks)))
 
@@ -1185,7 +1201,7 @@ for (ax in COEXPR.AXES) {
 
   cat(sprintf("\n-- %s: axis validation --\n", ax))
   VT <- VALIDATED.LIST[[ax]]$table
-  VT$p_value <- signif(VT$p_value, 4)   # default rounding hides the permutation floor (1 / (N.PERM.COEXPR + 1)) as 0.000
+  VT$p_value <- signif(VT$p_value, 4)   # default rounding hides the floor (1 / (N.PERM.COEXPR + 1)) as 0.000
   VT$q_value <- signif(VT$q_value, 4)   # BH FDR across the candidate axes; validated axes are those with q below alpha
   print(VT)
   cat(sprintf("%s: validated axes = %s\n", ax, paste(VALIDATED.LIST[[ax]]$validated_axes, collapse = ", ")))
