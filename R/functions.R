@@ -148,7 +148,7 @@
 ###     dpar_est_col() - name of the dpar estimate column for quantity q in species sp.
 ###     eiv_mode_ci_row() - errors-in-variables correlation for one mode m with a gene-resampling bootstrap CI.
 ###     seed_check_rows() - Summary rows (correlation, SE ratio median and IQR, count) of a two-seed bootstrap SE comparison, for the gene-level and co-expression checks.
-###     se_floor_row() - median bootstrap SE among pairs whose attenuation is at least floor f.
+###     se_floor_row() - count and median bootstrap SE (one column per SE vector) among items whose attenuation is at least floor f.
 ###     coexpr_seed_check() - two-seed adequacy check for the co-expression bootstrap.
 ###     coexpr_perm_draw() - one permutation draw for the co-expression null: the pooled-cell order (n_tot cells),.
 ###     axis_mixture_summary() - variance explained, effective genes, mixture means and sigmas, and pole sizes of.
@@ -156,7 +156,6 @@
 ###     loading_group() - labels genes POS or NEG by membership in the two loading groups (NA for neither).
 ###     pole_trans_fractions() - for one gene group g, its size and the fraction classified any-trans (Trans or.
 ###     allele_cor_boot_se_row() - bootstrap SE of row i's allele-residual correlation between sc and se: B.
-###     reliability_floor_row() - median bootstrap SE of the raw (se_obs) and disattenuated (se_true) allele.
 ###     partial_cor_depth() - correlation of gene g's Sc- and Se-allele residuals with cell depth partialled out.
 ###     class_median() - median of f within each level lv of the class vector cls.
 ###     to_seurat_counts() - converts a count matrix to a Seurat-ready sparse matrix with dash-delimited feature names.
@@ -707,13 +706,12 @@ class_heatmap_grid <- function(path, panels, classes, fdr, width, height, mfrow,
 ## %1$s is the outer and %2$s the inner value. The figure ends with a legend page (legend_labels, legend_title).
 ## Plain style (styled = NULL) lets plot_lines() draw the axes (xlab; ticks = TRUE puts exact tick labels on the
 ## log-scaled axis). Styled panels draw percent labels on the y axis and a custom x axis described by
-## styled = list(at, labels, cex_axis, mgp, xlab, xlab_mgp, xlab_cex[, las, tcl]). grid_dim = c(rows, columns)
-## overrides the PDF panel layout, which otherwise follows (outer, inner).
+## styled = list(at, labels, cex_axis, mgp, xlab, xlab_mgp, xlab_cex[, las, tcl]). The PDF has one row per outer
+## value and one column per inner value.
 power_line_figure <- function(file, power, grid, outer, inner, x, series, main_fmt, legend_labels, legend_title,
-                              log_x = TRUE, xlab = "", ticks = FALSE, styled = NULL, mar = c(3, 3, 2, 1),
-                              grid_dim = c(outer, inner)) {
+                              log_x = TRUE, xlab = "", ticks = FALSE, styled = NULL, mar = c(3, 3, 2, 1)) {
   dim_ix <- c(M = 1, N = 2, P = 3, Q = 4)
-  open_grid_pdf(file.path(FIGURE.DIR, "extended", file), nr = length(grid[[grid_dim[1]]]), nc = length(grid[[grid_dim[2]]]), mar = mar)
+  open_grid_pdf(file.path(FIGURE.DIR, "extended", file), nr = length(grid[[outer]]), nc = length(grid[[inner]]), mar = mar)
   xv <- if (log_x) log2(grid[[x]]) else grid[[x]]
   for (o in seq_along(grid[[outer]])) {
     for (i in seq_along(grid[[inner]])) {
@@ -3256,11 +3254,15 @@ eiv_mode_ci_row <- function(m, contrasts, B) {
     ms_na = round(b$na_frac, 3), row.names = NULL)
 }
 
-## se_floor_row: median bootstrap SE among pairs whose attenuation is at least floor f.
-se_floor_row <- function(f, attn, se) {
+## se_floor_row: for attenuation floor f, the number of items (pairs or genes, named count_label) whose attenuation attn is at
+## least f and the median bootstrap SE among them. se is a named list of SE vectors aligned with attn; each gives
+## a median_<name> column.
+se_floor_row <- function(f, attn, se, count_label = "n_pairs") {
   keep <- attn >= f
-  data.frame(floor = f, n_pairs = sum(keep),
-             median_se = if (any(keep)) median(se[keep]) else NA_real_)
+  out <- data.frame(floor = f, n = sum(keep))
+  names(out)[2] <- count_label
+  for (nm in names(se)) out[[paste0("median_", nm)]] <- if (any(keep)) median(se[[nm]][keep]) else NA_real_
+  out
 }
 
 ## coexpr_seed_check: two-seed adequacy check for the co-expression bootstrap. If SE has not converged at
@@ -3318,14 +3320,6 @@ allele_cor_boot_se_row <- function(i, sc, se, n, B) {
   sd(r, na.rm = TRUE)
 }
 
-## reliability_floor_row: median bootstrap SE of the raw (se_obs) and disattenuated (se_true) allele
-## correlations among genes whose attenuation a is at least floor f.
-reliability_floor_row <- function(f, a, se_obs, se_true) {
-  keep <- a >= f
-  data.frame(floor = f, n_genes = sum(keep),
-             median_se_obs  = if (any(keep)) median(se_obs[keep])  else NA_real_,
-             median_se_true = if (any(keep)) median(se_true[keep]) else NA_real_)
-}
 
 ## partial_cor_depth: correlation of gene g's Sc- and Se-allele residuals with cell depth partialled out.
 ## If depth drove the allele-pair correlation this collapses toward zero relative to the raw correlation;

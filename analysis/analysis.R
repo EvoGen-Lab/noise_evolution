@@ -993,7 +993,7 @@ REL.CHECK <- local({
   bin_y <- tapply(se,   bins, median)
   bin_n <- tapply(se,   bins, length)
 
-  floor_summary <- do.call(rbind, lapply(floors, se_floor_row, attn = attn, se = se))
+  floor_summary <- do.call(rbind, lapply(floors, se_floor_row, attn = attn, se = list(se = se)))
 
  plot(attn, se, pch = 19, cex = 0.4, col = COLOR.GREY[["mid"]], xlab = expression(sqrt(rho[i] * rho[j])), ylab = "bootstrap SE", main = "Co-expression SE vs predicted reliability")
   lines(bin_x, bin_y, type = "b", pch = 19, lwd = 2)
@@ -1489,7 +1489,7 @@ INTR.REL.CHECK <- local({
   bins  <- cut(a, breaks = quantile(a, seq(0, 1, length.out = n_bins + 1)), include.lowest = TRUE)
   bin_x <- tapply(a, bins, median)
 
-  floor_summary <- do.call(rbind, lapply(floors, reliability_floor_row, a = a, se_obs = se_obs, se_true = se_true))
+  floor_summary <- do.call(rbind, lapply(floors, se_floor_row, attn = a, se = list(se_obs = se_obs, se_true = se_true), count_label = "n_genes"))
 
   op <- par(mfrow = c(1, 2)); on.exit(par(op))
   plot(a, se_obs, pch = 19, cex = 0.4, col = COLOR.GREY[["mid"]], xlab = expression(sqrt(rho[Sc] * rho[Se])), ylab = "bootstrap SE, raw correlation", main = "Raw allele correlation")
@@ -2788,8 +2788,8 @@ power_line_figure("Power.Analysis.1.pdf", POWER, POWER.GRID, "N", "Q", x = "M", 
 
 ## 10.4 Supplementary diagnostic grids: every other pairing of the four
 # grid axes (mean, burst frequency, SIZE.RATIO, N.CELLS)
-power_line_figure("Power.Analysis.grid_ncells_by_mean.pdf", POWER, POWER.GRID, "M", "Q", x = "N", series = "P", grid_dim = c("Q", "M"),
-  main_fmt = "Ratio=%2$s Mean=%1$s", legend_labels = paste0("SIZE = ", SIZE), legend_title = "Burst frequency",
+power_line_figure("Power.Analysis.grid_ncells_by_mean.pdf", POWER, POWER.GRID, "Q", "M", x = "N", series = "P",
+  main_fmt = "Ratio=%1$s Mean=%2$s", legend_labels = paste0("SIZE = ", SIZE), legend_title = "Burst frequency",
   log_x = FALSE, xlab = "Sc Cell Count")
 power_line_figure("Power.Analysis.grid_logmean_by_size_ratio.pdf", POWER, POWER.GRID, "P", "Q", x = "M", series = "N",
   main_fmt = "SIZE=%1$s Ratio=%2$s", legend_labels = paste0("Sc Cells = ", N.CELLS), legend_title = "Sc Cell Count",
