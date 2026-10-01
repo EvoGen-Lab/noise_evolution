@@ -6,11 +6,13 @@
 ### than over genes, since the gene set here is fixed (CO.GENES)
 ### and the expensive step is one shrink_cor per dataset per draw.
 ###
-### Inputs  : coexpr_boot1_inputs.rda, or coexpr_boot<tag>_inputs.rda for
-###           a given tag arg (e.g. "2" for a second-seed adequacy check)
-###           (RESID, COEXPR.POINT, DRAWS.COEXPR)
-### Output  : coexpr_boot1_output.rda, or coexpr_boot<tag>_output.rda to
-###           match (CB: CB$total, CB$cis, CB$trans, CB$lambda)
+### Inputs  : coexpr_boot_inputs.rda (RESID, COEXPR.POINT, DRAWS.COEXPR.REPS:
+###           one set of pre-drawn resamples per bootstrap replicate)
+### Output  : coexpr_boot_output_<k>of<K>.rda for array task k of K, holding
+###           CB (CB$total, CB$cis, CB$trans, CB$dpar_sc, CB$dpar_se,
+###           CB$lambda) for replicate k. Task k uses DRAWS.COEXPR.REPS[[k]];
+###           replicate 1 is the reported bootstrap and the others check seed
+###           adequacy.
 ###
 ### Progress is printed by the master after each chunk of draws,
 ### so it lands in the job log even though the workers are forked.
@@ -31,18 +33,18 @@ source("functions.R")
 ## The five decompositions the co-expression bootstrap tracks, in the order each draw returns them.
 .COEXPR_PARTS <- c("total", "cis", "trans", "dpar_sc", "dpar_se")
 
-## Tag arg picks which input/output pair to use, so the same script
-## serves both the primary run and any additional-seed adequacy check
-## without duplicating the file. Defaults to "1", the primary run, the
-## same convention gene_boot.R uses.
-##   Rscript coexpr_boot.R    -> coexpr_boot1_inputs.rda / coexpr_boot1_output.rda
-##   Rscript coexpr_boot.R 2  -> coexpr_boot2_inputs.rda / coexpr_boot2_output.rda
-ARGS        <- commandArgs(trailingOnly = TRUE)
-TAG         <- if (length(ARGS) >= 1) ARGS[1] else "1"
-INPUT.FILE  <- sprintf("coexpr_boot%s_inputs.rda", TAG)
-OUTPUT.FILE <- sprintf("coexpr_boot%s_output.rda", TAG)
+load("coexpr_boot_inputs.rda")     # RESID, COEXPR.POINT, DRAWS.COEXPR.REPS
 
-load(INPUT.FILE)     # RESID, COEXPR.POINT, DRAWS.COEXPR
+## Job-array position: task k bootstraps replicate k, the same convention gene_boot.R
+## uses. A finished task leaves its output file, so resubmitting the array only
+## computes the missing replicates.
+ARRAY.ID    <- as.integer(Sys.getenv("SLURM_ARRAY_TASK_ID", unset = "1"))
+N.ARRAY     <- as.integer(Sys.getenv("SLURM_ARRAY_TASK_COUNT", unset = "1"))
+if (N.ARRAY != length(DRAWS.COEXPR.REPS))
+  stop(sprintf("array has %d tasks but the inputs hold %d replicates", N.ARRAY, length(DRAWS.COEXPR.REPS)))
+DRAWS.COEXPR <- DRAWS.COEXPR.REPS[[ARRAY.ID]]
+OUTPUT.FILE <- sprintf("coexpr_boot_output_%dof%d.rda", ARRAY.ID, N.ARRAY)
+if (file.exists(OUTPUT.FILE)) { cat(sprintf("%s already exists, nothing to do\n", OUTPUT.FILE)); quit(save = "no") }
 
 NUM.CORES <- as.integer(Sys.getenv("SLURM_CPUS_PER_TASK", unset = detectCores()))
 
@@ -59,8 +61,8 @@ B          <- length(DRAWS.COEXPR)
 CHUNK.SIZE <- max(NUM.CORES, ceiling(B / N.UPDATES))
 chunks     <- split(seq_len(B), ceiling(seq_len(B) / CHUNK.SIZE))
 
-cat(sprintf("coexpression bootstrap start: %d genes, B=%d, %d cores, %d chunks\n",
-            nrow(RESID$MIX.SC), B, NUM.CORES, length(chunks)))
+cat(sprintf("coexpression bootstrap start: replicate %d of %d, %d genes, B=%d, %d cores, %d chunks\n",
+            ARRAY.ID, N.ARRAY, nrow(RESID$MIX.SC), B, NUM.CORES, length(chunks)))
 flush.console()
 
 ## Streaming accumulator for the co-expression bootstrap SE. Holding every draw (a B x pairs matrix
@@ -117,9 +119,9 @@ CB <- local({
 })
 save(CB, file = OUTPUT.FILE)
 
-cat(sprintf("coexpression bootstrap done: %d pairs in %.1f min [tag %s]\n",
+cat(sprintf("coexpression bootstrap done: %d pairs in %.1f min [replicate %d]\n",
             nrow(CB$total),
             as.numeric(difftime(Sys.time(), t0, units = "mins")),
-            TAG))
+            ARRAY.ID))
 
 stopCluster(cl)

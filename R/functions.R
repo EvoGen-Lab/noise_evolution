@@ -125,6 +125,7 @@
 ###     kegg_local() - Downloads the KEGG pathway map once, locally, for offline enrichment on cluster nodes.
 ###     load_cluster_output() - Loads a cluster result into the caller's environment, naming the script to run when the file is missing.
 ###     check_cluster_key() - Confirms a cluster output was built from the inputs packaged in this session.
+###     load_replicates() - Loads the per-replicate outputs of one cluster job array and checks each has the expected size.
 ###   12. CLUSTER-BASED NOISE PARTITIONING (within/between-cluster variance vs. the intrinsic/extrinsic decomposition)
 ###     within_between_decomp() - Within- and between-cluster variance per gene, in shot-noise-corrected, mean-normalized rate space, from a Seurat cluster partition.
 ###     plot_within_between_hist() - Genome-wide distribution of within_between_decomp()'s ratio, one dataset, with the within = between line marked.
@@ -2806,6 +2807,24 @@ check_cluster_key <- function(out_key, in_key, what, script) {
   if (!identical(out_key, in_key))
     stop(sprintf("%s was built from different inputs than those just packaged. Rerun %s with the new inputs.", what, script), call. = FALSE)
   invisible(TRUE)
+}
+
+## load_replicates: loads the outputs of a replicate bootstrap, one file <stem>_output_<k>of<K>.rda per array
+## task k (replicate k, seeded SEED + k - 1), and returns the object `object` from each as a list in replicate
+## order. Every replicate must have size(x) == expected, so a stale or mismatched output stops here, before it
+## reaches downstream sections. Replicate 1 is the reported result; the others check seed adequacy.
+load_replicates <- function(stem, object, n_rep, expected, size = nrow, script = paste0(stem, ".R"), dir = OUTPUT.DIR) {
+  if (!is.numeric(n_rep) || length(n_rep) != 1 || n_rep < 1) stop("n_rep must be a positive integer")
+  reps <- vector("list", n_rep)
+  for (k in seq_len(n_rep)) {
+    file <- sprintf("%s_output_%dof%d.rda", stem, k, n_rep)
+    env <- new.env()
+    load_cluster_output(file.path(dir, file), script, envir = env)
+    reps[[k]] <- env[[object]]
+    if (size(reps[[k]]) != expected)
+      stop(sprintf("%s has %d rows but %d are expected; rerun %s with the current inputs", file, size(reps[[k]]), expected, script), call. = FALSE)
+  }
+  reps
 }
 
 ##############################################################################

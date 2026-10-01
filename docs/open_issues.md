@@ -43,7 +43,7 @@ Source: `docs/function_review.md` (item numbers refer to its section 3), re-chec
 
 1. `&&` / `||` scalar scan: partial evidence only (reviewers saw no vector operands); no full scan.
 2. `pkg_versions()` / `check_pkg_versions()` not finalized.
-3. Full pipeline rerun after the R upgrade. Outstanding cluster resubmissions from the earlier estimator, paired-covariance and power-grid changes: `gene_pilot`, `gene_boot1/2`, `gene_perm`, `coexpr_boot1/2`, `coexpr_perm`, `go_enrich`, `power` (and `cluster_stability` only if its inputs change).
+3. Full pipeline rerun after the R upgrade. Outstanding cluster resubmissions from the earlier estimator, paired-covariance and power-grid changes: `gene_pilot`, `gene_boot` (array of 2), `gene_perm`, `coexpr_boot` (array of 2), `coexpr_perm`, `go_enrich`, `power` (and `cluster_stability` only if its inputs change).
 4. Trans versus cis power asymmetry (items 4 and 7 above).
 
 ## E. Structure and housekeeping

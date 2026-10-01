@@ -337,6 +337,7 @@ EXPO.HYB    <- (colSums(HYB.SC) + colSums(HYB.SE))/DEPTH.REF
 
 # Seeds and resample counts for bootstrap, permutation, and coexpression steps
 N.BOOT <- 1000; SEED.BOOT <- 1            # bootstrap resamples
+N.BOOT.REP <- 2                           # bootstrap replicates at seeds SEED.BOOT, SEED.BOOT + 1, ...; replicate 1 is reported, the rest check seed adequacy
 N.PERM <- 10000; SEED.PERM <- 1          # permutation shuffles
 N.COEXPR <- 5000; SEED.COEXPR <- 1        # Coexpression
 
@@ -515,7 +516,6 @@ PLOIDY.SHIFT <- ploidy_shift(CONTRAST.MATS, CONTRAST.EXPOS)[GENES]
 ## Pre-draws every permutation label vector (one list entry per permutation, all modes) from one
 ## seeded stream, so each gene is tested against the same relabelings. total/trans/dpar/inh shuffle
 ## pooled cell labels, cis swaps alleles within each hybrid cell, dom pairs random parent cells.
-DRAWS <- make_draws(NCELLS, N.BOOT, SEED.BOOT)
 PERMS <- local({
   ncells <- NCELLS
   NPERM <- N.PERM
@@ -528,21 +528,17 @@ PERMS <- local({
   lapply(seq_len(NPERM), perm_label_draw, nHYB = nHYB, nHYC = nHYC, nHYC.N = nHYC.N, nHYT = nHYT, nHYT.N = nHYT.N, nSC = nSC, nSE = nSE)
 })
 
-# gene_boot.R and gene_perm.R for the cluster
-save(CONTRAST.MATS, CONTRAST.EXPOS, CONTRAST.FITS, GENES, DRAWS, N.BOOT, SEED.BOOT, file = file.path(INPUT.DIR, "gene_boot1_inputs.rda"))
+## ---- Cluster round trip: Rscript gene_boot.R (job array, one task per replicate) / gene_perm.R ----
+## gene_boot.R reads gene_boot_inputs.rda and writes gene_boot_output_<k>of<K>.rda (BOOT.CONTRASTS) for replicate k.
+## Each replicate resamples with its own pre-drawn indices (DRAWS.REPS[[k]], seed SEED.BOOT + k - 1).
+## gene_perm.R reads gene_perm_inputs.rda and writes gene_perm_output.rda (PERM.RESULTS).
+DRAWS.REPS <- lapply(SEED.BOOT + seq_len(N.BOOT.REP) - 1, function(seed) make_draws(NCELLS, N.BOOT, seed))
+save(CONTRAST.MATS, CONTRAST.EXPOS, CONTRAST.FITS, GENES, DRAWS.REPS, N.BOOT, file = file.path(INPUT.DIR, "gene_boot_inputs.rda"))
 save(CONTRAST.MATS, CONTRAST.EXPOS, CONTRAST.FITS, GENES, PERMS, N.PERM, SEED.PERM, PLOIDY.SHIFT, file = file.path(INPUT.DIR, "gene_perm_inputs.rda"))
-
-# DRAWS reassigned to a second seed for checking adequcey of bootstrap
-DRAWS <- make_draws(NCELLS, N.BOOT, SEED.BOOT + 1)
-save(CONTRAST.MATS, CONTRAST.EXPOS, CONTRAST.FITS, GENES, DRAWS, N.BOOT, file = file.path(INPUT.DIR, "gene_boot2_inputs.rda"))
-
-## ---- Cluster round trip: Rscript gene_boot.R / gene_boot.R 2 / gene_perm.R ----
-## gene_boot.R    reads gene_boot1_inputs.rda, writes gene_boot1_output.rda (BOOT.CONTRASTS)
-## gene_boot.R 2  reads gene_boot2_inputs.rda, writes gene_boot2_output.rda (BOOT.CONTRASTS, loaded in 2.4)
-## gene_perm.R    reads gene_perm_inputs.rda,  writes gene_perm_output.rda  (PERM.RESULTS)
-load(file.path(OUTPUT.DIR, "gene_boot1_output.rda"))           # BOOT.CONTRASTS
+BOOT.CONTRASTS.REPS <- load_replicates("gene_boot", "BOOT.CONTRASTS", N.BOOT.REP, expected = length(GENES))
+BOOT.CONTRASTS <- BOOT.CONTRASTS.REPS[[1]]
 load(file.path(OUTPUT.DIR, "gene_perm_output.rda"))            # PERM.RESULTS
-## ---- end cluster round trip (gene_boot2_output.rda is loaded in 2.4) ----
+## ---- end cluster round trip ----
 
 ## One row per mode: n, raw and attenuation-corrected mean-bfreq correlation, and its bootstrap CI.
 ## Benjamini-Hochberg FDR across genes for every permutation p-value
@@ -612,8 +608,8 @@ for (panel in list(c("cis_trans", "mean"), c("cis_trans", "bfreq"), c("cis_trans
 dev.off()
 
 ## 2.4 Bootstrap adequacy check
-# Compares per-gene bootstrap SEs between the two seeds saved in 2.3
-BURST.CONTRASTS2 <- local({ load(file.path(OUTPUT.DIR, "gene_boot2_output.rda")); add_burst_contrasts(BOOT.CONTRASTS) })
+# Compares per-gene bootstrap SEs between replicates 1 and 2 loaded in 2.3
+BURST.CONTRASTS2 <- add_burst_contrasts(BOOT.CONTRASTS.REPS[[2]])
 
 fig_pdf("extra/S_gene_seed_compare.pdf", 6, 9)
 par(mfrow = c(3, 2))
@@ -954,18 +950,18 @@ dev.off()
 RANK.CHECK$r2 
 
 ## 4.2 Bootstrap for coexpression
-# Two independent seeds at the same B
-DRAWS.COEXPR <- make_coexpr_draws(ncol(RESID$MIX.SC), ncol(RESID$MIX.SE), ncol(RESID$HYB.SC), N.COEXPR, SEED.COEXPR)
-save(RESID, COEXPR.POINT, DRAWS.COEXPR, file = file.path(INPUT.DIR, "coexpr_boot1_inputs.rda"))
-
-DRAWS.COEXPR <- make_coexpr_draws(ncol(RESID$MIX.SC), ncol(RESID$MIX.SE), ncol(RESID$HYB.SC), N.COEXPR, SEED.COEXPR + 1)
-save(RESID, COEXPR.POINT, DRAWS.COEXPR, file = file.path(INPUT.DIR, "coexpr_boot2_inputs.rda"))
-
-## ---- Cluster round trip: Rscript coexpr_boot.R / coexpr_boot.R 2 ----
-## coexpr_boot.R    reads coexpr_boot1_inputs.rda, writes coexpr_boot1_output.rda (CB)
-## coexpr_boot.R 2  reads coexpr_boot2_inputs.rda, writes coexpr_boot2_output.rda (CB, loaded in 4.4)
-load(file.path(OUTPUT.DIR, "coexpr_boot1_output.rda"))   # CB ($total, $cis, $trans, $lambda)
-## ---- end cluster round trip (coexpr_boot2_output.rda is loaded in 4.4) ----
+# Replicates at consecutive seeds with the same B; replicate 1 is reported and replicate 2 feeds the adequacy check in 4.4
+## ---- Cluster round trip: Rscript coexpr_boot.R (job array, one task per replicate) ----
+## Reads coexpr_boot_inputs.rda and writes coexpr_boot_output_<k>of<K>.rda (CB: $total, $cis, $trans, $dpar_sc, $dpar_se, $lambda)
+## for replicate k, resampled with DRAWS.COEXPR.REPS[[k]] (seed SEED.COEXPR + k - 1). Each CB must hold one row per
+## pair of CO.GENES.
+DRAWS.COEXPR.REPS <- lapply(SEED.COEXPR + seq_len(N.BOOT.REP) - 1, function(seed)
+  make_coexpr_draws(ncol(RESID$MIX.SC), ncol(RESID$MIX.SE), ncol(RESID$HYB.SC), N.COEXPR, seed))
+save(RESID, COEXPR.POINT, DRAWS.COEXPR.REPS, file = file.path(INPUT.DIR, "coexpr_boot_inputs.rda"))
+CB.REPS <- load_replicates("coexpr_boot", "CB", N.BOOT.REP, expected = choose(length(CO.GENES), 2), size = function(cb) nrow(cb$total))
+CB <- CB.REPS[[1]]
+CB2 <- CB.REPS[[2]]
+## ---- end cluster round trip ----
 
 ## 4.3 Bootstrap reliability check
 
@@ -1009,21 +1005,7 @@ REL.CHECK$floor_summary
 
 ## 4.4 Bootstrap adequacy check
 
-## Verifies that a loaded coexpr_boot*_output.rda CB object has the pair count CO.GENES implies,
-## so a stale or mismatched cluster output is caught before it reaches CB.CLASS, the pair lists or the
-## seed comparison. The same check is applied to every CB object loaded.
-# Confirms the bootstrap SE has converged at N.COEXPR
-EXPECTED.PAIRS <- choose(length(CO.GENES), 2)
-CB2 <- local({ load(file.path(OUTPUT.DIR, "coexpr_boot2_output.rda")); CB })
-local({
-  cb <- CB2
-  expected_pairs <- EXPECTED.PAIRS
-  label <- "coexpr_boot2_output.rda"
-  if (nrow(cb$total) != expected_pairs)
-  stop(sprintf("%s has %d pairs but CO.GENES expects %d; rerun the matching cluster job", label, nrow(cb$total), expected_pairs))
-})
-
-## Two-seed adequacy check for the co-expression bootstrap, one panel per contrast. If SE has not
+## Two-seed adequacy check that the bootstrap SE has converged at N.COEXPR, one panel per contrast. If SE has not
 ## converged at this B, SEs underestimated by chance in one run can make many pairs look spuriously
 ## significant. CB and CB2 are two CB objects at the same B and gene set that differ only in seed; rows
 ## share the same gene_i/gene_j order (true when both come from the same CO.GENES and upper.tri() call).
