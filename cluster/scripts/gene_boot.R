@@ -18,84 +18,6 @@ library('MASS')          # glm.nb ships with base R; set lib= if your cluster ne
 
 source("functions.R")
 
-## One gene's paired bootstrap: refits all 13 groups on each pre-drawn resample, forms every mode's
-## mean, bfreq (NB size) and CV2 contrast per replicate, and returns the point estimate, bootstrap SE,
-## boundary fraction and mean-bfreq draw correlation for the eight reportable modes. Replicates where
-## any needed fit is non-finite give NA for that contrast and are left out of its SD.
-boot_contrasts_one <- function(g, mats, expos, fits, draws) {
-  ## The set of draws-list keys a mode's contrast is built from, e.g. "trans"
-  ## touches the MIX.SC/MIX.SE and HYT draws, "trans_n" the MIX.SC/MIX.SE and
-  ## HYT.N draws. Two modes share draws exactly when this set matches.
-  .mode_draw_keys <- function(mode) sort(unique(unname(.DRAW.KEY[.MODES[[mode]]])))
-
-  B <- length(draws); modes <- names(.MODES)
-  mcol <- paste0("m.", modes); scol <- paste0("s.", modes); ccol <- paste0("c.", modes)
-  M <- matrix(NA_real_, B, 3 * length(modes), dimnames = list(NULL, c(mcol, scol, ccol)))
-  for (b in seq_len(B)) {
-    d <- draws[[b]]
-    fg <- function(mat, ex, idx) .fit_one(mat[g, idx], ex[idx])
-    f <- list(
-      MIX.SC   = fg(mats$MIX.SC,   expos$MIX.SC, d$MIX.SC),
-      MIX.SE   = fg(mats$MIX.SE,   expos$MIX.SE, d$MIX.SE),
-      HYC.SC   = fg(mats$HYC.SC,   expos$HYC,    d$HYC),
-      HYC.SE   = fg(mats$HYC.SE,   expos$HYC,    d$HYC),
-      HYT.SC   = fg(mats$HYT.SC,   expos$HYT,    d$HYT),
-      HYT.SE   = fg(mats$HYT.SE,   expos$HYT,    d$HYT),
-      HYC.SC.N = fg(mats$HYC.SC.N, expos$HYC.N,  d$HYC.N),
-      HYC.SE.N = fg(mats$HYC.SE.N, expos$HYC.N,  d$HYC.N),
-      HYT.SC.N = fg(mats$HYT.SC.N, expos$HYT.N,  d$HYT.N),
-      HYT.SE.N = fg(mats$HYT.SE.N, expos$HYT.N,  d$HYT.N),
-      HYB.COMB = fg(mats$HYB.COMB, expos$HYB,    d$HYB),
-      HYB.SC   = fg(mats$HYB.SC,   expos$HYB,    d$HYB),
-      HYB.SE   = fg(mats$HYB.SE,   expos$HYB,    d$HYB))
-    gv.mu <- lapply(f, function(z) unname(z[["mu"]]))
-    gv.bf <- lapply(f, function(z) unname(z[["disp"]]))
-    gv.cv <- lapply(f, function(z) .cv2_of(z[["mu"]], z[["disp"]]))
-    for (k in seq_along(modes)) {
-      grp <- .MODES[[modes[k]]]
-      mu <- unlist(gv.mu[grp]); bf <- unlist(gv.bf[grp]); cv <- unlist(gv.cv[grp])
-      if (all(is.finite(mu) & mu > 0)) M[b, mcol[k]] <- .contrast_value(modes[k], gv.mu, "MU")
-      if (all(is.finite(bf) & bf > 0)) M[b, scol[k]] <- .contrast_value(modes[k], gv.bf, "BFREQ")
-      if (all(is.finite(cv) & cv > 0)) M[b, ccol[k]] <- .contrast_value(modes[k], gv.cv, "CV2")
-    }
-  }
-  se   <- apply(M, 2, sd, na.rm = TRUE)
-  bdry <- setNames(vapply(modes, function(md) mean(is.na(M[, paste0("s.", md)])), numeric(1)), modes)
-  point <- function(q, gv_fun) {
-    gv <- setNames(lapply(names(fits), function(grp) gv_fun(fits[[grp]][g, ])), names(fits))
-    vapply(modes, function(md) .contrast_value(md, gv, q), numeric(1))
-  }
-  pm <- point("MU",    function(row) row[["MU"]])
-  ps <- point("BFREQ", function(row) row[["DISP"]])
-  pc <- point("CV2",   function(row) .cv2_of(row[["MU"]], row[["DISP"]]))
-  out <- list(gene = g)
-  for (md in .OUT_MODES) {
-    smd <- .BFREQ_SOURCE[[md]]
-    out[[paste0("mean_", md, "_est")]]   <- unname(pm[md])
-    out[[paste0("mean_", md, "_se")]]    <- unname(se[paste0("m.", md)])
-    out[[paste0("bfreq_", md, "_est")]]  <- unname(ps[smd])
-    out[[paste0("bfreq_", md, "_se")]]   <- unname(se[paste0("s.", smd)])
-    out[[paste0("bfreq_", md, "_bdry")]] <- unname(bdry[smd])
-    out[[paste0("cv2_", md, "_est")]]    <- unname(pc[smd])
-    out[[paste0("cv2_", md, "_se")]]     <- unname(se[paste0("c.", smd)])
-    ## cor_<md>: correlation of the mean and bfreq bootstrap draws, defined when both contrasts are
-    ## built from the same resampled datasets (matching .mode_draw_keys). For cis and trans the bfreq
-    ## value comes from the noise split (HYC.N/HYT.N) and the mean from the mean split (HYC/HYT),
-    ## which are resampled with separate index vectors, so cor is NA and downstream code uses 0.
-    out[[paste0("cor_", md)]] <- if (identical(.mode_draw_keys(md), .mode_draw_keys(smd))) {
-      x <- M[, paste0("m.", md)]; y <- M[, paste0("s.", md)]; ok <- is.finite(x) & is.finite(y)
-      if (sum(ok) > 2) cor(x[ok], y[ok]) else NA_real_
-    } else NA_real_
-  }
-  .r2 <- function(c1, c2) {
-	x <- M[, c1]; y <- M[, c2]; ok <- is.finite(x) & is.finite(y)
-    if (sum(ok) > 2) cor(x[ok], y[ok]) else NA_real_
-  }
-  out$cor_dpar_mean  <- .r2("m.dpar_sc", "m.dpar_se")
-  out$cor_dpar_bfreq <- .r2("s.dpar_sc", "s.dpar_se")
-  data.frame(out, row.names = NULL, check.names = FALSE)
-}
-
 ## Tag arg picks which input/output pair to use, so the same script
 ## serves both the primary run and any additional-seed adequacy check
 ## without duplicating the file. Defaults to "1", the primary run.
@@ -125,8 +47,83 @@ flush.console()
 results <- vector("list", length(chunks))
 t0 <- Sys.time(); done <- 0
 for (k in seq_along(chunks)) {
-  results[[k]] <- parLapply(cl, chunks[[k]], boot_contrasts_one,
-                            mats = CONTRAST.MATS, expos = CONTRAST.EXPOS, fits = CONTRAST.FITS, draws = DRAWS)
+  ## One gene's paired bootstrap: refits all 13 groups on each pre-drawn resample, forms every mode's
+  ## mean, bfreq (NB size) and CV2 contrast per replicate, and returns the point estimate, bootstrap SE,
+  ## boundary fraction and mean-bfreq draw correlation for the eight reportable modes. Replicates where
+  ## any needed fit is non-finite give NA for that contrast and are left out of its SD.
+  results[[k]] <- parLapply(cl, chunks[[k]], function(g) {
+    ## The set of draws-list keys a mode's contrast is built from, e.g. "trans"
+    ## touches the MIX.SC/MIX.SE and HYT draws, "trans_n" the MIX.SC/MIX.SE and
+    ## HYT.N draws. Two modes share draws exactly when this set matches.
+    .mode_draw_keys <- function(mode) sort(unique(unname(.DRAW.KEY[.MODES[[mode]]])))
+  
+    B <- length(DRAWS); modes <- names(.MODES)
+    mcol <- paste0("m.", modes); scol <- paste0("s.", modes); ccol <- paste0("c.", modes)
+    M <- matrix(NA_real_, B, 3 * length(modes), dimnames = list(NULL, c(mcol, scol, ccol)))
+    for (b in seq_len(B)) {
+      d <- DRAWS[[b]]
+      fg <- function(mat, ex, idx) .fit_one(mat[g, idx], ex[idx])
+      f <- list(
+        MIX.SC   = fg(CONTRAST.MATS$MIX.SC,   CONTRAST.EXPOS$MIX.SC, d$MIX.SC),
+        MIX.SE   = fg(CONTRAST.MATS$MIX.SE,   CONTRAST.EXPOS$MIX.SE, d$MIX.SE),
+        HYC.SC   = fg(CONTRAST.MATS$HYC.SC,   CONTRAST.EXPOS$HYC,    d$HYC),
+        HYC.SE   = fg(CONTRAST.MATS$HYC.SE,   CONTRAST.EXPOS$HYC,    d$HYC),
+        HYT.SC   = fg(CONTRAST.MATS$HYT.SC,   CONTRAST.EXPOS$HYT,    d$HYT),
+        HYT.SE   = fg(CONTRAST.MATS$HYT.SE,   CONTRAST.EXPOS$HYT,    d$HYT),
+        HYC.SC.N = fg(CONTRAST.MATS$HYC.SC.N, CONTRAST.EXPOS$HYC.N,  d$HYC.N),
+        HYC.SE.N = fg(CONTRAST.MATS$HYC.SE.N, CONTRAST.EXPOS$HYC.N,  d$HYC.N),
+        HYT.SC.N = fg(CONTRAST.MATS$HYT.SC.N, CONTRAST.EXPOS$HYT.N,  d$HYT.N),
+        HYT.SE.N = fg(CONTRAST.MATS$HYT.SE.N, CONTRAST.EXPOS$HYT.N,  d$HYT.N),
+        HYB.COMB = fg(CONTRAST.MATS$HYB.COMB, CONTRAST.EXPOS$HYB,    d$HYB),
+        HYB.SC   = fg(CONTRAST.MATS$HYB.SC,   CONTRAST.EXPOS$HYB,    d$HYB),
+        HYB.SE   = fg(CONTRAST.MATS$HYB.SE,   CONTRAST.EXPOS$HYB,    d$HYB))
+      gv.mu <- lapply(f, function(z) unname(z[["mu"]]))
+      gv.bf <- lapply(f, function(z) unname(z[["disp"]]))
+      gv.cv <- lapply(f, function(z) .cv2_of(z[["mu"]], z[["disp"]]))
+      for (k in seq_along(modes)) {
+        grp <- .MODES[[modes[k]]]
+        mu <- unlist(gv.mu[grp]); bf <- unlist(gv.bf[grp]); cv <- unlist(gv.cv[grp])
+        if (all(is.finite(mu) & mu > 0)) M[b, mcol[k]] <- .contrast_value(modes[k], gv.mu, "MU")
+        if (all(is.finite(bf) & bf > 0)) M[b, scol[k]] <- .contrast_value(modes[k], gv.bf, "BFREQ")
+        if (all(is.finite(cv) & cv > 0)) M[b, ccol[k]] <- .contrast_value(modes[k], gv.cv, "CV2")
+      }
+    }
+    se   <- apply(M, 2, sd, na.rm = TRUE)
+    bdry <- setNames(vapply(modes, function(md) mean(is.na(M[, paste0("s.", md)])), numeric(1)), modes)
+    point <- function(q, gv_fun) {
+      gv <- setNames(lapply(names(CONTRAST.FITS), function(grp) gv_fun(CONTRAST.FITS[[grp]][g, ])), names(CONTRAST.FITS))
+      vapply(modes, function(md) .contrast_value(md, gv, q), numeric(1))
+    }
+    pm <- point("MU",    function(row) row[["MU"]])
+    ps <- point("BFREQ", function(row) row[["DISP"]])
+    pc <- point("CV2",   function(row) .cv2_of(row[["MU"]], row[["DISP"]]))
+    out <- list(gene = g)
+    for (md in .OUT_MODES) {
+      smd <- .BFREQ_SOURCE[[md]]
+      out[[paste0("mean_", md, "_est")]]   <- unname(pm[md])
+      out[[paste0("mean_", md, "_se")]]    <- unname(se[paste0("m.", md)])
+      out[[paste0("bfreq_", md, "_est")]]  <- unname(ps[smd])
+      out[[paste0("bfreq_", md, "_se")]]   <- unname(se[paste0("s.", smd)])
+      out[[paste0("bfreq_", md, "_bdry")]] <- unname(bdry[smd])
+      out[[paste0("cv2_", md, "_est")]]    <- unname(pc[smd])
+      out[[paste0("cv2_", md, "_se")]]     <- unname(se[paste0("c.", smd)])
+      ## cor_<md>: correlation of the mean and bfreq bootstrap draws, defined when both contrasts are
+      ## built from the same resampled datasets (matching .mode_draw_keys). For cis and trans the bfreq
+      ## value comes from the noise split (HYC.N/HYT.N) and the mean from the mean split (HYC/HYT),
+      ## which are resampled with separate index vectors, so cor is NA and downstream code uses 0.
+      out[[paste0("cor_", md)]] <- if (identical(.mode_draw_keys(md), .mode_draw_keys(smd))) {
+        x <- M[, paste0("m.", md)]; y <- M[, paste0("s.", md)]; ok <- is.finite(x) & is.finite(y)
+        if (sum(ok) > 2) cor(x[ok], y[ok]) else NA_real_
+      } else NA_real_
+    }
+    .r2 <- function(c1, c2) {
+  	x <- M[, c1]; y <- M[, c2]; ok <- is.finite(x) & is.finite(y)
+      if (sum(ok) > 2) cor(x[ok], y[ok]) else NA_real_
+    }
+    out$cor_dpar_mean  <- .r2("m.dpar_sc", "m.dpar_se")
+    out$cor_dpar_bfreq <- .r2("s.dpar_sc", "s.dpar_se")
+    data.frame(out, row.names = NULL, check.names = FALSE)
+  })
   done <- done + length(chunks[[k]])
   el   <- as.numeric(difftime(Sys.time(), t0, units = "mins"))
   eta  <- if (el > 0) (length(GENES) - done) * (el / done) else NA_real_

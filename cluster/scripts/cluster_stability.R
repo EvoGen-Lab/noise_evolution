@@ -25,27 +25,6 @@ suppressPackageStartupMessages({
 
 source("functions.R")
 
-## boot_ari_one: one bootstrap replicate. Resamples the columns of counts
-## by idx, applies the same preparation as to_seurat_counts() in analysis.R
-## (underscore to dash in gene names, CsparseMatrix) once per replicate,
-## reruns the Normalize/HVG/Scale/PCA/Neighbors/Clusters pipeline at the
-## original settings, and returns the adjusted Rand index against
-## ref_clusters on the same resampled cells. Self-contained, so it runs
-## equally well serially or on a forked worker (cluster_stability.R).
-boot_ari_one <- function(counts, idx, ref_clusters, nfeatures, dims_n, resolution, metric = "manhattan") {
-  boot_counts <- counts[, idx]
-  rownames(boot_counts) <- gsub("_", "-", rownames(counts), fixed = TRUE)
-  colnames(boot_counts) <- make.unique(colnames(counts)[idx])
-  boot_counts <- as(boot_counts, "CsparseMatrix")
-  boot_obj <- CreateSeuratObject(counts = boot_counts)
-  boot_obj <- NormalizeData(boot_obj, normalization.method = "LogNormalize", scale.factor = 10000, verbose = FALSE)
-  boot_obj <- FindVariableFeatures(boot_obj, selection.method = "vst", nfeatures = nfeatures, verbose = FALSE)
-  boot_obj <- ScaleData(boot_obj, features = rownames(boot_obj), verbose = FALSE)
-  boot_obj <- RunPCA(boot_obj, features = VariableFeatures(boot_obj), verbose = FALSE)
-  boot_obj <- FindNeighbors(boot_obj, reduction = "pca", dims = 1:dims_n, annoy.metric = metric, verbose = FALSE)
-  boot_obj <- FindClusters(boot_obj, resolution = resolution, verbose = FALSE)
-  adjustedRandIndex(as.integer(ref_clusters[idx]), as.integer(Idents(boot_obj)))
-}
 load("cluster_stability_inputs.rda")
 
 NUM.CORES <- as.integer(Sys.getenv("SLURM_CPUS_PER_TASK", unset = detectCores()))
@@ -56,20 +35,35 @@ B     <- CSTAB.INPUTS$key$B
 ## b varies fastest, so replicates of one task stay contiguous and in order
 JOBS <- expand.grid(b = seq_len(B), k = seq_len(nrow(TASKS)))
 
-run_job <- function(j) {
-  tk <- TASKS[JOBS$k[j], ]
-  d  <- CSTAB.INPUTS$data[[tk$dataset]]
-  tryCatch(boot_ari_one(d$counts, CSTAB.INPUTS$idx[[tk$dataset]][, JOBS$b[j]], CSTAB.INPUTS$ref[[tk$task]],
-                        d$nfeatures, d$dims_n, tk$res, d$metric),
-           error = function(e) { message(sprintf("%s replicate %d: %s", tk$task, JOBS$b[j], conditionMessage(e))); NA_real_ })
-}
-
 ## Chunked so the master prints progress to the job log
 chunks <- split(seq_len(nrow(JOBS)), ceiling(seq_len(nrow(JOBS)) / max(NUM.CORES, ceiling(nrow(JOBS) / 40))))
 cat(sprintf("stability bootstrap start: %d tasks x B=%d = %d fits, %d cores\n", nrow(TASKS), B, nrow(JOBS), NUM.CORES)); flush.console()
 ari <- numeric(0); t0 <- Sys.time()
 for (ch in chunks) {
-  r   <- mclapply(ch, run_job, mc.cores = NUM.CORES, mc.preschedule = FALSE)
+  ## One bootstrap replicate per job. It resamples the cells of the dataset by the job's index vector,
+  ## applies the same preparation as to_seurat_counts() in analysis.R (underscore to dash in gene
+  ## names, CsparseMatrix), reruns Normalize/HVG/Scale/PCA/Neighbors/Clusters at the original
+  ## settings, and scores the adjusted Rand index against the reference clusters on the same resampled
+  ## cells. A failed replicate returns NA and the job log names it.
+  r   <- mclapply(ch, function(j) {
+    tk  <- TASKS[JOBS$k[j], ]
+    d   <- CSTAB.INPUTS$data[[tk$dataset]]
+    tryCatch({
+      idx <- CSTAB.INPUTS$idx[[tk$dataset]][, JOBS$b[j]]
+      boot_counts <- d$counts[, idx]
+      rownames(boot_counts) <- gsub("_", "-", rownames(d$counts), fixed = TRUE)
+      colnames(boot_counts) <- make.unique(colnames(d$counts)[idx])
+      boot_counts <- as(boot_counts, "CsparseMatrix")
+      boot_obj <- CreateSeuratObject(counts = boot_counts)
+      boot_obj <- NormalizeData(boot_obj, normalization.method = "LogNormalize", scale.factor = 10000, verbose = FALSE)
+      boot_obj <- FindVariableFeatures(boot_obj, selection.method = "vst", nfeatures = d$nfeatures, verbose = FALSE)
+      boot_obj <- ScaleData(boot_obj, features = rownames(boot_obj), verbose = FALSE)
+      boot_obj <- RunPCA(boot_obj, features = VariableFeatures(boot_obj), verbose = FALSE)
+      boot_obj <- FindNeighbors(boot_obj, reduction = "pca", dims = 1:d$dims_n, annoy.metric = d$metric, verbose = FALSE)
+      boot_obj <- FindClusters(boot_obj, resolution = tk$res, verbose = FALSE)
+      adjustedRandIndex(as.integer(CSTAB.INPUTS$ref[[tk$task]][idx]), as.integer(Idents(boot_obj)))
+    }, error = function(e) { message(sprintf("%s replicate %d: %s", tk$task, JOBS$b[j], conditionMessage(e))); NA_real_ })
+  }, mc.cores = NUM.CORES, mc.preschedule = FALSE)
   ari <- c(ari, vapply(r, function(x) if (is.numeric(x) && length(x) == 1) x else NA_real_, numeric(1)))   # a lost worker stays an NA slot
   el  <- as.numeric(difftime(Sys.time(), t0, units = "mins"))
   cat(sprintf("[%s] %d / %d fits  elapsed %.1f min  eta %.1f min\n", format(Sys.time(), "%H:%M:%S"),

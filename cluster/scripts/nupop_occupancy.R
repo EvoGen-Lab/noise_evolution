@@ -45,36 +45,35 @@ nupop_occupancy_cluster <- function(inputs, species = 7, model = 4,
     ## work_root, which nupop_occupancy_cluster() places beside R's session
     ## temp directory rather than inside it, so each worker's files stay
     ## independent of every other worker.
-    nupop_predict_window <- function(seg_seq, core_from, core_to, species = 7, model = 4,
-                                     work_root = tempdir()) {
-      n <- nchar(seg_seq)
-      ## NuPoP scores sequences of at least 148 bp, one nucleosome plus one base
-      if (n < 148) return(rep(NA_real_, core_to - core_from + 1))
-      wd <- tempfile(pattern = sprintf("nupop_pid%d_", Sys.getpid()), tmpdir = work_root)
-      dir.create(wd, recursive = TRUE)
-      old_wd <- setwd(wd)
-      on.exit({ setwd(old_wd); unlink(wd, recursive = TRUE) }, add = TRUE)
-
-      st <- seq(1, n, by = 80)
-      writeLines(c(">window", substring(seg_seq, st, pmin(st + 79, n))), "window.fa")
-      invisible(utils::capture.output(NuPoP::predNuPoP("window.fa", species = species, model = model)))
-      pred <- paste0("window.fa_Prediction", model, ".txt")
-      if (!file.exists(pred)) return(NULL)
-
-      ## Columns are Position, P.start, Occup, N/L, Affinity. NULL skips a column.
-      tab  <- scan(pred, what = list(0L, NULL, 0, NULL, NULL), skip = 1, quiet = TRUE)
-      occ  <- rep(NA_real_, n)
-      keep <- tab[[1]] >= 1 & tab[[1]] <= n & tab[[3]] >= 0
-      occ[tab[[1]][keep]] <- tab[[3]][keep]
-      occ[core_from:core_to]
-    }
-
     parallel::mclapply(seq_len(nrow(tasks)), function(i) {
       s  <- chroms[[tasks$seqid[i]]]
       ws <- max(1, tasks$start[i] - flank)
       we <- min(nchar(s), tasks$end[i] + flank)
-      nupop_predict_window(substr(s, ws, we), tasks$start[i] - ws + 1, tasks$end[i] - ws + 1,
-                           species = species, model = model, work_root = work_root)
+      local({
+        seg_seq <- substr(s, ws, we)
+        core_from <- tasks$start[i] - ws + 1
+        core_to <- tasks$end[i] - ws + 1
+        n <- nchar(seg_seq)
+        ## NuPoP scores sequences of at least 148 bp, one nucleosome plus one base
+        if (n < 148) return(rep(NA_real_, core_to - core_from + 1))
+        wd <- tempfile(pattern = sprintf("nupop_pid%d_", Sys.getpid()), tmpdir = work_root)
+        dir.create(wd, recursive = TRUE)
+        old_wd <- setwd(wd)
+        on.exit({ setwd(old_wd); unlink(wd, recursive = TRUE) }, add = TRUE)
+
+        st <- seq(1, n, by = 80)
+        writeLines(c(">window", substring(seg_seq, st, pmin(st + 79, n))), "window.fa")
+        invisible(utils::capture.output(NuPoP::predNuPoP("window.fa", species = species, model = model)))
+        pred <- paste0("window.fa_Prediction", model, ".txt")
+        if (!file.exists(pred)) return(NULL)
+
+        ## Columns are Position, P.start, Occup, N/L, Affinity. NULL skips a column.
+        tab  <- scan(pred, what = list(0L, NULL, 0, NULL, NULL), skip = 1, quiet = TRUE)
+        occ  <- rep(NA_real_, n)
+        keep <- tab[[1]] >= 1 & tab[[1]] <= n & tab[[3]] >= 0
+        occ[tab[[1]][keep]] <- tab[[3]][keep]
+        occ[core_from:core_to]
+      })
     }, mc.cores = cores, mc.preschedule = FALSE)
   }
 

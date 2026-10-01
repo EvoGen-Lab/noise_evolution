@@ -28,66 +28,8 @@ library('parallel')
 
 source("functions.R")
 
-## One bootstrap draw of the co-expression decomposition. draw: one element of make_coexpr_draws().
-## resid: the RESID list (genes x cells per dataset, including HYB.COMB). HYB.SC, HYB.SE and HYB.COMB
-## are resampled with the same H draw because they are the same cells; the per-gene ploidy factors
-## are fixed, so every draw rescales Rhyb identically. Returns total/cis/trans/dpar_sc/dpar_se at the
-## upper-triangle pair positions; this is the unit of work a cluster worker does.
-coexpr_bootstrap_one <- function(draw, resid) {
-  d <- coexpr_decompose(list(
-    MIX.SC = resid$MIX.SC[, draw$SC], MIX.SE = resid$MIX.SE[, draw$SE],
-    HYB.SC = resid$HYB.SC[, draw$H],  HYB.SE = resid$HYB.SE[, draw$H],
-    HYB.COMB = resid$HYB.COMB[, draw$H]),
-    ploidy_f = attr(resid, "ploidy_f"))   # fixed per-gene factors, so each draw rescales Rhyb the same way
-  p  <- nrow(resid$MIX.SC)
-  up <- which(upper.tri(matrix(0, p, p)))
-  list(total = d$total[up], cis = d$cis[up], trans = d$trans[up], dpar_sc = d$dpar_sc[up], dpar_se = d$dpar_se[up])
-}
-
-## The five decompositions the co-expression bootstrap tracks, in the order coexpr_bootstrap_one()
-## returns them.
+## The five decompositions the co-expression bootstrap tracks, in the order each draw returns them.
 .COEXPR_PARTS <- c("total", "cis", "trans", "dpar_sc", "dpar_se")
-
-## Streaming accumulator for the co-expression bootstrap SE. Holding every draw (a B x pairs matrix
-## per contrast) costs O(B x pairs) memory and pairs grows as p^2. A standard deviation needs only
-## sum(x) and sum(x^2) per pair, so folding in each chunk's draws keeps peak memory at
-## O(chunk_size x pairs) and the raw draws can be discarded. p: number of genes (nrow of a RESID
-## matrix), used to build the upper-triangle index once. Tracks the parts in .COEXPR_PARTS.
-coexpr_acc_init <- function(p) {
-  up <- which(upper.tri(matrix(0, p, p)))
-  z  <- numeric(length(up))
-  sums <- unlist(lapply(.COEXPR_PARTS, function(nm) setNames(list(z, z), paste0(c("sum_", "sumsq_"), nm))), recursive = FALSE)
-  c(list(up = up, n = 0L), sums)
-}
-
-## Folds one chunk of coexpr_bootstrap_one() results (a list of per-draw lists) into the running
-## sums and draw count; the caller can discard chunk_results afterwards.
-coexpr_acc_update <- function(acc, chunk_results) {
-  acc$n <- acc$n + length(chunk_results)
-  for (nm in .COEXPR_PARTS) {
-    m <- do.call(rbind, lapply(chunk_results, `[[`, nm))
-    acc[[paste0("sum_", nm)]]   <- acc[[paste0("sum_", nm)]]   + colSums(m)
-    acc[[paste0("sumsq_", nm)]] <- acc[[paste0("sumsq_", nm)]] + colSums(m^2)
-  }
-  acc
-}
-
-## Finishes the accumulator into the CB structure: for each part a data.frame of
-## gene_i/gene_j/est/se/z/p, plus lambda. est is the point estimate pt, se the bootstrap SD from the
-## running sums, z = est/se and p the two-sided normal tail.
-coexpr_acc_finalize <- function(resid, pt, acc) {
-  p  <- nrow(resid$MIX.SC); gn <- rownames(resid$MIX.SC)
-  ij <- arrayInd(acc$up, c(p, p))
-  base <- data.frame(gene_i = gn[ij[, 1]], gene_j = gn[ij[, 2]])
-
-  se_of <- function(s, ss) sqrt(pmax(0, (ss - s^2 / acc$n) / (acc$n - 1)))
-  mk <- function(est, s, ss) { se <- se_of(s, ss)
-    data.frame(base, est = est, se = se, z = est / se, p = 2 * pnorm(-abs(est / se))) }
-
-  parts <- lapply(setNames(.COEXPR_PARTS, .COEXPR_PARTS), function(nm)
-    mk(pt[[nm]][acc$up], acc[[paste0("sum_", nm)]], acc[[paste0("sumsq_", nm)]]))
-  c(parts, list(lambda = pt$lambda))
-}
 
 ## Tag arg picks which input/output pair to use, so the same script
 ## serves both the primary run and any additional-seed adequacy check
@@ -121,13 +63,45 @@ cat(sprintf("coexpression bootstrap start: %d genes, B=%d, %d cores, %d chunks\n
             nrow(RESID$MIX.SC), B, NUM.CORES, length(chunks)))
 flush.console()
 
-ACC <- coexpr_acc_init(nrow(RESID$MIX.SC))
+## Streaming accumulator for the co-expression bootstrap SE. Holding every draw (a B x pairs matrix
+## per contrast) costs O(B x pairs) memory and pairs grows as p^2. A standard deviation needs only
+## sum(x) and sum(x^2) per pair, so folding in each chunk's draws keeps peak memory at
+## O(chunk_size x pairs) and the raw draws can be discarded. p: number of genes (nrow of a RESID
+## matrix), used to build the upper-triangle index once. Tracks the parts in .COEXPR_PARTS.
+ACC <- local({
+  p <- nrow(RESID$MIX.SC)
+  up <- which(upper.tri(matrix(0, p, p)))
+  z  <- numeric(length(up))
+  sums <- unlist(lapply(.COEXPR_PARTS, function(nm) setNames(list(z, z), paste0(c("sum_", "sumsq_"), nm))), recursive = FALSE)
+  c(list(up = up, n = 0L), sums)
+})
 
 t0 <- Sys.time(); done <- 0
 for (k in seq_along(chunks)) {
-  chunk.results <- parLapply(cl, DRAWS.COEXPR[chunks[[k]]], coexpr_bootstrap_one,
-                             resid = RESID)
-  ACC <- coexpr_acc_update(ACC, chunk.results)
+  ## One bootstrap draw per task. A draw (from make_coexpr_draws()) resamples the columns of each RESID
+  ## dataset. HYB.SC, HYB.SE and HYB.COMB take the same H draw because they are the same cells, and the
+  ## per-gene ploidy factors are fixed, so every draw rescales Rhyb identically. Each task returns
+  ## total/cis/trans/dpar_sc/dpar_se at the upper-triangle pair positions.
+  chunk.results <- parLapply(cl, DRAWS.COEXPR[chunks[[k]]], function(draw) {
+    d <- coexpr_decompose(list(
+      MIX.SC = RESID$MIX.SC[, draw$SC], MIX.SE = RESID$MIX.SE[, draw$SE],
+      HYB.SC = RESID$HYB.SC[, draw$H],  HYB.SE = RESID$HYB.SE[, draw$H],
+      HYB.COMB = RESID$HYB.COMB[, draw$H]),
+      ploidy_f = attr(RESID, "ploidy_f"))
+    up <- which(upper.tri(matrix(0, nrow(RESID$MIX.SC), nrow(RESID$MIX.SC))))
+    list(total = d$total[up], cis = d$cis[up], trans = d$trans[up], dpar_sc = d$dpar_sc[up], dpar_se = d$dpar_se[up])
+  })
+  ## Fold this chunk's draws into the running sums and draw count; the raw draws are then discarded.
+  ACC <- local({
+    acc <- ACC
+    acc$n <- acc$n + length(chunk.results)
+    for (nm in .COEXPR_PARTS) {
+      m <- do.call(rbind, lapply(chunk.results, `[[`, nm))
+      acc[[paste0("sum_", nm)]]   <- acc[[paste0("sum_", nm)]]   + colSums(m)
+      acc[[paste0("sumsq_", nm)]] <- acc[[paste0("sumsq_", nm)]] + colSums(m^2)
+    }
+    acc
+  })
   rm(chunk.results); gc(FALSE)   # drop this chunk's raw draws before the next one
 
   done <- done + length(chunks[[k]])
@@ -138,7 +112,22 @@ for (k in seq_along(chunks)) {
   flush.console()
 }
 
-CB <- coexpr_acc_finalize(RESID, COEXPR.POINT, ACC)
+## Finishes the accumulator into the CB structure: for each part a data.frame of
+## gene_i/gene_j/est/se/z/p, plus lambda. est is the point estimate pt, se the bootstrap SD from the
+## running sums, z = est/se and p the two-sided normal tail.
+CB <- local({
+  acc <- ACC
+  gn <- rownames(RESID$MIX.SC); p <- length(gn)
+  ij <- arrayInd(acc$up, c(p, p))
+  base <- data.frame(gene_i = gn[ij[, 1]], gene_j = gn[ij[, 2]])
+  parts <- lapply(setNames(.COEXPR_PARTS, .COEXPR_PARTS), function(nm) {
+    est <- COEXPR.POINT[[nm]][acc$up]
+    s   <- acc[[paste0("sum_", nm)]]; ss <- acc[[paste0("sumsq_", nm)]]
+    se  <- sqrt(pmax(0, (ss - s^2 / acc$n) / (acc$n - 1)))      # SD of the draws from the running sums
+    data.frame(base, est = est, se = se, z = est / se, p = 2 * pnorm(-abs(est / se)))
+  })
+  c(parts, list(lambda = COEXPR.POINT$lambda))
+})
 save(CB, file = OUTPUT.FILE)
 
 cat(sprintf("coexpression bootstrap done: %d pairs in %.1f min [tag %s]\n",
