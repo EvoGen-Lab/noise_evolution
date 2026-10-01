@@ -2914,157 +2914,55 @@ for (i in seq_len(nrow(GRID))) {
 }
 save(POWER, file = file.path(OUTPUT.DIR, "power.rda"))
 
-## 10.3 Figure 1: power vs mean expression, panels over N.CELLS x SIZE.RATIO
-open_grid_pdf(file.path(FIGURE.DIR, "extended", "Power.Analysis.grid_mean_by_ncells.pdf"), length(N), length(M))
-for(n in N) {
-  for(m in M) {
-    mat <- t(POWER[m,n,P,])
-    plot_lines(log2(SIZE.RATIO), mat, xlab="SIZE Ratio", ylab="Power",
-               main=paste0("Mean=",MEAN.READS[m]," Sc N.Cells=",N.CELLS[n]),
-               x_at=log2(SIZE.RATIO), x_labels=SIZE.RATIO)
-  }
-}
-legend_page(paste0("SIZE = ", SIZE), "Burst frequency")
-dev.off()
+## Value of each POWER dimension: mean reads (M), cell count (N), burst-frequency SIZE (P), SIZE.RATIO (Q)
+POWER.GRID <- list(M = MEAN.READS, N = N.CELLS, P = SIZE, Q = SIZE.RATIO)
+LOG2.READS.AXIS <- list(at = c(-2, -1, 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10), labels = -2:10, mgp = c(3, 0.4, 0))
 
-open_grid_pdf(file.path(FIGURE.DIR, "extended", "Power.Analysis.1.pdf"), length(N), length(Q))
-for(n in N) {
-  for(q in Q) {
-    mat <- POWER[,n,P,q]
-    plot_lines(log2(MEAN.READS), mat, show_axes = FALSE)
-    axis(2,at=c(0,0.2,0.4,0.6,0.8,1.0),las=1,labels=c("0%","20%","40%","60%","80%","100%"),cex.axis=0.6, mgp=c(3,0.6,0))
-    title(ylab="Power",mgp=c(2,1,0))
-    axis(1,at=c(-2,-1,0,1,2,3,4,5,6,7,8,9,10),labels=-2:10,cex.axis=0.6, mgp=c(3,0.4,0))
-    title(xlab=expression('log'[2]*'(Average Reads per Cell)'),mgp=c(1.2,1,0),cex.lab=0.6)
-    title(main=paste0("SIZE Ratio = ",SIZE.RATIO[q],"\nSc # Cells = ",N.CELLS[n]),cex.main=0.8,line=0.2)
-  }
-}
-legend_page(paste0("SIZE = ", SIZE), "Burst frequency")
-dev.off()
+## 10.3 Figure 1: power vs mean expression, panels over N.CELLS x SIZE.RATIO
+power_line_figure("Power.Analysis.grid_mean_by_ncells.pdf", POWER, POWER.GRID, "N", "M", x = "Q", series = "P",
+  main_fmt = "Mean=%2$s Sc N.Cells=%1$s", legend_labels = paste0("SIZE = ", SIZE), legend_title = "Burst frequency",
+  xlab = "SIZE Ratio", ticks = TRUE)
+power_line_figure("Power.Analysis.1.pdf", POWER, POWER.GRID, "N", "Q", x = "M", series = "P",
+  main_fmt = "SIZE Ratio = %2$s\nSc # Cells = %1$s", legend_labels = paste0("SIZE = ", SIZE), legend_title = "Burst frequency",
+  styled = c(LOG2.READS.AXIS, list(cex_axis = 0.6, xlab = expression('log'[2]*'(Average Reads per Cell)'), xlab_mgp = c(1.2, 1, 0), xlab_cex = 0.6)))
 
 ## 10.4 Supplementary diagnostic grids: every other pairing of the four
 # grid axes (mean, burst frequency, SIZE.RATIO, N.CELLS)
-open_grid_pdf(file.path(FIGURE.DIR, "extended", "Power.Analysis.grid_ncells_by_mean.pdf"), length(Q), length(M))
-for(m in M) {
-  for(q in Q) {
-    mat <- POWER[m,,P,q]
-    plot_lines(N.CELLS, mat, xlab="Sc Cell Count", ylab="Power",
-               main=paste0("Ratio=",SIZE.RATIO[q]," Mean=",MEAN.READS[m]))
-  }
-}
-legend_page(paste0("SIZE = ", SIZE), "Burst frequency")
-dev.off()
-
-open_grid_pdf(file.path(FIGURE.DIR, "extended", "Power.Analysis.grid_logmean_by_size_ratio.pdf"), length(P), length(Q))
-for(p in P) {
-  for(q in Q) {
-    mat <- POWER[,N,p,q]
-    plot_lines(log2(MEAN.READS), mat, xlab="log2(Mean Reads)", ylab="Power",
-               main=paste0("SIZE=",SIZE[p]," Ratio=",SIZE.RATIO[q]))
-  }
-}
-legend_page(paste0("Sc Cells = ", N.CELLS), "Sc Cell Count")
-dev.off()
-
-open_grid_pdf(file.path(FIGURE.DIR, "extended", "Power.Analysis.grid_size_by_ratio.pdf"), length(M), length(Q))
-for(m in M) {
-  for(q in Q) {
-    mat <- t(POWER[m,N,,q])
-    plot_lines(log2(SIZE), mat, xlab=expression('log'[2]*'(SIZE)'), ylab="Power",
-               main=paste0("MEAN=",MEAN.READS[m]," Ratio=",SIZE.RATIO[q]))
-  }
-}
-legend_page(paste0("Sc Cells = ", N.CELLS), "Sc Cell Count")
-dev.off()
-
-open_grid_pdf(file.path(FIGURE.DIR, "extended", "Power.Analysis.grid_sizeratio_by_mean.pdf"), length(P), length(M))
-for(p in P) {
-  for(m in M) {
-    mat <- t(POWER[m,N,p,])
-    plot_lines(log2(SIZE.RATIO), mat, xlab="SIZE.RATIO", ylab="Power",
-               main=paste0("SIZE=",SIZE[p]," Mean=",MEAN.READS[m]),
-               x_at=log2(SIZE.RATIO), x_labels=SIZE.RATIO)
-  }
-}
-legend_page(paste0("Sc Cells = ", N.CELLS), "Sc Cell Count")
-dev.off()
-
-open_grid_pdf(file.path(FIGURE.DIR, "extended", "Power.Analysis.grid_sizeratio_by_ncells_full.pdf"), length(P), length(N))
-for(p in P) {
-  for(n in N) {
-    mat <- t(POWER[M,n,p,])
-    plot_lines(log2(SIZE.RATIO), mat, xlab="SIZE.RATIO", ylab="Power",
-               main=paste0("SIZE=",SIZE[p]," Sc Cell Number=",N.CELLS[n]),
-               x_at=log2(SIZE.RATIO), x_labels=SIZE.RATIO)
-  }
-}
-legend_page(paste0("Mean = ", MEAN.READS), "Reads/cell")
-dev.off()
-
-open_grid_pdf(file.path(FIGURE.DIR, "extended", "Power.Analysis.grid_ncells_by_size_ratio_full.pdf"), length(P), length(Q))
-for(p in P) {
-  for(q in Q) {
-    mat <- t(POWER[M,,p,q])
-    plot_lines(N.CELLS, mat, xlab="Sc Cell Count", ylab="Power",
-               main=paste0("SIZE=",SIZE[p]," Ratio=",SIZE.RATIO[q]))
-  }
-}
-legend_page(paste0("Mean = ", MEAN.READS), "Reads/cell")
-dev.off()
+power_line_figure("Power.Analysis.grid_ncells_by_mean.pdf", POWER, POWER.GRID, "M", "Q", x = "N", series = "P", grid_dim = c("Q", "M"),
+  main_fmt = "Ratio=%2$s Mean=%1$s", legend_labels = paste0("SIZE = ", SIZE), legend_title = "Burst frequency",
+  log_x = FALSE, xlab = "Sc Cell Count")
+power_line_figure("Power.Analysis.grid_logmean_by_size_ratio.pdf", POWER, POWER.GRID, "P", "Q", x = "M", series = "N",
+  main_fmt = "SIZE=%1$s Ratio=%2$s", legend_labels = paste0("Sc Cells = ", N.CELLS), legend_title = "Sc Cell Count",
+  xlab = "log2(Mean Reads)")
+power_line_figure("Power.Analysis.grid_size_by_ratio.pdf", POWER, POWER.GRID, "M", "Q", x = "P", series = "N",
+  main_fmt = "MEAN=%1$s Ratio=%2$s", legend_labels = paste0("Sc Cells = ", N.CELLS), legend_title = "Sc Cell Count",
+  xlab = expression('log'[2]*'(SIZE)'))
+power_line_figure("Power.Analysis.grid_sizeratio_by_mean.pdf", POWER, POWER.GRID, "P", "M", x = "Q", series = "N",
+  main_fmt = "SIZE=%1$s Mean=%2$s", legend_labels = paste0("Sc Cells = ", N.CELLS), legend_title = "Sc Cell Count",
+  xlab = "SIZE.RATIO", ticks = TRUE)
+power_line_figure("Power.Analysis.grid_sizeratio_by_ncells_full.pdf", POWER, POWER.GRID, "P", "N", x = "Q", series = "M",
+  main_fmt = "SIZE=%1$s Sc Cell Number=%2$s", legend_labels = paste0("Mean = ", MEAN.READS), legend_title = "Reads/cell",
+  xlab = "SIZE.RATIO", ticks = TRUE)
+power_line_figure("Power.Analysis.grid_ncells_by_size_ratio_full.pdf", POWER, POWER.GRID, "P", "Q", x = "N", series = "M",
+  main_fmt = "SIZE=%1$s Ratio=%2$s", legend_labels = paste0("Mean = ", MEAN.READS), legend_title = "Reads/cell",
+  log_x = FALSE, xlab = "Sc Cell Count")
 
 ## 10.5 Figure 2: power vs burst frequency, panels over N.CELLS x SIZE.RATIO
-open_grid_pdf(file.path(FIGURE.DIR, "extended", "Power.Analysis.2.pdf"), length(N), length(Q), mar = c(4.5, 3, 2, 1))
-for(n in N) {
-  for(q in Q) {
-    mat <- t(POWER[M,n,,q])
-    plot_lines(log2(SIZE), mat, show_axes = FALSE)
-    axis(2,at=c(0,0.2,0.4,0.6,0.8,1.0),las=1,labels=c("0%","20%","40%","60%","80%","100%"),cex.axis=0.6, mgp=c(3,0.6,0))
-    title(ylab="Power",mgp=c(2,1,0))
-    axis(1,at=log2(SIZE),labels=SIZE,cex.axis=0.55, mgp=c(3,0.7,0), las=2, tcl=-0.3)
-    title(xlab="Burst Frequency (SIZE)",mgp=c(3.3,1,0),cex.lab=0.6)
-    title(main=paste0("SIZE Ratio = ",SIZE.RATIO[q],"\nSc # Cells = ",N.CELLS[n]),cex.main=0.8,line=0.2)
-  }
-}
-legend_page(paste0("Mean = ", MEAN.READS), "Reads/cell")
-dev.off()
-
-open_grid_pdf(file.path(FIGURE.DIR, "extended", "Power.Analysis.grid_size_by_ncells_mean.pdf"), length(N), length(M))
-for(n in N) {
-  for(m in M) {
-    mat <- POWER[m,n,,Q]
-    plot_lines(log2(SIZE), mat, xlab=expression('log'[2]*'(SIZE)'), ylab="Power",
-               main=paste0("Sc Cell Number=",N.CELLS[n]," Mean=",MEAN.READS[m]))
-  }
-}
-legend_page(paste0("Ratio = ", SIZE.RATIO), "SIZE ratio")
-dev.off()
-
-open_grid_pdf(file.path(FIGURE.DIR, "extended", "Power.Analysis.grid_ncells_by_size_mean.pdf"), length(P), length(M))
-for(p in P) {
-  for(m in M) {
-    mat <- POWER[m,,p,Q]
-    plot_lines(N.CELLS, mat, xlab="Sc Cell Count", ylab="Power",
-               main=paste0("SIZE=",SIZE[p]," Mean=",MEAN.READS[m]))
-  }
-}
-legend_page(paste0("Ratio = ", SIZE.RATIO), "SIZE ratio")
-dev.off()
+power_line_figure("Power.Analysis.2.pdf", POWER, POWER.GRID, "N", "Q", x = "P", series = "M", mar = c(4.5, 3, 2, 1),
+  main_fmt = "SIZE Ratio = %2$s\nSc # Cells = %1$s", legend_labels = paste0("Mean = ", MEAN.READS), legend_title = "Reads/cell",
+  styled = list(at = log2(SIZE), labels = SIZE, cex_axis = 0.55, mgp = c(3, 0.7, 0), las = 2, tcl = -0.3,
+                xlab = "Burst Frequency (SIZE)", xlab_mgp = c(3.3, 1, 0), xlab_cex = 0.6))
+power_line_figure("Power.Analysis.grid_size_by_ncells_mean.pdf", POWER, POWER.GRID, "N", "M", x = "P", series = "Q",
+  main_fmt = "Sc Cell Number=%1$s Mean=%2$s", legend_labels = paste0("Ratio = ", SIZE.RATIO), legend_title = "SIZE ratio",
+  xlab = expression('log'[2]*'(SIZE)'))
+power_line_figure("Power.Analysis.grid_ncells_by_size_mean.pdf", POWER, POWER.GRID, "P", "M", x = "N", series = "Q",
+  main_fmt = "SIZE=%1$s Mean=%2$s", legend_labels = paste0("Ratio = ", SIZE.RATIO), legend_title = "SIZE ratio",
+  log_x = FALSE, xlab = "Sc Cell Count")
 
 ## 10.6 Figure 3: power vs mean expression, panels over N.CELLS x SIZE
-open_grid_pdf(file.path(FIGURE.DIR, "extended", "Power.Analysis.3.pdf"), length(N), length(P))
-for(n in N) {
-  for(p in P) {
-    mat <- POWER[,n,p,Q]
-    plot_lines(log2(MEAN.READS), mat, show_axes = FALSE)
-    axis(2,at=c(0,0.2,0.4,0.6,0.8,1.0),las=1,labels=c("0%","20%","40%","60%","80%","100%"),cex.axis=0.6, mgp=c(3,0.6,0))
-    title(ylab="Power",mgp=c(2,1,0))
-    axis(1,at=c(-2,-1,0,1,2,3,4,5,6,7,8,9,10),labels=-2:10,cex.axis=0.55, mgp=c(3,0.4,0))
-    title(xlab=expression('log'[2]*'(Average Reads per Cell)'),mgp=c(1.4,1,0),cex.lab=0.8)
-    title(main=paste0("SIZE = ",SIZE[p],"\nSc # Cells = ",N.CELLS[n]),cex.main=0.8,line=0.2)
-  }
-}
-legend_page(paste0("Ratio = ", SIZE.RATIO), "SIZE ratio")
-dev.off()
+power_line_figure("Power.Analysis.3.pdf", POWER, POWER.GRID, "N", "P", x = "M", series = "Q",
+  main_fmt = "SIZE = %2$s\nSc # Cells = %1$s", legend_labels = paste0("Ratio = ", SIZE.RATIO), legend_title = "SIZE ratio",
+  styled = c(LOG2.READS.AXIS, list(cex_axis = 0.55, xlab = expression('log'[2]*'(Average Reads per Cell)'), xlab_mgp = c(1.4, 1, 0), xlab_cex = 0.8)))
 
 ## 10.7 Heatmap A: power over mean expression x cell count, faceted by burst frequency
 HM.Q <- which.min(abs(SIZE.RATIO - 2))

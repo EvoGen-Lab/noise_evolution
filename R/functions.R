@@ -42,6 +42,7 @@
 ###     class_heatmap_grid() - Figure of class-overlap heatmaps for a table of class-vector pairs (regulatory vectors cleaned with clean_reg()).
 ###     plot_lines() - Plots one line per column of a matrix against a shared x vector, with reference lines at power 0.05 and 0.9.
 ###     legend_page() - One legend page mapping each line color to the value it represents.
+###     power_line_figure() - Multi-panel PDF of power curves from the POWER array: one panel per (outer, inner) pair, one line per series value, with a legend page.
 ###     .sym() - Symmetric axis limits spanning a vector of values plus their SE.
 ###     .se_scatter() - Shared SE-bar scatter body of the three gene-level scatters below.
 ###     plot_contrast_scatter() - Gene-level contrast scatter with SE bars: cis vs trans for one quantity, mean vs burst frequency or rotated burst kinetics for one mode.
@@ -691,6 +692,45 @@ class_heatmap_grid <- function(path, panels, classes, fdr, width, height, mfrow,
     class_overlap_heatmap(vec(pn$y_kind, pn$y_q), vec(pn$x_kind, pn$x_q), fdr = fdr,
                           ylab = lab(pn$y_kind, pn$y_q), xlab = lab(pn$x_kind, pn$x_q))
   }
+  dev.off()
+}
+
+## power_line_figure: one multi-panel PDF of power curves from the POWER array (dimensions M mean reads, N cell
+## count, P burst-frequency SIZE, Q SIZE.RATIO; grid holds the value of each dimension). Panels run over the
+## outer and inner dimension; every panel draws one line per value of the series dimension against the x
+## dimension, with the remaining two dimensions fixed at the panel's values. main_fmt is a sprintf format whose
+## %1$s is the outer and %2$s the inner value. The figure ends with a legend page (legend_labels, legend_title).
+## Plain style (styled = NULL) lets plot_lines() draw the axes (xlab; ticks = TRUE puts exact tick labels on the
+## log-scaled axis). Styled panels draw percent labels on the y axis and a custom x axis described by
+## styled = list(at, labels, cex_axis, mgp, xlab, xlab_mgp, xlab_cex[, las, tcl]). grid_dim = c(rows, columns)
+## overrides the PDF panel layout, which otherwise follows (outer, inner).
+power_line_figure <- function(file, power, grid, outer, inner, x, series, main_fmt, legend_labels, legend_title,
+                              log_x = TRUE, xlab = "", ticks = FALSE, styled = NULL, mar = c(3, 3, 2, 1),
+                              grid_dim = c(outer, inner)) {
+  dim_ix <- c(M = 1, N = 2, P = 3, Q = 4)
+  open_grid_pdf(file.path(FIGURE.DIR, "extended", file), nr = length(grid[[grid_dim[1]]]), nc = length(grid[[grid_dim[2]]]), mar = mar)
+  xv <- if (log_x) log2(grid[[x]]) else grid[[x]]
+  for (o in seq_along(grid[[outer]])) {
+    for (i in seq_along(grid[[inner]])) {
+      idx <- list(M = TRUE, N = TRUE, P = TRUE, Q = TRUE)
+      idx[[outer]] <- o; idx[[inner]] <- i
+      sl  <- do.call(`[`, c(list(power), unname(idx)))
+      mat <- if (dim_ix[[x]] > dim_ix[[series]]) t(sl) else sl
+      main <- sprintf(main_fmt, grid[[outer]][o], grid[[inner]][i])
+      if (is.null(styled)) {
+        if (ticks) plot_lines(xv, mat, xlab = xlab, ylab = "Power", main = main, x_at = xv, x_labels = grid[[x]])
+        else plot_lines(xv, mat, xlab = xlab, ylab = "Power", main = main)
+      } else {
+        plot_lines(xv, mat, show_axes = FALSE)
+        axis(2, at = c(0, 0.2, 0.4, 0.6, 0.8, 1.0), las = 1, labels = c("0%", "20%", "40%", "60%", "80%", "100%"), cex.axis = 0.6, mgp = c(3, 0.6, 0))
+        title(ylab = "Power", mgp = c(2, 1, 0))
+        do.call(axis, c(list(1, at = styled$at, labels = styled$labels, cex.axis = styled$cex_axis, mgp = styled$mgp), styled[intersect(c("las", "tcl"), names(styled))]))
+        title(xlab = styled$xlab, mgp = styled$xlab_mgp, cex.lab = styled$xlab_cex)
+        title(main = main, cex.main = 0.8, line = 0.2)
+      }
+    }
+  }
+  legend_page(legend_labels, legend_title)
   dev.off()
 }
 
