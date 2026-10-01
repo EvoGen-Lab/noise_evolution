@@ -7,6 +7,8 @@ Eight reviewers each read one slice of `functions.R` against its call sites in
 **Line numbers.** The appendices cite line numbers in `functions.R` at commit `8c4f6d8`,
 before the comment pass shortened the file. Use the function names to locate code.
 
+**Latest status.** Items still open, and the structure changes since this review (single-caller functions moved into their caller, `analysis.R` or the only cluster script that calls them; once-called functions coded inline), are in `docs/open_issues.md`. Line numbers and call sites in this document predate that pass.
+
 **Status after the follow-up pass.** Resolved in the working tree (item numbers are those in section 3):
 - Item 1 (MU estimator): the observed fit now takes mu and disp from `.fit_one()`, the same estimator every bootstrap and permutation replicate uses; `glm.nb` supplies only the asymptotic SEs.
 - Item 2 (f\*): `pilot_split_se_one()` records the hybrid-allele covariance from a paired cell bootstrap, and `estimate_f_star()` uses the full contrast variance.

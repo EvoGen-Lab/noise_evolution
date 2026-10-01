@@ -38,6 +38,8 @@ Prefer fixes that avoid cluster reruns. Offer a local recompute path (for exampl
 ## Conventions
 - R files use Windows CRLF line endings. `.sub` SLURM files use Unix LF line endings. `.gitattributes` enforces both. Keep it intact.
 - Check scalar conditions. Use `&&` and `||` only with length-one logical values. A scan of the full codebase for violations is still unfinished.
+- Place a function where it is used. A function with a single caller lives with that caller: nested inside it, or in `analysis/analysis.R`, or, when only one cluster script calls it, in that script right after `source("functions.R")`. `R/functions.R` holds functions with two or more callers, functions shipped to PSOCK workers by name (`fit_counts_offset_row`, `neg_binom_fit_offset`, `.fit_one`), and helpers that the unused Section 15 functions also call.
+- Code a step that runs once in the script. A function called from one place and not passed to `apply`/`lapply`/`parLapply` becomes an inline block (`local({ ... })` in `analysis/analysis.R`), with its concept comment above the call. Keep a function when it is an apply target, has several callers, or is exercised by a unit check.
 - Select Seurat columns by name, never by position (Seurat v5 changes `FindMarkers` output order).
 - Validate numeric inputs at function entry (for example `BSIZE` in `SPLIT.FITS`).
 - Do not commit data, `.rda` checkpoints, or cluster output. Keep them in `.gitignore`.
