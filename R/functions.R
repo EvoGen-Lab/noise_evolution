@@ -13,7 +13,7 @@
 ###     console_start() / console_stop() - Per-section console transcript (section{N}_console.txt).
 ###   1. OFFSET NEGATIVE-BINOMIAL FIT
 ###     neg_binom_fit_offset() - Offset NB fit for one gene: rate (mu) and NB size (disp) from .fit_one(), with glm.nb asymptotic log-scale SEs; disp = Inf when a Poisson-vs-NB pre-check finds no overdispersion.
-###     fit_counts_offset() - Matrix version: fit_counts_offset_row() over every gene (row) against its exposure vector.
+###     fit_counts_offset() - Matrix version: fit_counts_offset_row() over every gene (row) against its exposure vector; optionally splits genes across a PSOCK cluster, shipping the functions the fit needs.
 ###     .fit_one() - The pipeline's single NB estimator (mu = sum(y)/sum(exposure), disp by 1-D likelihood given mu): observed fits, every bootstrap and permutation replicate, and the power grid.
 ###     .fit_split() - Splits a pooled sample by a pre-drawn permutation and fits each half with `fit` (default .fit_one()); the gene-level null and the power grid share it.
 ###   1b. INTERNAL-PILOT SPLIT FRACTION (f*)
@@ -21,8 +21,7 @@
 ###     pilot_split_se() - Serial wrapper running pilot_split_se_one() across a gene set, for a quick local check.
 ###     estimate_f_star() - Pooled optimal split fraction (f*) for the mean and noise axes, from the pilot SEs and the full hybrid allele-contrast variance.
 ###     split_indices_by_depth() - Depth-matched split of depth-ordered hybrid cells at an arbitrary fraction.
-###     fit_counts_offset_row() - One gene's NB fit and derived columns (DISP, MU, VAR, FANO, CV, BFREQ, BSIZE), the single place those are built; the unit parLapply distributes across genes.
-###     fit_counts_offset_parallel() - Runs fit_counts_offset_row() across all genes on an already-open cluster.
+###     fit_counts_offset_row() - One gene's NB fit and derived columns (DISP, MU, VAR, FANO, CV, BFREQ, BSIZE), the single place those are built.
 ###     .fstar_from_r() - Closed-form optimal split fraction f* from the parent/hybrid noise ratio r.
 ###   2. GENE FILTER (marginal information only; never on a contrast)
 ###     mad_lower() - Lower outlier cutoff (median minus k MAD) on the log10 scale, adapting to any sequencing depth.
@@ -308,9 +307,31 @@ neg_binom_fit_offset <- function(y, exposure) {
 ## Fits every gene (row) of a genes x cells matrix against one shared exposure vector
 ## with neg_binom_fit_offset() and returns a per-gene table: DISP (NB size), MU, their log
 ## SEs, MEAN_CT, N_EXPR, and derived VAR, FANO, CV, BFREQ (= DISP) and BSIZE (= MU / DISP).
-fit_counts_offset <- function(mat, exposure) {
+## cl is optional: NULL fits on one core; a PSOCK cluster from parallel::makeCluster() splits
+## the genes into one chunk per worker, each chunk carrying all cells for its genes. A PSOCK
+## worker starts with an empty workspace, so the functions the fit needs are sent to it here:
+## fit_counts_offset_row() and everything it reaches are found from the code itself
+## (codetools::findGlobals), so a new dependency of the fit reaches the workers without
+## editing a list. Genes are fit independently, so chunks need no communication.
+fit_counts_offset <- function(mat, exposure, cl = NULL) {
   stopifnot(ncol(mat) == length(exposure))
-  do.call(rbind, lapply(seq_len(nrow(mat)), fit_counts_offset_row, mat = mat, exposure = exposure))
+  if (is.null(cl))
+    return(do.call(rbind, lapply(seq_len(nrow(mat)), fit_counts_offset_row, mat = mat, exposure = exposure)))
+
+  needed <- character(); todo <- "fit_counts_offset_row"
+  while (length(todo)) {
+    f <- todo[1]; todo <- todo[-1]
+    if (f %in% needed) next
+    needed <- c(needed, f)
+    todo   <- c(todo, intersect(codetools::findGlobals(get(f, envir = globalenv()), merge = TRUE), ls(globalenv(), all.names = TRUE)))
+  }
+  chunk_id   <- cut(seq_len(nrow(mat)), length(cl), labels = FALSE)
+  mat_chunks <- lapply(split(seq_len(nrow(mat)), chunk_id), function(i) mat[i, , drop = FALSE])
+  parallel::clusterEvalQ(cl, suppressPackageStartupMessages(library(MASS)))
+  parallel::clusterExport(cl, c("fit_counts_offset", needed), envir = globalenv())
+  fit_chunks <- parallel::parLapply(cl, mat_chunks, fit_counts_offset, exposure = exposure)
+  ## unname() before rbind() keeps the gene row names unprefixed by the chunk labels.
+  do.call(rbind, unname(fit_chunks))
 }
 
 ## ============================================================
@@ -467,13 +488,6 @@ fit_counts_offset_row <- function(i, mat, exposure) {
     VAR = mu + mu^2 / disp, FANO = 1 + mu / disp, CV = sqrt(1 / disp + 1 / mu),
     BFREQ = disp, BSIZE = mu / disp,
     row.names = rownames(mat)[i])
-}
-
-## Runs fit_counts_offset_row() for every gene of mat on an open cluster `cl` and
-## row-binds the results into the fit_counts_offset() table.
-fit_counts_offset_parallel <- function(mat, exposure, cl) {
-  rows <- parLapply(cl, seq_len(nrow(mat)), fit_counts_offset_row, mat = mat, exposure = exposure)
-  do.call(rbind, rows)
 }
 
 ## ============================================================
@@ -799,7 +813,7 @@ add_burst_contrasts <- function(df) {
 ## Errors-in-variables summary of mean vs bfreq divergence across genes for one mode. Subtracting the
 ## mean squared bootstrap SE from the raw variances and covariance removes the measurement-noise
 ## attenuation, so rho_mean_disp estimates the correlation of the underlying contrasts.
-eiv_components <- function(BURST.CONTRASTS, mode = c("total","cis","trans","dom","dpar_sc","dpar_se","inh_sc","inh_se")) {
+eiv_components <- function(BURST.CONTRASTS, mode = .OUT_MODES) {
   mode <- match.arg(mode)
   X  <- BURST.CONTRASTS[[paste0("mean_",mode,"_est")]]; sx <- BURST.CONTRASTS[[paste0("mean_",mode,"_se")]]
   Y  <- BURST.CONTRASTS[[paste0("bfreq_",mode,"_est")]]; sy <- BURST.CONTRASTS[[paste0("bfreq_",mode,"_se")]]
@@ -833,7 +847,7 @@ eiv_boot_ci <- function(BURST.CONTRASTS, mode, B = 2000, seed = 1, probs = c(0.0
 }
 
 ## One row per mode: n, raw and attenuation-corrected mean-bfreq correlation, and its bootstrap CI.
-eiv_table <- function(BURST.CONTRASTS, modes = c("total","cis","trans","dom","dpar_sc","dpar_se","inh_sc","inh_se"), B = 2000) {
+eiv_table <- function(BURST.CONTRASTS, modes = .OUT_MODES, B = 2000) {
   do.call(rbind, lapply(modes, function(m) {
     e <- eiv_components(BURST.CONTRASTS, m); b <- eiv_boot_ci(BURST.CONTRASTS, m, B = B)
     data.frame(mode = m, n = e["n"],
@@ -888,7 +902,7 @@ plot_cis_trans <- function(BURST.CONTRASTS, quantity = c("mean", "bfreq", "bsize
 ## Mean vs burst-frequency (NB dispersion) contrast for one mode, with SE bars. Both axes share one
 ## symmetric range. The tilt of the cloud is not the true slope; the attenuation-corrected coupling is
 ## in eiv_table().
-plot_mean_bfreq <- function(BURST.CONTRASTS, mode = c("total","cis","trans","dom","dpar_sc","dpar_se","inh_sc","inh_se"), main = NULL, bar_col = adjustcolor(COLOR.GREY[["dark"]], 0.33), pt_col = "black") {
+plot_mean_bfreq <- function(BURST.CONTRASTS, mode = .OUT_MODES, main = NULL, bar_col = adjustcolor(COLOR.GREY[["dark"]], 0.33), pt_col = "black") {
   mode <- match.arg(mode)
   if (is.null(main)) main <- paste0("mean vs noise: ", mode)
   .se_scatter(BURST.CONTRASTS[[paste0("mean_", mode, "_est")]],  BURST.CONTRASTS[[paste0("mean_", mode, "_se")]],
@@ -901,7 +915,7 @@ plot_mean_bfreq <- function(BURST.CONTRASTS, mode = c("total","cis","trans","dom
 ##   x = net mean change (mean contrast; bfreq + bsize equals it exactly)
 ##   y = kinetic balance (bfreq - bsize; right of zero is frequency-led, below is amplitude-led)
 ## Both columns carry SEs propagated in add_burst_contrasts().
-plot_burst_kinetics <- function(BURST.CONTRASTS, mode = c("total","cis","trans","dom","dpar_sc","dpar_se","inh_sc","inh_se"), main = NULL, bar_col = adjustcolor(COLOR.GREY[["dark"]], 0.33), pt_col = "black") {
+plot_burst_kinetics <- function(BURST.CONTRASTS, mode = .OUT_MODES, main = NULL, bar_col = adjustcolor(COLOR.GREY[["dark"]], 0.33), pt_col = "black") {
   mode <- match.arg(mode)
   if (is.null(main)) main <- paste0("burst kinetics: ", mode)
   .se_scatter(BURST.CONTRASTS[[paste0("mean_", mode, "_est")]], BURST.CONTRASTS[[paste0("mean_", mode, "_se")]],
@@ -4387,43 +4401,13 @@ collapse_to_orf <- function(mat, raw.ids, label = "") {
 ## 1/MU and 1/DISP contribute to CV2 = 1/MU + 1/DISP at this dataset's own
 ## depth.
 ##
-## cl is optional: NULL fits on one core; a PSOCK cluster from
-## parallel::makeCluster() splits genes across workers. The driver creates
-## one cluster and reuses it for all four sources (Section 9.3 of analysis.R).
+## cl is optional and passed to fit_counts_offset(): NULL fits on one core; a PSOCK cluster from
+## parallel::makeCluster() splits genes across workers. The driver creates one cluster and
+## reuses it for all four sources (Section 9.3 of analysis.R).
 fit_source <- function(mat, cl = NULL) {
 
   exposure <- colSums(mat) / mean(colSums(mat))
-
-  if (is.null(cl)) {
-
-    fit <- fit_counts_offset(mat, exposure)
-
-  } else {
-
-    # Genes are split into one chunk per worker. Each gene is fit
-    # independently, so chunks need no communication, and every chunk
-    # carries all cells for its genes.
-    n.genes   <- nrow(mat)
-    n.workers <- length(cl)
-    chunk.id  <- cut(seq_len(n.genes), n.workers, labels = FALSE)
-    chunks    <- split(seq_len(n.genes), chunk.id)
-    mat.chunks <- lapply(chunks, function(i) mat[i, , drop = FALSE])
-
-    # PSOCK workers start with an empty workspace, so the packages and
-    # functions they need are sent here, right before use; a reused cluster
-    # therefore needs no state from an earlier call.
-    parallel::clusterEvalQ(cl, library(MASS))
-    parallel::clusterExport(cl, c("fit_counts_offset", "neg_binom_fit_offset"),
-                             envir = globalenv())
-
-    fit.chunks <- parallel::parLapply(cl, mat.chunks, function(m, e) {
-      fit_counts_offset(m, e)
-    }, e = exposure)
-
-    # unname() before rbind() keeps the ORF row names unprefixed, so the
-    # later merge(..., by = "ORF") matches.
-    fit <- do.call(rbind, unname(fit.chunks))
-  }
+  fit <- fit_counts_offset(mat, exposure, cl = cl)
 
   # BFREQ and BSIZE are read straight from fit_counts_offset()'s own
   # BFREQ and BSIZE columns, the same DISP-based definition documented

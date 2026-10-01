@@ -385,8 +385,6 @@ SPLIT.FIT.EXPOS <- list(
 ## ---- Local parallel cluster: NB fits for the 13 split datasets ----
 NUM.CORES.LOCAL <- max(1, detectCores() - 1)
 cl <- makeCluster(NUM.CORES.LOCAL, type = "PSOCK")
-clusterExport(cl, "FUNCTIONS.FILE")
-invisible(clusterEvalQ(cl, { suppressPackageStartupMessages(library(MASS)); source(FUNCTIONS.FILE) }))
 
 t0 <- Sys.time()
 SPLIT.FIT.RESULTS <- vector("list", length(SPLIT.FIT.MATS))
@@ -394,7 +392,7 @@ names(SPLIT.FIT.RESULTS) <- names(SPLIT.FIT.MATS)
 for (nm in names(SPLIT.FIT.MATS)) {
 cat(sprintf("[%s] fitting %-10s %d genes, %d cells\n", format(Sys.time(), "%H:%M:%S"), nm, nrow(SPLIT.FIT.MATS[[nm]]), ncol(SPLIT.FIT.MATS[[nm]])))
   flush.console()
-  SPLIT.FIT.RESULTS[[nm]] <- fit_counts_offset_parallel(SPLIT.FIT.MATS[[nm]], SPLIT.FIT.EXPOS[[nm]], cl)
+  SPLIT.FIT.RESULTS[[nm]] <- fit_counts_offset(SPLIT.FIT.MATS[[nm]], SPLIT.FIT.EXPOS[[nm]], cl = cl)
 }
 cat(sprintf("split fits done: %d datasets in %.1f min\n", length(SPLIT.FIT.RESULTS), as.numeric(difftime(Sys.time(), t0, units = "mins"))))
 stopCluster(cl)
