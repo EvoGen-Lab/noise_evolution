@@ -260,6 +260,23 @@ GENE.CELL.FRAC <- 0.10  # detected-cell floor as a fraction of the smallest data
 HYB.CELLS <- intersect(colnames(HYB.SC), colnames(HYB.SE))
 HYB.SC <- HYB.SC[, HYB.CELLS]; HYB.SE <- HYB.SE[, HYB.CELLS]
 
+## Cell QC from precomputed library size (lib). A vector input lets hybrid alleles
+## be pooled so each cell receives one keep/drop decision. Only the lower tail is
+## trimmed (median - k MAD on the log10 scale), which retains large G2 cells that
+## carry more RNA. min_reads is a floor for empty barcodes that rarely binds in
+## typical data. Returns list(keep = logical per cell, lib_cut = cutoff used).
+qc_cell_keep <- function(lib, k = 3, min_reads = 500) {
+  ## Lower cutoff on the log10 scale. Working in logs makes the rule
+  ## scale-free, so one setting adapts to any sequencing depth.
+  mad_lower <- function(x, k = 3) {
+    lx <- log10(x[x > 0])
+    10^(median(lx) - k * mad(lx))
+  }
+
+  lib_cut <- max(min_reads, mad_lower(lib, k))
+  list(keep = lib >= lib_cut, lib_cut = lib_cut)
+}
+
 # Cells are filtered first, on all genes, so depth reflects the full library
 QC.STATS <- list(
   MIX.SC = list(lib = colSums(MIX.SC), det = colSums(MIX.SC > 0)),
@@ -350,6 +367,64 @@ save(PILOT.MATS, PILOT.EXPOS, PILOT.GENES, N.BOOT, SEED.BOOT, file = file.path(I
 load(file.path(OUTPUT.DIR, "gene_pilot_output.rda"))
 ## ---- end cluster round trip ----
 
+## Pooled f* for the mean and noise axes. A and B are pooled across
+## genes BEFORE the ratio and sqrt, not averaged per-gene afterward,
+## because squaring a bootstrap SE roughly doubles its relative
+## error, and a per-gene ratio of two such squared, independently
+## noisy quantities amplifies sampling noise, worse for size than for
+## mean, since dispersion estimates are inherently noisier to begin
+## with. Median pooling is used because both A and B are right-
+## skewed: low expression inflates the mean axis, low true
+## overdispersion inflates the noise axis. Neither is a reason to
+## drop a gene, since both just mean less information for that gene's
+## Sc/Se contrast, the same way a small true effect size makes
+## detection harder without indicating a problem with the gene.
+##
+## A is the per-cell variance of the hybrid allele contrast, n_h times
+## var(SC) + var(SE) - 2 cov(SC, SE): the two alleles are measured in the same
+## cells, so their estimates co-vary and the contrast variance is smaller than
+## the sum of the two marginal variances. B is the parental term; the parents
+## are different cells, so its two variances add.
+## pilot: PILOT.SE table from pilot_split_se_one(); n_h: number of hybrid cells.
+## Returns f_mean / f_disp (split fractions), r_mean / r_disp (B * Nh / A), the
+## number of genes pooled on each axis, and the median allele correlation
+## (cor_mean / cor_disp) that the covariance term removes.
+estimate_f_star <- function(pilot, n_h) {
+  ## Closed-form balance point. With A the hybrid-driven variance
+  ## coefficient and B the fixed, non-tunable parent-driven term,
+  ## setting SE_cis(f) = SE_trans(f) gives a quadratic in f whose root
+  ## in (0, 0.5] is f* = [(2+r) - sqrt(r^2+4)] / (2r), r = B*Nh/A.
+  ## r -> 0 (parent term negligible) recovers f* -> 0.5, the even
+  ## split, correctly, since there is then no asymmetry to correct for.
+  .fstar_from_r <- function(r) {
+    out <- rep(0.5, length(r))
+    ok <- is.finite(r) & abs(r) > 1e-8
+    out[ok] <- ((2 + r[ok]) - sqrt(r[ok]^2 + 4)) / (2 * r[ok])
+    out
+  }
+
+  cov_cols <- c("HYB_logmu_cov", "HYB_logdisp_cov")
+  if (!all(cov_cols %in% names(pilot)))
+    stop("PILOT.SE has no hybrid-allele covariance columns (", paste(cov_cols, collapse = ", "),
+         "); rerun gene_pilot.R so pilot_split_se_one() records them.")
+  A_mean <- n_h * (pilot$HYB.SC_logmu_se^2   + pilot$HYB.SE_logmu_se^2   - 2 * pilot$HYB_logmu_cov)
+  B_mean <-        pilot$MIX.SC_logmu_se^2   + pilot$MIX.SE_logmu_se^2
+  A_disp <- n_h * (pilot$HYB.SC_logdisp_se^2 + pilot$HYB.SE_logdisp_se^2 - 2 * pilot$HYB_logdisp_cov)
+  B_disp <-        pilot$MIX.SC_logdisp_se^2 + pilot$MIX.SE_logdisp_se^2
+
+  ok_mean <- is.finite(A_mean) & is.finite(B_mean) & A_mean > 0
+  ok_disp <- is.finite(A_disp) & is.finite(B_disp) & A_disp > 0
+
+  r_mean <- median(B_mean[ok_mean]) * n_h / median(A_mean[ok_mean])
+  r_disp <- median(B_disp[ok_disp]) * n_h / median(A_disp[ok_disp])
+
+  list(f_mean = .fstar_from_r(r_mean), f_disp = .fstar_from_r(r_disp),
+       r_mean = r_mean, r_disp = r_disp,
+       n_genes_mean = sum(ok_mean), n_genes_disp = sum(ok_disp),
+       cor_mean = median((pilot$HYB_logmu_cov   / (pilot$HYB.SC_logmu_se   * pilot$HYB.SE_logmu_se))[ok_mean],   na.rm = TRUE),
+       cor_disp = median((pilot$HYB_logdisp_cov / (pilot$HYB.SC_logdisp_se * pilot$HYB.SE_logdisp_se))[ok_disp], na.rm = TRUE))
+}
+
 # Estimate split fraction for mean and noise
 SPLIT.FRAC <- estimate_f_star(PILOT.SE, n_h = ncol(HYB.SC))
 
@@ -404,6 +479,30 @@ SPLIT.FITS <- SPLIT.FIT.RESULTS[c("MIX.SC", "MIX.SE", "HYC.SC", "HYC.SE", "HYT.S
 NCELLS <- c(MIX.SC = ncol(MIX.SC), MIX.SE = ncol(MIX.SE), HYC.SC = ncol(HYC.SC), HYC.SE = ncol(HYC.SE), HYT.SC = ncol(HYT.SC), HYT.SE = ncol(HYT.SE), HYC.SC.N = ncol(HYC.SC.N), HYC.SE.N = ncol(HYC.SE.N), HYT.SC.N = ncol(HYT.SC.N), HYT.SE.N = ncol(HYT.SE.N), HYB.SC = ncol(HYB.SC), HYB.SE = ncol(HYB.SE), HYB.COMB = ncol(HYB.COMB))
 
 ## 2.3 Per-gene contrasts, bootstrap SEs, and permutation null
+
+## Genes whose fit passes in every dataset of `fits`: a finite DISP below 1e6 (a detectable,
+## non-degenerate dispersion), a raw mean count above the dataset's depth-scaled floor, and
+## detection in at least min_expr_frac of the smallest dataset's cells. depth is a named vector of
+## mean reads per cell for each dataset. The mean floor min_mean applies at the shallowest dataset
+## and scales up in proportion to depth; the detected-cell floor is one absolute number of cells,
+## so every dataset faces the same information requirement. The fit tables must be gene-aligned.
+## Returns the passing gene names.
+fit_gene_filter <- function(fits, ncells, depth, min_mean = 0.001, min_expr_frac = 0.10) {
+  groups <- names(fits)
+  stopifnot(all(groups %in% names(ncells)), all(groups %in% names(depth)))
+  genes <- rownames(fits[[1]])
+  for (g in groups)
+    if (!identical(rownames(fits[[g]]), genes))
+      stop("fit frames are not gene-aligned; reorder to a common gene set first")
+  floor_mean <- min_mean * depth[groups] / min(depth[groups])
+  n_min <- ceiling(min_expr_frac * min(ncells[groups]))
+  pass <- Reduce(`&`, lapply(groups, function(g) {
+    fit <- fits[[g]]
+    is.finite(fit$DISP) & fit$DISP < 1e6 & fit$MEAN_CT >= floor_mean[[g]] & fit$N_EXPR >= n_min
+  }))
+  genes[which(pass)]
+}
+
 # Gene filter: requires an NB fit with a finite, non-degenerate
 # dispersion estimate, a mean count above a floor that scales with dataset
 # depth, and detection in an absolute number of cells set from the smallest
@@ -432,6 +531,31 @@ CONTRAST.FITS <- lapply(SPLIT.FITS, function(fr) data.frame(MU   = as.numeric(as
 # against it, and ploidy_adjust_dpar() removes it from the dpar estimates below.
 PLOIDY.SHIFT <- ploidy_shift(CONTRAST.MATS, CONTRAST.EXPOS)[GENES]
 
+## Pre-draws every permutation label vector (one list entry per permutation, all modes) from one
+## seeded stream, so each gene is tested against the same relabelings. total/trans/dpar/inh shuffle
+## pooled cell labels, cis swaps alleles within each hybrid cell, dom pairs random parent cells.
+make_perms <- function(ncells, NPERM, seed = 1) {
+  set.seed(seed)
+  nSC <- ncells[["MIX.SC"]]; nSE <- ncells[["MIX.SE"]]
+  nHYC <- ncells[["HYC.SC"]]; nHYT <- ncells[["HYT.SC"]]
+  nHYC.N <- ncells[["HYC.SC.N"]]; nHYT.N <- ncells[["HYT.SC.N"]]
+  nHYB <- ncells[["HYB.COMB"]]
+  lapply(seq_len(NPERM), function(b) list(
+    total     = sample.int(nSC + nSE),
+    cis       = runif(nHYC) < 0.5,
+    cis_n     = runif(nHYC.N) < 0.5,
+    transSC   = sample.int(nSC + nHYT),
+    transSE   = sample.int(nSE + nHYT),
+    transSC_n = sample.int(nSC + nHYT.N),
+    transSE_n = sample.int(nSE + nHYT.N),
+    dom_i   = sample.int(nSC, nHYB, replace = TRUE),
+    dom_j   = sample.int(nSE, nHYB, replace = TRUE),
+    dparSC  = sample.int(nHYB + nSC),
+    dparSE  = sample.int(nHYB + nSE),
+    inhSC   = sample.int(nHYB + nSC),
+    inhSE   = sample.int(nHYB + nSE)))
+}
+
 DRAWS <- make_draws(NCELLS, N.BOOT, SEED.BOOT)
 PERMS <- make_perms(NCELLS, N.PERM, SEED.PERM)
 
@@ -452,6 +576,67 @@ save(CONTRAST.MATS, CONTRAST.EXPOS, CONTRAST.FITS, GENES, DRAWS, N.BOOT, file = 
 load(file.path(OUTPUT.DIR, "gene_boot1_output.rda"))           # BOOT.CONTRASTS
 load(file.path(OUTPUT.DIR, "gene_perm_output.rda"))            # PERM.RESULTS
 ## ---- end cluster round trip (gene_boot2_output.rda is loaded in 2.4) ----
+
+## Puts the dpar noise estimates on the per-genome scale of the haploid
+## parents. df: BURST.CONTRASTS after add_burst_contrasts(). fits:
+## CONTRAST.FITS. shift: ploidy_shift() output. Each adjusted column keeps its
+## raw twin as <col>_raw, and the column ploidy_shift records the shift applied.
+## Mean columns pass through untouched. SEs stay as bootstrapped.
+ploidy_adjust_dpar <- function(df, fits, shift) {
+  s   <- unname(shift[df$gene])
+  hyb <- fits$HYB.COMB[df$gene, ]
+  cv_h <- 1 / hyb$MU + 2^s / hyb$DISP                # latent term scaled by 2^s
+  df$ploidy_shift <- s
+  for (sp in c("sc", "se")) {
+    par  <- fits[[if (sp == "sc") "MIX.SC" else "MIX.SE"]][df$gene, ]
+    cv_p <- 1 / par$MU + 1 / par$DISP
+    ec <- function(q) paste0(q, "_dpar_", sp, "_est")
+    for (q in c("bfreq", "bsize", "kbal", "cv2")) df[[paste0(ec(q), "_raw")]] <- df[[ec(q)]]
+    df[[ec("bfreq")]] <- df[[ec("bfreq")]] - s
+    df[[ec("bsize")]] <- df[[ec("bsize")]] + s
+    df[[ec("kbal")]]  <- df[[ec("kbal")]]  - 2 * s
+    df[[ec("cv2")]]   <- ifelse(is.finite(cv_h) & cv_h > 0 & is.finite(cv_p) & cv_p > 0, log2(cv_h) - log2(cv_p), NA_real_)
+  }
+  df
+}
+
+## Benjamini-Hochberg FDR across genes for every permutation p-value
+## column. Each contrast and quantity (for example mean_cis or
+## bfreq_dpar_sc) is its own family of genes, so a q-value answers
+## "what fraction of genes called in THIS contrast are expected to be
+## false". p.adjust() leaves NAs in place, so genes with undefined fits
+## are not counted as tests. Downstream classifiers read the _q columns.
+fdr_columns <- function(df, method = "BH") {
+  pc <- grep("_p(_ploidy|_ind)?$", names(df), value = TRUE)
+  for (nm in pc) df[[sub("_p(?=(_ploidy|_ind)?$)", "_q", nm, perl = TRUE)]] <- p.adjust(df[[nm]], method = method)
+  df
+}
+
+## One row per mode: n, raw and attenuation-corrected mean-bfreq correlation, and its bootstrap CI.
+eiv_table <- function(BURST.CONTRASTS, modes = .OUT_MODES, B = 2000) {
+  ## Gene-resampling bootstrap CI for statistics of eiv_components(). The CI is NA when more than half
+  ## of the draws are non-finite.
+  eiv_boot_ci <- function(BURST.CONTRASTS, mode, B = 2000, seed = 1, probs = c(0.025, 0.975), stats = c("rho_mean_disp")) {
+    base <- eiv_components(BURST.CONTRASTS, mode); set.seed(seed); n <- nrow(BURST.CONTRASTS)
+    draws <- replicate(B, eiv_components(BURST.CONTRASTS[sample.int(n, n, TRUE), , drop = FALSE], mode)[stats])
+    if (length(stats) == 1) draws <- matrix(draws, nrow = 1, dimnames = list(stats, NULL))
+    na_frac <- vapply(stats, function(s) mean(!is.finite(draws[s, ])), numeric(1))
+    ## Draws with negative Vm or Vs give NaN. When most draws fail, the survivors are a biased subset
+    ## that can fall outside [-1, 1], so the CI is reported as NA.
+    ci <- apply(draws, 1, quantile, probs = probs, na.rm = TRUE)
+    ci[, na_frac > 0.5] <- NA_real_
+    list(estimate = base[stats], ci = ci, na_frac = na_frac)
+  }
+
+  do.call(rbind, lapply(modes, function(m) {
+    e <- eiv_components(BURST.CONTRASTS, m); b <- eiv_boot_ci(BURST.CONTRASTS, m, B = B)
+    data.frame(mode = m, n = e["n"],
+      rho_raw = round(e["rho_raw_mean_disp"], 3),
+      rho_mean_disp = round(e["rho_mean_disp"], 3),
+      ms_lo = round(b$ci[1], 3), ms_hi = round(b$ci[2], 3),
+      ms_na = round(b$na_frac, 3), row.names = NULL)
+  }))
+}
 
 # BURST.CONTRASTS holds, per gene, the bootstrap point estimate and SE for the mean
 # and dispersion (disp) contrasts in each of the eight modes, plus two derived
@@ -662,6 +847,34 @@ class_overlap_heatmap(DOM.MEAN.CLASS, DOM.BSIZE.CLASS, levels_a = DOM.CLASS, lev
 class_overlap_heatmap(DOM.MEAN.CLASS, DOM.KBAL.CLASS, levels_a = DOM.CLASS, levels_b = DOM.CLASS, xlab = "frequency-size balance class", ylab = "mean class", rng = RNG.DOM)
 dev.off()
 
+## plot_burst_kinetics_sig() (Figure 4): scatter of net mean change (x) against kinetic balance
+## (y = bfreq - bsize) with SE bars, read from the mean_ and kbal_ columns add_burst_contrasts() stores. The
+## rotation separates the two burst kinetics: movement along x is a change in total mean, movement
+## along y is a shift between frequency and size. A gene is significant when its kinetic balance
+## differs from 0 by a two-sided z-test (nominal p < sig); significant points are drawn black over
+## grey n.s. points. Returns invisibly a data frame of gene, y, sy, p and direction (sig_pos,
+## sig_neg or ns) for the companion barplot.
+plot_burst_kinetics_sig <- function(BURST.CONTRASTS, mode = "total", sig = 0.05, main = NULL, bar_col = adjustcolor(COLOR.GREY[["dark"]], 0.25), sig_col = "black", ns_col = COLOR.GREY[["mid"]]) {
+  x <- BURST.CONTRASTS[[paste0("mean_", mode, "_est")]]; sx <- BURST.CONTRASTS[[paste0("mean_", mode, "_se")]]
+  y <- BURST.CONTRASTS[[paste0("kbal_", mode, "_est")]]; sy <- BURST.CONTRASTS[[paste0("kbal_", mode, "_se")]]
+  ok <- is.finite(x) & is.finite(y) & is.finite(sx) & is.finite(sy)
+  genes <- BURST.CONTRASTS$gene[ok]; x <- x[ok]; sx <- sx[ok]; y <- y[ok]; sy <- sy[ok]
+  p   <- 2 * pnorm(-abs(y) / sy)
+  dir <- ifelse(!is.finite(p) | p >= sig, "ns", ifelse(y > 0, "sig_pos", "sig_neg"))
+  ks  <- data.frame(gene = genes, y = y, sy = sy, p = p, direction = dir, stringsAsFactors = FALSE)
+  sig_idx <- dir != "ns"
+  if (is.null(main)) main <- paste0("burst kinetics: ", mode)
+  op <- par(pty = "s"); on.exit(par(op))
+  plot(NA, xlim = .sym(x, sx), ylim = .sym(y, sy), xlab = "net mean change (log2)", ylab = "frequency - amplitude (kinetic balance)", main = main)
+  abline(h = 0, v = 0, col = COLOR.GREY[["dark"]])
+  segments(x - sx, y, x + sx, y, col = bar_col)        # bars first
+  segments(x, y - sy, x, y + sy, col = bar_col)
+  points(x[!sig_idx], y[!sig_idx], pch = 16, cex = 0.5, col = ns_col)  # ns below
+  points(x[ sig_idx], y[ sig_idx], pch = 16, cex = 0.5, col = sig_col)  # sig on top
+  legend("topleft", legend = c(paste0("sig (p<", sig, ")"), "n.s."), col = c(sig_col, ns_col), pch = 16, bty = "n", cex = 0.8)
+  invisible(ks)
+}
+
 ## Figure 4: rotated burst kinetics, z-test shaded + barplot.
 pdf(file.path(FIGURE.DIR, "main/04_burst_kinetics.pdf"), width = 9, height = 5, useDingbats = FALSE)
 par(mfrow = c(1, 2), mar = c(5, 4.5, 2, 1))
@@ -672,6 +885,27 @@ barplot(bp_counts,
         names.arg = c("sig > 0", "sig < 0", "n.s."),
         ylab   = "# of genes", las = 1, border = NA)
 dev.off()
+
+## plot_violins() (Figure 7, supplement): ggplot2 violins of a burst quantity by regulatory class (left panel)
+## and dominance class (right panel).
+plot_violins <- function(value, reg_class, dom_class, ylab = "kinetic balance (burst frequency - amplitude)") {
+  stopifnot(requireNamespace("ggplot2", quietly=TRUE))
+  df <- rbind(
+    data.frame(value=value, class=factor(reg_class,levels=REG.CLASS), panel="Regulatory"),
+    data.frame(value=value, class=factor(dom_class, levels=DOM.CLASS), panel="Dominance"))
+  df <- df[is.finite(df$value) & !is.na(df$class), ]
+  df$panel <- factor(df$panel, levels=c("Regulatory","Dominance"))
+  cols <- c(COLOR.LIST.1, COLOR.LIST.2[setdiff(names(COLOR.LIST.2),names(COLOR.LIST.1))])
+  ggplot2::ggplot(df, ggplot2::aes(class, value, fill=class)) +
+    ggplot2::geom_hline(yintercept=0, colour=COLOR.GREY[["mid"]], linewidth=0.3) +
+    ggplot2::geom_violin(scale="width", trim=TRUE, colour=COLOR.GREY[["dark"]], linewidth=0.3) +
+    ggplot2::geom_boxplot(width=0.12, outlier.size=0.3, fill="white", colour=COLOR.GREY[["dark"]], linewidth=0.3) +
+    ggplot2::facet_wrap(~panel, scales="free_x") +
+    ggplot2::scale_fill_manual(values=cols) +
+    ggplot2::labs(x=NULL, y=ylab) +
+    ggplot2::theme_classic(base_size=11) +
+    ggplot2::theme(axis.text.x=ggplot2::element_text(angle=35, hjust=1), legend.position="none", strip.background=ggplot2::element_blank())
+}
 
 ## Figure 7, moved to supplement: violins of kinetic balance by class.
 # Values range roughly -1 to 1 (log2 units). Regulatory classes left
@@ -820,6 +1054,35 @@ RESID <- list(
   HYB.SE = nb_residuals(HYB.SE[CO.GENES, ], EXPO.HYB,    CONTRAST.FITS$HYB.SE[CO.GENES, ]),
   HYB.COMB = nb_residuals(HYB.COMB[CO.GENES, ], EXPO.HYB, CONTRAST.FITS$HYB.COMB[CO.GENES, ]))
 
+## Per-gene factor f that puts a HYB.COMB residual correlation on the
+## per-genome scale of the haploid parents. Adjusted correlation of genes i
+## and j is R_ij * f_i * f_j.
+## Derivation. The residual of gene i is (y - mu) / sd, so the correlation of
+## two genes is mu_i * mu_j * cov(L_i, L_j) / (sd_i * sd_j), where L is the
+## latent deviation. Private allele noise does not correlate across genes, so
+## the shared term e carries the whole covariance. Summing alleles leaves that
+## covariance unchanged and only lowers each gene's latent variance by
+## g = 2^-s (see ploidy_shift), which raises theta by 1/g, so the
+## haploid-equivalent theta is g * theta. The covariance stays fixed, so the
+## haploid-equivalent correlation equals the hybrid's times sd_h / sd_c for
+## each gene, with sd_h^2 = mu + mu^2 / theta and sd_c^2 = mu + mu^2 / (g *
+## theta). That ratio squared is
+## f^2 = g * (mu + theta) / (mu + g * theta), which is at most 1 and equals g
+## when counts are large. Adjusted hybrid correlations therefore shrink toward
+## zero, in step with the lower latent variance of a single genome.
+## fit: CONTRAST.FITS$HYB.COMB rows for the genes (MU, DISP), as in
+## gene_reliability(). shift: ploidy_shift() values for the same genes.
+## A gene with no finite shift or theta gets f = 1 (no adjustment) and is
+## counted by the caller.
+ploidy_coexpr_factor <- function(fit, shift) {
+  g  <- 2^(-shift); mu <- fit$MU; th <- fit$DISP
+  f2 <- g * (mu + th) / (mu + g * th)
+  f2[!is.finite(th) & is.finite(g)] <- 1     # Poisson limit, no latent noise to rescale
+  f  <- sqrt(f2)
+  f[!is.finite(f)] <- 1
+  setNames(f, rownames(fit))
+}
+
 # Summing the two hybrid alleles lowers each gene's latent variance and leaves
 # the between-gene covariance alone, so HYB.COMB residual correlations run
 # higher than a haploid genome's. ploidy_coexpr_factor() gives each gene the
@@ -856,6 +1119,37 @@ save(RESID, COEXPR.POINT, DRAWS.COEXPR, file = file.path(INPUT.DIR, "coexpr_boot
 load(file.path(OUTPUT.DIR, "coexpr_boot1_output.rda"))   # CB ($total, $cis, $trans, $lambda)
 
 ## 4.3 Bootstrap reliability check
+
+## Checks that the observed bootstrap SE of co-expression pairs tracks the NB-predicted attenuation
+## factor sqrt(rho_i * rho_j), to guide a rho floor for gene-set inclusion. Draws the SE-vs-attenuation
+## scatter with binned medians on the open device.
+## pairs: one of CB$total/cis/trans (data.frame with gene_i, gene_j, se). rho: named vector from
+## gene_reliability() covering all genes in pairs. floors: candidate rho cutoffs, each reported with
+## its retained pair count and median SE so the floor can be read off where SE stabilizes.
+check_coexpr_reliability <- function(pairs, rho, n_bins = 10, floors = seq(0.1, 0.8, by = 0.1)) {
+  attn <- sqrt(rho[pairs$gene_i] * rho[pairs$gene_j])
+  ok   <- is.finite(attn) & is.finite(pairs$se)
+  attn <- attn[ok]; se <- pairs$se[ok]
+
+  bins  <- cut(attn, breaks = quantile(attn, seq(0, 1, length.out = n_bins + 1)), include.lowest = TRUE)
+  bin_x <- tapply(attn, bins, median)
+  bin_y <- tapply(se,   bins, median)
+  bin_n <- tapply(se,   bins, length)
+
+  floor_summary <- do.call(rbind, lapply(floors, function(f) {
+    keep <- attn >= f
+    data.frame(floor = f, n_pairs = sum(keep),
+               median_se = if (any(keep)) median(se[keep]) else NA_real_)
+  }))
+
+ plot(attn, se, pch = 19, cex = 0.4, col = COLOR.GREY[["mid"]], xlab = expression(sqrt(rho[i] * rho[j])), ylab = "bootstrap SE", main = "Co-expression SE vs predicted reliability")
+  lines(bin_x, bin_y, type = "b", pch = 19, lwd = 2)
+
+  list(spearman = cor(attn, se, method = "spearman"),
+       bins = data.frame(x = bin_x, y = bin_y, n = bin_n),
+       floor_summary = floor_summary)
+}
+
 # Tests whether pairwise bootstrap SE tracks the NB-predicted
 # attenuation factor sqrt(rho_i * rho_j).
 RHO.TOTAL <- gene_reliability(CONTRAST.FITS[c("MIX.SC", "MIX.SE")], GENES)
@@ -867,10 +1161,29 @@ REL.CHECK$spearman
 REL.CHECK$floor_summary
 
 ## 4.4 Bootstrap adequacy check
+
+## Verifies that a loaded coexpr_boot*_output.rda CB object has the pair count CO.GENES implies,
+## so a stale or mismatched cluster output is caught before it reaches CB.CLASS, the pair lists or the
+## seed comparison. The same check is applied to every CB object loaded.
+check_coexpr_pairs <- function(cb, expected_pairs, label) {
+  if (nrow(cb$total) != expected_pairs)
+  stop(sprintf("%s has %d pairs but CO.GENES expects %d; rerun the matching cluster job", label, nrow(cb$total), expected_pairs))
+}
+
 # Confirms the bootstrap SE has converged at N.COEXPR
 EXPECTED.PAIRS <- choose(length(CO.GENES), 2)
 CB2 <- local({ load(file.path(OUTPUT.DIR, "coexpr_boot2_output.rda")); CB })
 check_coexpr_pairs(CB2, EXPECTED.PAIRS, "coexpr_boot2_output.rda")
+
+## Two-seed adequacy check for the co-expression bootstrap. If SE has not converged at this B, SEs
+## underestimated by chance in one run can make many pairs look spuriously significant. cb1, cb2: two
+## CB objects at the same B and gene set that differ only in seed; rows are assumed to share the same
+## gene_i/gene_j order (true when both come from the same CO.GENES and upper.tri() call). mode: which
+## contrast's SE to compare.
+coexpr_seed_compare <- function(cb1, cb2, mode = c("total", "cis", "trans", "dpar_sc", "dpar_se")) {
+  mode <- match.arg(mode)
+  seed_compare_core(cb1[[mode]]$se, cb2[[mode]]$se, main = sprintf("%s: bootstrap SE, two seeds", mode), count_label = "n_pairs")
+}
 
 pdf(file.path(FIGURE.DIR, "extra/S_coexpr_seed_compare.pdf"), width = 15, height = 3.2, useDingbats = FALSE)
 par(mfrow = c(1, 5))
@@ -884,6 +1197,45 @@ do.call(rbind, lapply(names(SEED.CHECK), function(m) {
 }))
 
 ## 4.5 Pair-level classification
+
+## Pair-level regulatory classification. total, cis and trans p-values are BH-adjusted across all tested
+## pairs before classifying, which controls the false discovery rate over the quarter-million
+## simultaneous pair tests. CB: coexpr_bootstrap() output (or the cluster-assembled equivalent).
+## One row per pair, with the five-class call from cis/trans carried alongside so downstream steps
+## read the same BH-based class.
+coexpr_class_table <- function(CB, sig = 0.05) {
+  padj_total <- p.adjust(CB$total$p, "BH")
+  padj_cis   <- p.adjust(CB$cis$p,   "BH")
+  padj_trans <- p.adjust(CB$trans$p, "BH")
+  cls <- classify_reg(padj_cis, padj_trans, CB$cis$est, CB$trans$est, sig = sig)$class
+  data.frame(gene_i = CB$total$gene_i, gene_j = CB$total$gene_j,
+             total_est = CB$total$est, total_padj = padj_total,
+             cis_est   = CB$cis$est,   cis_padj   = padj_cis,
+             trans_est = CB$trans$est, trans_padj = padj_trans,
+             class = cls, stringsAsFactors = FALSE)
+}
+
+## Pair-level dominance classification, the co-expression analog of
+## classify_dom() at the single-gene level. Compares the hybrid's own
+## pairwise correlation (both alleles summed, allele identity ignored,
+## dpar_sc/dpar_se from coexpr_decompose(), on the per-genome scale set by
+## ploidy_coexpr_factor()) against each parent's
+## pairwise correlation separately: does the hybrid pair's co-expression
+## resemble Sc, resemble Se, both (Additive), neither in a consistent
+## direction (Over/Underdominant), or match neither parent while the two
+## parents also differ from each other. Same two-test, BH-adjusted-first
+## pattern as coexpr_class_table(), just fed classify_dom() instead of
+## classify_reg().
+coexpr_dom_class_table <- function(CB, sig = 0.05) {
+  padj_dpar_sc <- p.adjust(CB$dpar_sc$p, "BH")
+  padj_dpar_se <- p.adjust(CB$dpar_se$p, "BH")
+  cls <- classify_dom(padj_dpar_sc, padj_dpar_se, CB$dpar_sc$est, CB$dpar_se$est, sig = sig)$class
+  data.frame(gene_i = CB$dpar_sc$gene_i, gene_j = CB$dpar_sc$gene_j,
+             dpar_sc_est = CB$dpar_sc$est, dpar_sc_padj = padj_dpar_sc,
+             dpar_se_est = CB$dpar_se$est, dpar_se_padj = padj_dpar_se,
+             class = cls, stringsAsFactors = FALSE)
+}
+
 # CB.CLASS gives the five-way regulatory class per pair
 # CB.DOM.CLASS is the co-expression analog of the single-gene dominance classification
 CB.CLASS <- coexpr_class_table(CB)
@@ -898,6 +1250,25 @@ dev.off()
 table(factor(CB.DOM.CLASS$class, levels = DOM.CLASS))
 
 ## 4.6 Co-expression permutation null
+
+## Draws for the joint permutation null of the total, cis, trans, dpar_sc and dpar_se spectra
+## (rank-matched axis testing); one draw yields all five null spectra. idx: a random re-split of the
+## pooled parent cells into pseudo-Sc / pseudo-Se groups of the original sizes (total's null).
+## swap: an independent per-hybrid-cell coin flip of which allele is labelled Sc vs Se (cis's null).
+## idx_dpar_sc / idx_dpar_se: random re-splits of the pooled Sc-parent + hybrid cells (resp. Se-parent
+## + hybrid cells) into pseudo-parent and pseudo-hybrid groups of the original sizes. The total and
+## cis draws are independent, so trans null = total null - cis null carries the same independence as
+## the real estimates; the dpar nulls have no identity linking them to the other spectra.
+make_coexpr_perm_draws <- function(nSC, nSE, nH, B, seed = 1) {
+  set.seed(seed)
+  n_tot <- nSC + nSE
+  lapply(seq_len(B), function(b) list(
+    idx  = sample(n_tot),
+    swap = sample(c(TRUE, FALSE), nH, replace = TRUE),
+    idx_dpar_sc = sample(nSC + nH),
+    idx_dpar_se = sample(nSE + nH)))
+}
+
 # Builds null distributions of candidate-axis magnitude for the total,
 # cis, and trans matrices. Rank-matched testing needs the null resolved
 # at every rank up to N.KEEP, matching n_top in coexpr_axis_validate()
@@ -934,6 +1305,27 @@ COEXPR.AXES   <- c("total", "cis", "trans", "dpar_sc", "dpar_se")
 RANK.CHECK.LIST <- list()
 CANDIDATE.LIST  <- list()
 
+## Identifies candidate axes from coexpr_rank_check(): the top n_candidate axes by |eigenvalue|, each
+## with its share of total squared-eigenvalue variance (axis_var) and its effective number of driving
+## genes (axis_pr, the participation ratio 1/sum(loading^4) of a unit-length loading vector).
+## sig_axes keeps axes with axis_var >= var_floor and axis_pr >= eff_genes_min. label prefixes the
+## console message for a dropped axis. The returned table lists the top 15 axes.
+coexpr_candidate_axes <- function(rank_check, n_candidate = 40, var_floor = 0.01, eff_genes_min = 10, label = "") {
+  n_candidate <- min(n_candidate, length(rank_check$values) - 1)
+  axis_order  <- order(abs(rank_check$values), decreasing = TRUE)[1:n_candidate]
+  axis_var    <- setNames(rank_check$values[axis_order]^2 / sum(rank_check$values^2), axis_order)
+  axis_pr     <- setNames(sapply(axis_order, function(k) 1 / sum(rank_check$vectors[, k]^4)), axis_order)
+
+  sig_axes <- as.integer(names(axis_var)[axis_var >= var_floor])
+  dropped  <- sig_axes[axis_pr[as.character(sig_axes)] < eff_genes_min]
+  if (length(dropped) > 0)
+  cat(sprintf("%s: dropping axis %d (eff_genes = %.1f, below floor of %d)\n", label, dropped, axis_pr[as.character(dropped)], eff_genes_min), sep = "")
+  sig_axes <- setdiff(sig_axes, dropped)
+
+  list(axis_var = axis_var, axis_pr = axis_pr, sig_axes = sig_axes,
+       table = data.frame(axis = axis_order, var = axis_var, eff_genes = axis_pr)[1:15, ])
+}
+
 for (ax in COEXPR.AXES) {
   pdf(sprintf(file.path(FIGURE.DIR, "extra/S_coexpr_rank_check_%s_own.pdf"), ax), width = 5, height = 5, useDingbats = FALSE)
   RANK.CHECK.LIST[[ax]] <- coexpr_rank_check(COEXPR.POINT[[ax]], k = 1)
@@ -959,6 +1351,39 @@ RANK.CHECK.DPAR.SE <- RANK.CHECK.LIST$dpar_se
 # against CO.GENES
 
 EXTRA.AXES.LIST <- list()
+
+## Fits a two-component Gaussian mixture (mixtools::normalmixEM, random starts) to each candidate
+## axis's gene loadings, assigns genes to the low or high pole by posterior probability (> 0.5), and
+## runs BP GO enrichment on each pole (>= 5 genes) against co_genes. Writes one page per axis to
+## pdf_path and returns a named list (axis<k>) with variance and participation-ratio stats, mixture
+## parameters, the two gene sets and their enrichment results.
+coexpr_axis_mixtures <- function(rank_check, mat, sig_axes, axis_var, axis_pr, co_genes, pdf_path, axis_label = "axis") {
+  out <- list()
+  pdf(pdf_path, width = 6, height = 5, useDingbats = FALSE)
+  for (k in sig_axes) {
+    load_k <- setNames(rank_check$vectors[, k], rownames(mat))
+    mix_k  <- tryCatch(normalmixEM(load_k, k = 2), error = function(e) NULL)
+    if (is.null(mix_k)) next
+
+    plot(mix_k, loglik = FALSE, density = TRUE, xlab2 = sprintf("loading on %s %d", axis_label, k))
+
+    lo <- which.min(mix_k$mu); hi <- which.max(mix_k$mu)
+    post_lo  <- setNames(mix_k$posterior[, lo], names(load_k))
+    post_hi  <- setNames(mix_k$posterior[, hi], names(load_k))
+    genes_lo <- names(post_lo)[post_lo > 0.5]
+    genes_hi <- names(post_hi)[post_hi > 0.5]
+
+    enrich_lo <- if (length(genes_lo) >= 5) simplify(enrichGO(gene = genes_lo, universe = co_genes, OrgDb = org.Sc.sgd.db, keyType = "ORF", ont = "BP")) else NULL
+    enrich_hi <- if (length(genes_hi) >= 5) simplify(enrichGO(gene = genes_hi, universe = co_genes, OrgDb = org.Sc.sgd.db, keyType = "ORF", ont = "BP")) else NULL
+
+    out[[paste0("axis", k)]] <- list(
+      var_explained = axis_var[as.character(k)], eff_genes = axis_pr[as.character(k)],
+      mu = mix_k$mu[c(lo, hi)], sigma = mix_k$sigma[c(lo, hi)], lambda = mix_k$lambda[c(lo, hi)],
+      genes_lo = genes_lo, genes_hi = genes_hi, enrich_lo = enrich_lo, enrich_hi = enrich_hi)
+  }
+  dev.off()
+  out
+}
 
 for (ax in COEXPR.AXES) {
   EXTRA.AXES.LIST[[ax]] <- coexpr_axis_mixtures(
@@ -988,6 +1413,33 @@ load(file.path(OUTPUT.DIR, "coexpr_perm_output.rda"))   # NULL.TOTAL.RANKS, NULL
 NULL.RANKS.LIST <- list(total = NULL.TOTAL.RANKS, cis = NULL.CIS.RANKS, trans = NULL.TRANS.RANKS, dpar_sc = NULL.DPAR.SC.RANKS, dpar_se = NULL.DPAR.SE.RANKS)
 
 VALIDATED.LIST <- list()
+
+## Tests each of the top n_top candidate axes against its own permutation null: the k-th largest
+## candidate axis (by variance share) against the null's k-th largest squared eigenvalue
+## (rank-matched, no single shared threshold). p-values use the add-one rule, BH q-values run across
+## the candidate axes, and extra_axes (from coexpr_axis_mixtures()) is restricted to axes with
+## q < alpha. Returns that list with the p-value table and the validated axis numbers.
+coexpr_axis_validate <- function(rank_check, axis_var, null_ranks, extra_axes, n_top = 15, alpha = 0.05) {
+  total_ss       <- sum(rank_check$values^2)
+  candidate_axes <- as.integer(names(axis_var)[1:n_top])
+  candidate_raw  <- axis_var[as.character(candidate_axes)] * total_ss
+  ## Add-one correction (as in class_identity_overlap()'s kappa_p),
+  ## since a leading axis routinely beats every one of the permutation
+  ## draws: without it, mean(null >= obs) reports an exact 0 that
+  ## overstates precision no finite permutation count can support,
+  ## rather than the true floor of 1 / (n_perm + 1)
+  candidate_p    <- sapply(seq_along(candidate_raw), function(k) (1 + sum(null_ranks[, k] >= candidate_raw[k])) / (1 + nrow(null_ranks)))
+
+  ## Benjamini-Hochberg FDR across the candidate axes of this matrix.
+  ## Rank-matched nulls make the axis tests positively related, the
+  ## setting in which BH keeps the false discovery rate at its nominal level.
+  candidate_q    <- p.adjust(candidate_p, method = "BH")
+  validated_axes <- candidate_axes[candidate_q < alpha]
+
+  list(table = data.frame(axis = candidate_axes, raw = candidate_raw, p_value = candidate_p, q_value = candidate_q),
+       validated_axes = validated_axes,
+       extra_axes = extra_axes[intersect(paste0("axis", validated_axes), names(extra_axes))])
+}
 
 for (ax in COEXPR.AXES) {
   VALIDATED.LIST[[ax]] <- coexpr_axis_validate(
@@ -1202,6 +1654,74 @@ RESID.ALLELE <- list(
 RHO.HYB.SC <- gene_reliability(CONTRAST.FITS["HYB.SC"], GENES)
 RHO.HYB.SE <- gene_reliability(CONTRAST.FITS["HYB.SE"], GENES)
 
+## sc, se: HYB.SC / HYB.SE residual matrices, genes x cells, same cell columns, built over all genes
+## (the allele-pair correlation is per gene and needs no shared gene set). rho_sc, rho_se:
+## gene_reliability() on the HYB.SC and HYB.SE fits separately, since the two alleles' reliabilities
+## enter the attenuation sqrt(rho_Sc * rho_Se) individually. Returns the sampled genes, raw and
+## disattenuated correlations with their SEs, the attenuation, and a floor summary.
+check_intrinsic_reliability <- function(sc, se, rho_sc, rho_se, n_per_bin = 40, n_bins = 10, B = 300, seed = 1, floors = seq(0.05, 0.6, by = 0.05)) {
+  ## Bootstrap SE of each row's allele-residual correlation: B hybrid-cell resamples per gene, with the
+  ## SD of the resampled correlations returned per row. Looped per gene since it runs on the few hundred
+  ## genes of the calibration sample.
+  allele_cor_boot_se <- function(sc, se, B = 300, seed = 1) {
+    set.seed(seed)
+    n <- ncol(sc)
+    vapply(seq_len(nrow(sc)), function(i) {
+      a <- sc[i, ]; b <- se[i, ]
+      r <- vapply(seq_len(B), function(k) {
+        idx <- sample.int(n, n, replace = TRUE)
+        x <- a[idx] - mean(a[idx]); y <- b[idx] - mean(b[idx])
+        den <- sqrt(sum(x^2) * sum(y^2))
+        if (den > 0) sum(x * y) / den else NA_real_
+      }, numeric(1))
+      sd(r, na.rm = TRUE)
+    }, numeric(1))
+  }
+
+  ## A reliability-stratified sample of genes for the calibration check: up to n_per_bin genes from each
+  ## quantile bin of the attenuation, so the low-reliability end (sparse among genes overall) is
+  ## represented well enough to see whether the SE flattens there. Seeded for reproducibility.
+  stratified_rho_sample <- function(attn, n_per_bin = 40, n_bins = 10, seed = 1) {
+    set.seed(seed)
+    ok    <- is.finite(attn)
+    bins  <- cut(attn[ok], breaks = quantile(attn[ok], seq(0, 1, length.out = n_bins + 1)), include.lowest = TRUE)
+    genes <- names(attn)[ok]
+    unname(unlist(tapply(genes, bins, function(g) sample(g, min(n_per_bin, length(g))))))
+  }
+
+  genes <- intersect(rownames(sc), rownames(se))
+  attn  <- sqrt(rho_sc[genes] * rho_se[genes])
+  samp  <- stratified_rho_sample(attn, n_per_bin, n_bins, seed)
+
+  rho_obs <- row_cor(sc[samp, , drop = FALSE], se[samp, , drop = FALSE])
+  se_obs  <- allele_cor_boot_se(sc[samp, , drop = FALSE], se[samp, , drop = FALSE], B, seed)
+  a       <- attn[samp]
+  rho_true <- rho_obs / a
+  ## Exact error propagation for a fixed-scale division: SE(x/a) = SE(x)/a
+  se_true  <- se_obs / a
+
+  bins  <- cut(a, breaks = quantile(a, seq(0, 1, length.out = n_bins + 1)), include.lowest = TRUE)
+  bin_x <- tapply(a, bins, median)
+
+  floor_summary <- do.call(rbind, lapply(floors, function(f) {
+    keep <- a >= f
+    data.frame(floor = f, n_genes = sum(keep),
+               median_se_obs  = if (any(keep)) median(se_obs[keep])  else NA_real_,
+               median_se_true = if (any(keep)) median(se_true[keep]) else NA_real_)
+  }))
+
+  op <- par(mfrow = c(1, 2)); on.exit(par(op))
+  plot(a, se_obs, pch = 19, cex = 0.4, col = COLOR.GREY[["mid"]], xlab = expression(sqrt(rho[Sc] * rho[Se])), ylab = "bootstrap SE, raw correlation", main = "Raw allele correlation")
+  lines(bin_x, tapply(se_obs, bins, median), type = "b", pch = 19, lwd = 2)
+
+ plot(a, se_true, pch = 19, cex = 0.4, col = COLOR.GREY[["mid"]], xlab = expression(sqrt(rho[Sc] * rho[Se])), ylab = "bootstrap SE, disattenuated", main = "Disattenuated allele correlation")
+  lines(bin_x, tapply(se_true, bins, median), type = "b", pch = 19, lwd = 2)
+
+  list(genes = samp, rho_obs = rho_obs, se_obs = se_obs,
+       rho_true = rho_true, se_true = se_true, attn = a,
+       floor_summary = floor_summary)
+}
+
 pdf(file.path(FIGURE.DIR, "extra/S_intrinsic_reliability_check.pdf"), width = 9, height = 4.5, useDingbats = FALSE)
 INTR.REL.CHECK <- check_intrinsic_reliability(RESID.ALLELE$HYB.SC, RESID.ALLELE$HYB.SE, RHO.HYB.SC, RHO.HYB.SE)
 dev.off()
@@ -1223,6 +1743,17 @@ DEPTH.COR.SE <- sapply(INTR.SAMP, function(g) cor(RESID.ALLELE$HYB.SE[g, ], DEPT
 
 summary(DEPTH.COR.SC); summary(DEPTH.COR.SE)   # expect both centered near 0, no strong depth bias left in the residuals
 mean(DEPTH.COR.SC > 0); mean(DEPTH.COR.SE > 0)   # expect close to 0.5 if depth bias is not systematic in one direction
+
+## Correlation between two residual vectors with a third variable (per-cell
+## depth) partialled out. Used to test whether an allele-pair correlation
+## reflects shared biological noise or leftover depth structure the NB
+## offset failed to remove; if depth is the driver, this collapses toward
+## zero relative to the raw correlation, and if not, it tracks the raw
+## correlation closely.
+partial_cor_depth <- function(x, y, z) {
+  rxy <- cor(x, y); rxz <- cor(x, z); ryz <- cor(y, z)
+  (rxy - rxz * ryz) / sqrt((1 - rxz^2) * (1 - ryz^2))
+}
 
 RHO.PARTIAL <- sapply(INTR.SAMP, function(g) partial_cor_depth(RESID.ALLELE$HYB.SC[g, ], RESID.ALLELE$HYB.SE[g, ], DEPTH.CELL))
 
@@ -1348,6 +1879,38 @@ t(sapply(ANOVA.BY.CLASS.CLEAN, function(a) c(F = a$f, df1 = a$df1, df2 = a$df2, 
 lapply(ANOVA.BY.CLASS,       function(a) a$tukey)
 lapply(ANOVA.BY.CLASS.CLEAN, function(a) a$tukey)
 
+## intrinsic_fraction(mats, expos): intr / (intr + max(extr, 0)) per gene,
+## the share of allele-pair noise that is private to each allele. A gene with no
+## measurable intrinsic noise has fraction 0. Genes without positive allele means,
+## or with no intrinsic and no extrinsic noise, are NA. Returns a numeric vector named by gene.
+## Returns a numeric vector named by gene.
+intrinsic_fraction <- function(mats, expos) {
+  ie   <- intrinsic_extrinsic_components(mats, expos)
+  frac <- ie$intr / (ie$intr + pmax(ie$extr, 0))
+  frac[!ie$good | !is.finite(frac)] <- NA_real_
+  setNames(frac, ie$gene)
+}
+
+## plot_intrinsic_hist() (Figure 8): histogram of the intrinsic fraction (genes with a
+## fraction in [0, 1]), with regulatory-class medians (triangles above) and
+## dominance-class medians (inverted triangles below). The legend sits at
+## topleft, clear of the tall bars on the right.
+plot_intrinsic_hist <- function(frac, reg_class, dom_class, brk = 30, main = NULL) {
+  ok <- is.finite(frac) & frac>=0 & frac<=1
+  f  <- frac[ok]; rc <- reg_class[ok]; dc <- dom_class[ok]
+  h  <- hist(f, breaks=seq(0,1,length.out=brk+1), plot=FALSE)
+  top <- max(h$counts)
+  plot(h, col=COLOR.GREY[["light"]], border="white", xlim=c(0, 1), ylim=c(-top*0.06, top*1.20), xlab="intrinsic / (intrinsic + extrinsic)", ylab="# of genes", main=if(is.null(main)) "" else main)
+  med <- function(cls, lv) vapply(lv, function(k) median(f[cls==k],na.rm=TRUE), numeric(1))
+  rm <- med(rc, REG.CLASS); dm <- med(dc, DOM.CLASS)
+  yR <- top*1.10; yD <- -top*0.04
+  for (i in seq_along(rm))
+    if (is.finite(rm[i])) segments(rm[i],0,rm[i],yR, col=COLOR.LIST.1[i], lty=3, lwd=0.7)
+  points(rm, rep(yR,length(rm)), pch=17, col=COLOR.LIST.1, cex=1.1, xpd=NA)
+  points(dm, rep(yD,length(dm)), pch=25, col=COLOR.LIST.2, bg=COLOR.LIST.2, cex=1.1, xpd=NA)
+  legend("topleft", legend=c(REG.CLASS, NA, DOM.CLASS), col=c(COLOR.LIST.1, NA, COLOR.LIST.2), pch=c(rep(17, length(REG.CLASS)), NA, rep(25, length(DOM.CLASS))), pt.bg=c(rep(NA, length(REG.CLASS)), NA, COLOR.LIST.2), bty="n", cex=0.72)
+}
+
 ## Figure 8: intrinsic / extrinsic fraction histogram, Poisson
 # shot-noise corrected
 INTR.FRAC <- intrinsic_fraction(CONTRAST.MATS, CONTRAST.EXPOS)[BURST.CONTRASTS$gene]  # Poisson-corrected
@@ -1456,6 +2019,36 @@ NOISE.VALIDATE <- rbind(
 print(NOISE.VALIDATE)
 
 ## 6.3 Between-species divergence in architecture
+
+## Merges Sc and Se promoter scores on gene identity (inner join: genes
+## present in both tables, whether or not their scores are NA) and adds the
+## between-species shift (Se minus Sc) in each feature. Columns carry _sc/_se
+## suffixes, including tata_motif and polyat_tract, the best-matching
+## sequences. tata_pos_delta and polyat_pos_delta give the shift in where
+## each best match sits (bp upstream of the ATG): a large score or length
+## shift with a small position shift points to a substitution at about the
+## same site, while a large position shift with a small score or length
+## shift is more consistent with an indel moving a similar element, or a
+## jump to a different site. Both score tables must already carry the
+## occ_score column (merge score_promoters_nupop()'s output first).
+##
+## occ_delta is the raw occupancy shift. occ_access_delta flips its sign
+## so that a positive value means more accessible for all three features: a
+## higher TATA score or longer poly(dA:dT) tract and a lower occupancy all
+## mean a more open promoter. The direction tests, concordance bins and
+## candidate tables (analysis.R Sections 6.2 to 6.5) use occ_access_delta
+## for this reason.
+promoter_divergence <- function(sc_scores, se_scores) {
+  m <- merge(sc_scores, se_scores, by = "gene", suffixes = c("_sc", "_se"))
+  m$tata_delta        <- m$tata_score_se - m$tata_score_sc
+  m$tata_pos_delta    <- m$tata_pos_se   - m$tata_pos_sc
+  m$polyat_delta      <- m$polyat_len_se - m$polyat_len_sc
+  m$polyat_pos_delta  <- m$polyat_pos_se - m$polyat_pos_sc
+  m$occ_delta         <- m$occ_score_se  - m$occ_score_sc
+  m$occ_access_delta  <- -m$occ_delta
+  m
+}
+
 # promoter_divergence() merged on gene identity
 ARCH <- promoter_divergence(SCORE.SC, SCORE.SE)
 ARCH <- ARCH[match(BURST.CONTRASTS$gene, ARCH$gene), ]
@@ -1758,6 +2351,43 @@ plot_resolution_sweep(RES.SWEEP.MERGE, "MERGE", FIGURE.DIR, MIN.CLUSTER.CELLS)
 cat(sprintf("All four merged: chosen resolution = %.2f, %d clusters, mean silhouette = %.3f\n",
             RES.SWEEP.MERGE$chosen_res, RES.SWEEP.MERGE$chosen_n_clusters, RES.SWEEP.MERGE$chosen_sil))
 
+## ---- Cluster execution of the stability bootstrap (Section 7.3) ----
+## cluster_stability_inputs: packages everything cluster_stability.R
+## needs. For each dataset it records the candidate resolutions
+## (chosen, plus the coarsest point of the highest-silhouette plateau),
+## the reference partition at each candidate (computed here on the
+## fitted neighbor graph, so the local and cluster sides share one
+## labelling), sparse counts, and the pre-drawn resample matrix. key
+## fingerprints the inputs so the returning output can be matched to
+## them.
+cluster_stability_inputs <- function(sweeps, counts, nfeatures, dims_n, B = 100, seed = 1, metric = "manhattan") {
+  ds <- names(sweeps)
+  tasks <- do.call(rbind, lapply(ds, function(d) {
+    ok <- sweeps[[d]]$grid[sweeps[[d]]$grid$ok, ]
+    rl <- unique(c(sweeps[[d]]$chosen_res, plateau_coarsest(ok)))
+    data.frame(dataset = d, res = rl,
+               role = ifelse(rl == sweeps[[d]]$chosen_res, "chosen", "highest silhouette"),
+               sil = ok$sil[match(rl, ok$res)], n_clusters = ok$n_clusters[match(rl, ok$res)],
+               stringsAsFactors = FALSE)
+  }))
+  tasks$task <- sprintf("%s@%.2f", tasks$dataset, tasks$res)
+  ref <- setNames(lapply(seq_len(nrow(tasks)), function(k)
+    Idents(FindClusters(sweeps[[tasks$dataset[k]]]$obj, resolution = tasks$res[k], verbose = FALSE))), tasks$task)
+  data <- setNames(lapply(ds, function(d) {
+    stopifnot(ncol(counts[[d]]) == ncol(sweeps[[d]]$obj))
+    list(counts = as(counts[[d]], "CsparseMatrix"), nfeatures = nfeatures[[d]], dims_n = dims_n[[d]], metric = metric)
+  }), ds)
+  idx <- setNames(lapply(ds, function(d) make_boot_idx(ncol(counts[[d]]), B, seed)), ds)
+  key <- list(tasks = tasks, cells = lapply(counts, colnames), B = B, seed = seed)
+  list(tasks = tasks, ref = ref, data = data, idx = idx, key = key)
+}
+
+## diet_for_markers: keeps the counts and log-normalized data layers
+## that FindMarkers() reads, which keeps the cluster input file small.
+diet_for_markers <- function(obj) {
+  if (packageVersion("Seurat") >= "5.0.0") DietSeurat(obj, layers = c("counts", "data")) else DietSeurat(obj)
+}
+
 # Stability bootstrap on the cluster. The sweeps above fix the
 # candidate resolutions and reference partitions. cluster_stability.R
 # refits every replicate in parallel, picks each dataset's final
@@ -1778,6 +2408,21 @@ CSTAB.MARKER.OBJS <- lapply(setNames(MARKER.DS, MARKER.DS), function(d) diet_for
 KEGG.DATA <- kegg_local("sce")
 save(CSTAB.INPUTS, CSTAB.MARKER.OBJS, DS.LABELS, KEGG.DATA, file = file.path(INPUT.DIR, "cluster_stability_inputs.rda"))
 
+## Prints the bootstrap comparison table (in the format assemble_cluster_stability()
+## builds from the cluster job's output) and, if the bootstrap-validated
+## final resolution differs from the resolution sweep_cluster_resolution()
+## originally chose, a note naming the override and the bootstrap mean ARI
+## at each so the switch is traceable in the log rather than silent.
+report_bootstrap_compare <- function(boot, label) {
+  cat(sprintf("%s: bootstrap comparison across candidate resolutions\n", label)); print(boot$table)
+  chosen_row <- boot$table[boot$table$role == "chosen", ]
+  if (boot$final_res != chosen_row$res) {
+    final_ari <- boot$table$boot_mean_ari[boot$table$res == boot$final_res]
+    cat(sprintf("%s: switching to resolution %.2f (bootstrap mean ARI %.3f vs %.3f at the originally chosen %.2f)\n",
+                label, boot$final_res, final_ari, chosen_row$boot_mean_ari, chosen_row$res))
+  }
+}
+
 load_cluster_output(file.path(OUTPUT.DIR, "cluster_stability_output.rda"), "cluster_stability.R")   # CSTAB.ARI, CSTAB.MARKERS, CSTAB.KEY
 check_cluster_key(CSTAB.KEY, CSTAB.INPUTS$key, "cluster_stability_output.rda", "cluster_stability.R")
 for (d in DS.NAMES) {
@@ -1785,6 +2430,22 @@ for (d in DS.NAMES) {
   report_bootstrap_compare(boot, DS.LABELS[[d]])
   assign(paste0("BOOT.", d), boot)
   assign(paste0("YSC.", d), boot$final_obj)
+}
+
+## compare_distance_metrics: robustness check on the annoy.metric choice.
+## Clusters the same retained PCs under each of two metrics at the same
+## resolution and returns both partitions plus the adjusted Rand index
+## between them. A high ARI means the metric does not change which cells
+## group together and either is defensible; a low ARI makes the metric a
+## decision to state and justify in Methods.
+compare_distance_metrics <- function(obj, dims, resolution, metrics = c("manhattan", "euclidean")) {
+  cl <- lapply(metrics, function(m) {
+    o2 <- FindNeighbors(obj, reduction = "pca", dims = dims, annoy.metric = m, verbose = FALSE)
+    o2 <- FindClusters(o2, resolution = resolution, verbose = FALSE)
+    Idents(o2)
+  })
+  names(cl) <- metrics
+  list(clusters = cl, ari = adjustedRandIndex(as.integer(cl[[1]]), as.integer(cl[[2]])))
 }
 
 METRIC.CHECK.MIX.SC <- compare_distance_metrics(YSC.MIX.SC, dims = 1:PCS.MIX.SC, resolution = BOOT.MIX.SC$final_res)
@@ -1966,6 +2627,25 @@ dev.off()
 cat(sprintf("Se parent: within/between vs mean,       n = %d, Spearman rho = %.3f\n", WB.VS.MU.MIX.SE$n,    WB.VS.MU.MIX.SE$rho))
 cat(sprintf("Se parent: within/between vs burst freq, n = %d, Spearman rho = %.3f\n", WB.VS.BFREQ.MIX.SE$n, WB.VS.BFREQ.MIX.SE$rho))
 cat(sprintf("Se parent: within/between vs burst size, n = %d, Spearman rho = %.3f\n", WB.VS.BSIZE.MIX.SE$n, WB.VS.BSIZE.MIX.SE$rho))
+
+## Cross-species scatter of within_between_decomp()'s ratio (log10), one
+## point per ortholog gene pair, for two datasets whose gene sets are
+## already ortholog-matched by name (e.g. MIX.SC vs MIX.SE, both indexed
+## by the shared GENES ortholog-pair set built earlier in the pipeline,
+## so no additional ortholog mapping is needed here). Spearman rho
+## reported, same rank-based convention used throughout this section.
+plot_within_between_cross_species <- function(wb_a, wb_b, lab_a, lab_b, main = NULL) {
+  m  <- merge(wb_a$table[, c("gene", "ratio_within_between")], wb_b$table[, c("gene", "ratio_within_between")], by = "gene", suffixes = c("_a", "_b"))
+  ok <- is.finite(m$ratio_within_between_a) & m$ratio_within_between_a > 0 & is.finite(m$ratio_within_between_b) & m$ratio_within_between_b > 0
+  x   <- log10(m$ratio_within_between_a[ok]); y <- log10(m$ratio_within_between_b[ok])
+  rho <- suppressWarnings(cor(x, y, method = "spearman"))
+  if (is.null(main)) main <- sprintf("n = %d genes, Spearman rho = %.3f", sum(ok), rho)
+  plot(x, y, pch = 16, cex = 0.4, col = adjustcolor(COLOR.GREY[["dark"]], 0.38),
+       xlab = sprintf("log10(within / between), %s", lab_a), ylab = sprintf("log10(within / between), %s", lab_b), main = main)
+  abline(0, 1, lty = 3, col = COLOR.GREY[["mid"]])
+  abline(lm(y ~ x), col = COLOR.ACCENT, lty = 2)
+  invisible(list(n = sum(ok), rho = rho))
+}
 
 pdf(file.path(FIGURE.DIR, "extra/S_within_between_cross_species.pdf"), width = 6, height = 6, useDingbats = FALSE)
 WB.CROSS.SPECIES <- plot_within_between_cross_species(WB.MIX.SC, WB.MIX.SE, "Sc", "Se",
@@ -2169,6 +2849,22 @@ cat(sprintf("GO/KEGG enrichment loaded for %d gene sets against a universe of %d
 
 
 ## 8.5 Summary table: significant terms per set, per ontology
+
+## summarize_go_sets: one row per set, gene set size plus significant-term
+## counts for BP/CC/MF/KEGG. `sets` and `enrich` must be the matched
+## gene-set list and run_enrichment output (same names, same order).
+summarize_go_sets <- function(sets, enrich, q = 0.2) {
+  data.frame(
+    set     = names(sets),
+    n_genes = vapply(sets, length, integer(1)),
+    GO_BP   = vapply(enrich, function(e) n_sig_terms(e$BP,   q), integer(1)),
+    GO_CC   = vapply(enrich, function(e) n_sig_terms(e$CC,   q), integer(1)),
+    GO_MF   = vapply(enrich, function(e) n_sig_terms(e$MF,   q), integer(1)),
+    KEGG    = vapply(enrich, function(e) n_sig_terms(e$KEGG, q), integer(1)),
+    row.names = NULL
+  )
+}
+
 GO.SUMMARY <- summarize_go_sets(GO.SETS, GO.ENRICH, q = GO.QVAL)
 print(GO.SUMMARY)
 write.csv(GO.SUMMARY, file.path(TABLE.DIR, "go_kegg_summary.csv"), row.names = FALSE)
@@ -2758,6 +3454,18 @@ axis(1, at = c(0,0.2,0.4,0.6,0.8,1.0), labels = c("0%","20%","40%","60%","80%","
 dev.off()
 
 ## 10.8 Heatmap B: minimum detectable SIZE.RATIO, faceted by burst frequency
+
+## min_detectable_ratio: smallest SIZE.RATIO (ratios in ascending order) at
+## which power_vec reaches target, one number per (MEAN.READS, N.CELLS,
+## SIZE) in place of the full power-vs-ratio curve. Lower means more
+## sensitive. Returns NA when even the largest tested ratio misses the
+## target, which image() renders as blank.
+min_detectable_ratio <- function(power_vec, ratios, target = 0.8) {
+  hit <- which(power_vec >= target)
+  if (length(hit) == 0) return(NA_real_)
+  ratios[min(hit)]
+}
+
 # Minimum SIZE.RATIO detectable at 80% power, one number per
 # (MEAN.READS, N.CELLS, SIZE) instead of the full power-vs-ratio curve.
 # Lower means more sensitive. 

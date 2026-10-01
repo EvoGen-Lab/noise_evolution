@@ -14,7 +14,15 @@ before the comment pass shortened the file. Use the function names to locate cod
 - Item 10 (redundant bsize rows), item 11 (`poly_at_tract` now measures poly(dA) and poly(dT) runs separately), item 14 (`frac_group_sets` and `run_enrichment` drop NA IDs), item 15 (`coexpr_axis_validate`), and the by-name column selection in item 27.
 - Section 3.4: all `.sub` files load `r/4.5.2`, and `CLAUDE.md` lists `cluster_stability.R` and `go_enrich.R`.
 
-Still open: items 3 to 5, 7 to 9, 12, 13, 16 to 26, 28 to 31 and the remaining section 3.4 items, including the `gene_split.R` wiring question.
+Second round (also in the working tree):
+- Item 25: `bfreq_bsize_structural` is defined in `analysis.R`, returns a flat list with the fields in `STRUCT.FIELDS`, and the call site stops if the names differ.
+- Item 13: `intr` is clipped at zero where it is computed (`intrinsic_extrinsic_components`).
+- `gene_split.R` and `gene_split.sub` are deleted; `power.sub` is sized for the 10-day, one-node, 24-core limits.
+- Section 4 (duplicates) is done: one CV2 formula, one `perm_pval`, one `.fit_split(..., fit = )`, looped `coexpr_acc_*`, `fit_counts_offset` built on the row fit, the pilot gene pool and fit filter merged into `qc_gene_keep` / `fit_gene_filter`, one `.concordance_eligible`, the heatmap wrappers, `.cohen_kappa`, `kbal_sig` and the co-expression scatter pair removed or merged. Figure output is byte-identical to before.
+- Section 4 (single-caller helpers) is done: 18 helpers are nested inside their only caller and 31 functions that had one call site are defined in `analysis.R` above that call. Functions called by a cluster script, and helpers also used by a section 15 function, stay in `functions.R`.
+- One regression from the first pass was found and fixed: Section 9.3's parallel fits (`fit_source` on a bare PSOCK cluster) failed because the workers did not receive `.fit_one`; `fit_counts_offset(mat, exposure, cl)` now sends the workers whatever the fit reaches.
+
+Still open: items 3 to 5, 7 to 9, 12, 16 to 24, 26, 28 to 31 and the remaining section 3.4 items. The section 4 lists below describe the code before the merges and moves.
 
 **What I verified myself.**
 - The call graph (every function checked for a caller in `analysis.R`, a cluster script, or a reachable function).
@@ -39,9 +47,9 @@ Checks run: `parse()` on `functions.R`, `analysis.R` and all 10 cluster scripts;
 ## 2. Unused functions (Section 15)
 
 Nineteen functions have no caller in `analysis.R`, in `cluster/scripts/`, or in any function those reach.
-- 15a, serial local counterparts of cluster-run functions: `pilot_split_se`, `boot_contrasts`, `permute_contrasts`, `coexpr_bootstrap`, `assemble_coexpr_bootstrap`, `bootstrap_cluster_stability`, `bootstrap_compare_resolutions`.
+- 15a, serial local counterparts of cluster-run functions: `pilot_split_se`, `boot_contrasts`, `permute_contrasts`, `coexpr_bootstrap`, `bootstrap_cluster_stability`, `bootstrap_compare_resolutions`.
 - 15b, gene-fit calibration: `refine_by_boundary`, `boot_disp_logse`, `chk`, `chk_prec`.
-- 15c, interactive diagnostics and plots: `coexpr_raw_cor`, `coexpr_gene_degree`, `plot_coexpr_pair`, `.cohen_kappa`, `report_cluster_marker_enrichment`, `plot_geneset_direction_stack`, `fit_split_nb`, `plot_palette_swatches`.
+- 15c, interactive diagnostics and plots: `coexpr_raw_cor`, `coexpr_gene_degree`, `plot_coexpr_pair`, `report_cluster_marker_enrichment`, `plot_geneset_direction_stack`, `fit_split_nb`, `plot_palette_swatches`.
 
 Functions that look unused from `analysis.R` but are needed by a cluster script, so they stay in the working sections: `.fit_one`, `.fit_split`, `pilot_split_se_one`, `.mode_draw_keys`, `.contrast_value`, `.cv2_of`, `boot_contrasts_one`, `permute_contrasts_one`, `coexpr_bootstrap_one`, `coexpr_perm_one`, `coexpr_acc_init/update/finalize`, `run_enrichment`, `cluster_marker_enrichment`, `nupop_predict_window`, `nupop_run_windows`, `nupop_occupancy_cluster`, `boot_ari_one`, `go_enrich_one`, `fit_offset_nb`, `fit_offset_nb_mm`, `fit_split_nb_mm`, `perm_pval`, `size_log2_ratio`, `power_grid_row`.
 
