@@ -25,6 +25,43 @@ library('parallel')
 
 source("functions.R")
 
+## coexpr_perm_one: one permutation draw of the five null spectra, for rank-matched testing of every candidate axis. draw: one element of
+## make_coexpr_perm_draws(). resid: the RESID list (including HYB.COMB). nSC, nSE: parent cell counts, used to split each pooled, reshuffled
+## pool back into groups of the original sizes. n_keep: ranks retained per decomposition. Returns the top n_keep squared eigenvalues by
+## magnitude, descending, for all five decompositions.
+coexpr_perm_one <- function(draw, n_keep, nSC, nSE, resid) {
+  pooled   <- cbind(resid$MIX.SC, resid$MIX.SE)
+  perm.sc  <- pooled[, draw$idx[seq_len(nSC)]]
+  perm.se  <- pooled[, draw$idx[-seq_len(nSC)]]
+  perm.hsc <- resid$HYB.SC; perm.hse <- resid$HYB.SE
+  perm.hsc[, draw$swap] <- resid$HYB.SE[, draw$swap]
+  perm.hse[, draw$swap] <- resid$HYB.SC[, draw$swap]
+
+  d <- coexpr_decompose(list(MIX.SC = perm.sc, MIX.SE = perm.se, HYB.SC = perm.hsc, HYB.SE = perm.hse))
+  topk <- function(m) {
+    ev <- eigen(m, symmetric = TRUE, only.values = TRUE)$values
+    (ev[order(abs(ev), decreasing = TRUE)][seq_len(n_keep)])^2
+  }
+
+  ## The dpar nulls are zero-centred exchangeability nulls on the raw pooled cells (no ploidy
+  ## rescale); the observed dpar matrices (COEXPR.POINT) carry the rescale from coexpr_decompose().
+  ## dpar_sc's null pools Sc-parent and allele-summed hybrid cells and reshuffles them into
+  ## pseudo-Sc / pseudo-hybrid groups of the original sizes, giving the leading eigenvalues of
+  ## "condition A minus condition B" when condition carries no information. dpar_se's null does the
+  ## same with Se-parent and hybrid cells.
+  pooled.sc <- cbind(resid$MIX.SC, resid$HYB.COMB)
+  perm.a.sc <- pooled.sc[, draw$idx_dpar_sc[seq_len(nSC)]]
+  perm.b.sc <- pooled.sc[, draw$idx_dpar_sc[-seq_len(nSC)]]
+  dpar_sc_null <- topk(shrink_cor(t(perm.b.sc)) - shrink_cor(t(perm.a.sc)))
+
+  pooled.se <- cbind(resid$MIX.SE, resid$HYB.COMB)
+  perm.a.se <- pooled.se[, draw$idx_dpar_se[seq_len(nSE)]]
+  perm.b.se <- pooled.se[, draw$idx_dpar_se[-seq_len(nSE)]]
+  dpar_se_null <- topk(shrink_cor(t(perm.b.se)) - shrink_cor(t(perm.a.se)))
+
+  list(total = topk(d$total), cis = topk(d$cis), trans = topk(d$trans), dpar_sc = dpar_sc_null, dpar_se = dpar_se_null)
+}
+
 ## Optional args: Rscript coexpr_perm.R [input.rda] [output.rda]
 ARGS        <- commandArgs(trailingOnly = TRUE)
 INPUT.FILE  <- if (length(ARGS) >= 1) ARGS[1] else "coexpr_perm_inputs.rda"
@@ -62,38 +99,7 @@ for (k in seq_along(chunks)) {
   ## retained per decomposition (15, the top-15 candidate window). Returns the top n_keep squared
   ## eigenvalues by magnitude, descending, for all five decompositions; this is the unit of work a
   ## cluster worker does.
-  chunk.results <- parLapply(cl, DRAWS.PERM.COEXPR[chunks[[k]]], function(draw) {
-    pooled   <- cbind(RESID$MIX.SC, RESID$MIX.SE)
-    perm.sc  <- pooled[, draw$idx[seq_len(N.SC)]]
-    perm.se  <- pooled[, draw$idx[-seq_len(N.SC)]]
-    perm.hsc <- RESID$HYB.SC; perm.hse <- RESID$HYB.SE
-    perm.hsc[, draw$swap] <- RESID$HYB.SE[, draw$swap]
-    perm.hse[, draw$swap] <- RESID$HYB.SC[, draw$swap]
-  
-    d <- coexpr_decompose(list(MIX.SC = perm.sc, MIX.SE = perm.se, HYB.SC = perm.hsc, HYB.SE = perm.hse))
-    topk <- function(m) {
-      ev <- eigen(m, symmetric = TRUE, only.values = TRUE)$values
-      (ev[order(abs(ev), decreasing = TRUE)][seq_len(N.KEEP)])^2
-    }
-  
-    ## The dpar nulls are zero-centred exchangeability nulls on the raw pooled cells (no ploidy
-    ## rescale); the observed dpar matrices (COEXPR.POINT) carry the rescale from coexpr_decompose().
-    ## dpar_sc's null pools Sc-parent and allele-summed hybrid cells and reshuffles them into
-    ## pseudo-Sc / pseudo-hybrid groups of the original sizes, giving the leading eigenvalues of
-    ## "condition A minus condition B" when condition carries no information. dpar_se's null does the
-    ## same with Se-parent and hybrid cells.
-    pooled.sc <- cbind(RESID$MIX.SC, RESID$HYB.COMB)
-    perm.a.sc <- pooled.sc[, draw$idx_dpar_sc[seq_len(N.SC)]]
-    perm.b.sc <- pooled.sc[, draw$idx_dpar_sc[-seq_len(N.SC)]]
-    dpar_sc_null <- topk(shrink_cor(t(perm.b.sc)) - shrink_cor(t(perm.a.sc)))
-  
-    pooled.se <- cbind(RESID$MIX.SE, RESID$HYB.COMB)
-    perm.a.se <- pooled.se[, draw$idx_dpar_se[seq_len(N.SE)]]
-    perm.b.se <- pooled.se[, draw$idx_dpar_se[-seq_len(N.SE)]]
-    dpar_se_null <- topk(shrink_cor(t(perm.b.se)) - shrink_cor(t(perm.a.se)))
-  
-    list(total = topk(d$total), cis = topk(d$cis), trans = topk(d$trans), dpar_sc = dpar_sc_null, dpar_se = dpar_se_null)
-  })
+  chunk.results <- parLapply(cl, DRAWS.PERM.COEXPR[chunks[[k]]], coexpr_perm_one, n_keep = N.KEEP, nSC = N.SC, nSE = N.SE, resid = RESID)
   RESULTS[chunks[[k]]] <- chunk.results
   rm(chunk.results); gc(FALSE)
 

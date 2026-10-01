@@ -21,6 +21,67 @@ library('parallel')
 
 source("functions.R")
 
+## power_grid_row: power of one grid row i (mean reads x cell count x burst-frequency size) over the SIZE.RATIO sweep. The reference group's
+## counts and fit are drawn once per replicate and reused across the sweep, so the sweep isolates the effect of SIZE.RATIO.
+power_grid_row <- function(i, ALPHA, CELL.RATIO, EXPOSURE.CV, GRID, MEAN.READS, N.CELLS, N.MIX, NI, NJ, PI1, SEED.BASE, SIZE, SIZE.RATIO) {
+  ## size_log2_ratio: log2 ratio of the NB size (disp, the burst-frequency axis) between two
+  ## .fit_one() results, NA if either side is non-positive or non-finite.
+  size_log2_ratio <- function(fit_a, fit_b) {
+    a <- fit_a[["disp"]]; b <- fit_b[["disp"]]
+    if (is.finite(a) && a > 0 && is.finite(b) && b > 0) log2(a) - log2(b) else NA_real_
+  }
+
+  row <- GRID[i, ]
+  MEAN.READS.X <- MEAN.READS[row$m]
+  N.SC.X       <- N.CELLS[row$n]
+  N.SE.X       <- round(N.SC.X * CELL.RATIO)
+  SIZE.1.X     <- SIZE[row$p]
+
+  set.seed(SEED.BASE + 1e6 + row$n)  #shared draws, keyed only by cell count
+  sdlog <- sqrt(log(1 + EXPOSURE.CV^2))
+  EXPO.X.LIST <- lapply(seq_len(NJ), function(j) rlnorm(N.SC.X, meanlog = -0.5*sdlog^2, sdlog = sdlog))
+  EXPO.Y.LIST <- lapply(seq_len(NJ), function(j) rlnorm(N.SE.X, meanlog = -0.5*sdlog^2, sdlog = sdlog))
+  PERM.LIST   <- lapply(seq_len(NI), function(k) sample.int(N.SC.X + N.SE.X))
+
+  set.seed(SEED.BASE + i)  #row-specific draws (X depends on m, p, n)
+  X.LIST  <- vector("list", NJ)
+  FA.LIST <- vector("list", NJ)
+  for (j in seq_len(NJ)) {
+    X.LIST[[j]]  <- rnbinom(n = N.SC.X, size = SIZE.1.X, mu = MEAN.READS.X*EXPO.X.LIST[[j]])
+    FA.LIST[[j]] <- .fit_one(X.LIST[[j]], EXPO.X.LIST[[j]])  #shared across SIZE.RATIO below
+  }
+
+  P.ALL <- matrix(NA_real_, NJ, length(SIZE.RATIO))
+  for (qi in seq_along(SIZE.RATIO)) {
+    SIZE.2.X <- SIZE.1.X / SIZE.RATIO[qi]
+    for (j in seq_len(NJ)) {
+      EXPO.Y <- EXPO.Y.LIST[[j]]
+      Y  <- rnbinom(n = N.SE.X, size = SIZE.2.X, mu = MEAN.READS.X*EXPO.Y)
+      fb <- .fit_one(Y, EXPO.Y)   #same estimator as the null below
+      OBS <- size_log2_ratio(FA.LIST[[j]], fb)
+
+      XY <- c(X.LIST[[j]], Y); EXPO.XY <- c(EXPO.X.LIST[[j]], EXPO.Y)
+      NULL.DIST <- numeric(NI)
+      for (k in seq_len(NI)) {
+        sp <- .fit_split(XY, EXPO.XY, PERM.LIST[[k]], N.SC.X)  #same estimator as the observed contrast
+        NULL.DIST[k] <- size_log2_ratio(sp$a, sp$b)
+      }
+      P.ALL[j, qi] <- perm_pval(OBS, NULL.DIST)
+    }
+  }
+
+  i0     <- which(SIZE.RATIO == 1)
+  P.NULL <- P.ALL[, i0]
+  n_alt  <- min(NJ, round(NJ * PI1 / (1 - PI1)))
+  vapply(seq_along(SIZE.RATIO), function(qi) {
+    if (qi == i0) return(mean(P.NULL < ALPHA, na.rm = TRUE))
+    mean(replicate(N.MIX, {
+      q <- p.adjust(c(P.NULL, P.ALL[sample.int(NJ, n_alt), qi]), method = "BH")
+      mean(q[NJ + seq_len(n_alt)] < ALPHA, na.rm = TRUE)
+    }), na.rm = TRUE)
+  }, numeric(1))
+}
+
 load("power_inputs.rda")
 ## GRID, MEAN.READS, N.CELLS, SIZE, SIZE.RATIO, EXPOSURE.CV, CELL.RATIO, ALPHA, NJ, NI, PI1, N.MIX, SEED.BASE
 
@@ -75,64 +136,7 @@ for (k in seq_along(chunks)) {
   ## simulated dataset without further fitting. The SIZE.RATIO = 1 entry is
   ## the raw false-positive rate at p < ALPHA, a calibration check of the
   ## permutation test; SIZE.RATIO therefore includes 1 exactly once.
-  results[[k]] <- parLapply(cl, chunks[[k]], function(i) {
-    ## size_log2_ratio: log2 ratio of the NB size (disp, the burst-frequency axis) between two
-    ## .fit_one() results, NA if either side is non-positive or non-finite.
-    size_log2_ratio <- function(fit_a, fit_b) {
-      a <- fit_a[["disp"]]; b <- fit_b[["disp"]]
-      if (is.finite(a) && a > 0 && is.finite(b) && b > 0) log2(a) - log2(b) else NA_real_
-    }
-  
-    row <- GRID[i, ]
-    MEAN.READS.X <- MEAN.READS[row$m]
-    N.SC.X       <- N.CELLS[row$n]
-    N.SE.X       <- round(N.SC.X * CELL.RATIO)
-    SIZE.1.X     <- SIZE[row$p]
-  
-    set.seed(SEED.BASE + 1e6 + row$n)  #shared draws, keyed only by cell count
-    sdlog <- sqrt(log(1 + EXPOSURE.CV^2))
-    EXPO.X.LIST <- lapply(seq_len(NJ), function(j) rlnorm(N.SC.X, meanlog = -0.5*sdlog^2, sdlog = sdlog))
-    EXPO.Y.LIST <- lapply(seq_len(NJ), function(j) rlnorm(N.SE.X, meanlog = -0.5*sdlog^2, sdlog = sdlog))
-    PERM.LIST   <- lapply(seq_len(NI), function(k) sample.int(N.SC.X + N.SE.X))
-  
-    set.seed(SEED.BASE + i)  #row-specific draws (X depends on m, p, n)
-    X.LIST  <- vector("list", NJ)
-    FA.LIST <- vector("list", NJ)
-    for (j in seq_len(NJ)) {
-      X.LIST[[j]]  <- rnbinom(n = N.SC.X, size = SIZE.1.X, mu = MEAN.READS.X*EXPO.X.LIST[[j]])
-      FA.LIST[[j]] <- .fit_one(X.LIST[[j]], EXPO.X.LIST[[j]])  #shared across SIZE.RATIO below
-    }
-  
-    P.ALL <- matrix(NA_real_, NJ, length(SIZE.RATIO))
-    for (qi in seq_along(SIZE.RATIO)) {
-      SIZE.2.X <- SIZE.1.X / SIZE.RATIO[qi]
-      for (j in seq_len(NJ)) {
-        EXPO.Y <- EXPO.Y.LIST[[j]]
-        Y  <- rnbinom(n = N.SE.X, size = SIZE.2.X, mu = MEAN.READS.X*EXPO.Y)
-        fb <- .fit_one(Y, EXPO.Y)   #same estimator as the null below
-        OBS <- size_log2_ratio(FA.LIST[[j]], fb)
-  
-        XY <- c(X.LIST[[j]], Y); EXPO.XY <- c(EXPO.X.LIST[[j]], EXPO.Y)
-        NULL.DIST <- numeric(NI)
-        for (k in seq_len(NI)) {
-          sp <- .fit_split(XY, EXPO.XY, PERM.LIST[[k]], N.SC.X)  #same estimator as the observed contrast
-          NULL.DIST[k] <- size_log2_ratio(sp$a, sp$b)
-        }
-        P.ALL[j, qi] <- perm_pval(OBS, NULL.DIST)
-      }
-    }
-  
-    i0     <- which(SIZE.RATIO == 1)
-    P.NULL <- P.ALL[, i0]
-    n_alt  <- min(NJ, round(NJ * PI1 / (1 - PI1)))
-    vapply(seq_along(SIZE.RATIO), function(qi) {
-      if (qi == i0) return(mean(P.NULL < ALPHA, na.rm = TRUE))
-      mean(replicate(N.MIX, {
-        q <- p.adjust(c(P.NULL, P.ALL[sample.int(NJ, n_alt), qi]), method = "BH")
-        mean(q[NJ + seq_len(n_alt)] < ALPHA, na.rm = TRUE)
-      }), na.rm = TRUE)
-    }, numeric(1))
-  })
+  results[[k]] <- parLapply(cl, chunks[[k]], power_grid_row, ALPHA = ALPHA, CELL.RATIO = CELL.RATIO, EXPOSURE.CV = EXPOSURE.CV, GRID = GRID, MEAN.READS = MEAN.READS, N.CELLS = N.CELLS, N.MIX = N.MIX, NI = NI, NJ = NJ, PI1 = PI1, SEED.BASE = SEED.BASE, SIZE = SIZE, SIZE.RATIO = SIZE.RATIO)
   done <- done + length(chunks[[k]])
   el   <- as.numeric(difftime(Sys.time(), t0, units = "mins"))
   eta  <- if (el > 0) (N.POINTS - done) * (el / done) else NA_real_

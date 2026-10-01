@@ -22,6 +22,21 @@ suppressPackageStartupMessages({
 register(SerialParam())   # one process per job, parallelism comes from mclapply
 
 source("functions.R")
+
+## go_enrich_job: one enrichment job k. Over-representation jobs call run_enrichment(); rank-based jobs call gseGO() with a job-specific
+## seed so permutation p-values reproduce. A failed job returns NULL and the job log names it.
+go_enrich_job <- function(k, go_inputs, jobs, kegg_data) {
+  tryCatch({
+    job <- jobs[[k]]
+    if (job$kind == "ora") {
+      run_enrichment(job$genes, job$universe, qval = go_inputs$GO.QVAL, kegg_data = kegg_data)
+    } else {
+      set.seed(go_inputs$SEED.GO + k)
+      suppressWarnings(gseGO(geneList = job$ranks, OrgDb = org.Sc.sgd.db, keyType = "ORF", ont = job$ont, nPermSimple = 100000))
+    }
+  }, error = function(e) { message(sprintf("%s: %s", names(jobs)[k], conditionMessage(e))); NULL })
+}
+
 load("go_enrich_inputs.rda")
 NUM.CORES <- as.integer(Sys.getenv("SLURM_CPUS_PER_TASK", unset = detectCores()))
 
@@ -39,19 +54,8 @@ JOBS <- c(gse_jobs,
 
 cat(sprintf("enrichment start: %d jobs (%d rank-based), %d cores\n", length(JOBS), length(gse_jobs), NUM.CORES)); flush.console()
 t0 <- Sys.time()
-## One unit of work per job. Over-representation jobs call run_enrichment(); rank-based jobs call
-## gseGO() with a job-specific seed so permutation p-values reproduce.
-RES <- mclapply(seq_along(JOBS), function(k)
-  tryCatch({
-    job <- JOBS[[k]]
-    if (job$kind == "ora") {
-      run_enrichment(job$genes, job$universe, qval = GO.INPUTS$GO.QVAL, kegg_data = KEGG.DATA)
-    } else {
-      set.seed(GO.INPUTS$SEED.GO + k)
-      suppressWarnings(gseGO(geneList = job$ranks, OrgDb = org.Sc.sgd.db, keyType = "ORF", ont = job$ont, nPermSimple = 100000))
-    }
-  }, error = function(e) { message(sprintf("%s: %s", names(JOBS)[k], conditionMessage(e))); NULL }),
-  mc.cores = NUM.CORES, mc.preschedule = FALSE)
+RES <- mclapply(seq_along(JOBS), go_enrich_job,
+  mc.cores = NUM.CORES, mc.preschedule = FALSE, go_inputs = GO.INPUTS, jobs = JOBS, kegg_data = KEGG.DATA)
 names(RES) <- names(JOBS)
 cat(sprintf("enrichment done in %.1f min\n", as.numeric(difftime(Sys.time(), t0, units = "mins"))))
 

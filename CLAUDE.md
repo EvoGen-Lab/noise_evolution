@@ -38,12 +38,12 @@ Prefer fixes that avoid cluster reruns. Offer a local recompute path (for exampl
 ## Conventions
 - R files use Windows CRLF line endings. `.sub` SLURM files use Unix LF line endings. `.gitattributes` enforces both. Keep it intact.
 - Check scalar conditions. Use `&&` and `||` only with length-one logical values. A scan of the full codebase for violations is still unfinished.
-- A function exists only when its code runs from two or more places. Code that runs from one place is written at that place, in `analysis/analysis.R`, in the cluster script, or in the body of the one function that uses it, so a reader follows the steps in order without jumping to a definition. This holds for `analysis/analysis.R`, `R/functions.R` and the cluster scripts alike.
-  - A once-used step in `analysis.R` becomes a block (`local({ ... })` when it needs private variables) with its concept comment above it.
-  - Per-gene or per-draw work that `parLapply`/`mclapply` distributes is the body of the anonymous function passed to the call. It reads the loaded inputs directly rather than taking them as arguments.
-  - A helper with two or more calls stays a function, in `R/functions.R` when `analysis.R` and a cluster script (or two scripts) share it, and in the script itself when only that script calls it.
+- Write a function only when its code runs more than once: it is called from two or more places, or it is applied across many items (`lapply`, `sapply`, `vapply`, `Map`, `mapply`, `apply`, `parLapply`, `mclapply`). Code that runs once is written inline where it runs, so a reader follows the steps in order.
+  - `analysis/analysis.R` defines no functions. A function it applies across items is a named function in `R/functions.R`, passed to the apply call with its other inputs as named arguments (`lapply(X, name, arg = value)`). Use `[[` for plain accessors. `tryCatch(error = function(e) ...)` handlers are the one function literal allowed.
+  - A once-used step in `analysis.R` is a block (`local({ ... })` when it needs private variables) with its concept comment above it.
+  - A function that only one cluster script uses is defined in that script, right after `source("functions.R")`. A function used by `analysis.R` and a script, or by two scripts, is in `R/functions.R`.
   - A function that PSOCK workers need by name must be a top-level function in `R/functions.R` (`neg_binom_fit_offset`, `.fit_one`); `fit_counts_offset()` finds such dependencies from the code.
-  - Count calls before adding a helper, and inline it if it ends up with one.
+  - Before adding a function, check that it will run more than once; inline it if not.
 - Select Seurat columns by name, never by position (Seurat v5 changes `FindMarkers` output order).
 - Validate numeric inputs at function entry (for example `BSIZE` in `SPLIT.FITS`).
 - Do not commit data, `.rda` checkpoints, or cluster output. Keep them in `.gitignore`.

@@ -53,3 +53,4 @@ Source: `docs/function_review.md` (item numbers refer to its section 3), re-chec
 - Hoist repeated constants (theta cap `1e6`, `optimize` interval `c(-4, 15)`, axis count 15).
 - Group the shared plotting helpers (`line_colors`, `cluster_cols`, `umap_plot`, `plot_lines`, `legend_page`, `open_grid_pdf`) into their own section.
 - Doc comments on some inlined blocks in `analysis.R` still read as the former function signature; reword them to describe the step.
+- One-line function literals remain inside `R/functions.R` functions and the cluster scripts (accessors, small `sapply` bodies, `tryCatch` handlers). `analysis.R` keeps only its `tryCatch(error = function(e) NULL)` handler.

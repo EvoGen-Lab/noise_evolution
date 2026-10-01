@@ -25,69 +25,41 @@ suppressPackageStartupMessages({
 
 source("functions.R")
 
-load("cluster_stability_inputs.rda")
-
-NUM.CORES <- as.integer(Sys.getenv("SLURM_CPUS_PER_TASK", unset = detectCores()))
-TASKS <- CSTAB.INPUTS$tasks
-B     <- CSTAB.INPUTS$key$B
-
-## ---- Stage 1: bootstrap replicates ----
-## b varies fastest, so replicates of one task stay contiguous and in order
-JOBS <- expand.grid(b = seq_len(B), k = seq_len(nrow(TASKS)))
-
-## Chunked so the master prints progress to the job log
-chunks <- split(seq_len(nrow(JOBS)), ceiling(seq_len(nrow(JOBS)) / max(NUM.CORES, ceiling(nrow(JOBS) / 40))))
-cat(sprintf("stability bootstrap start: %d tasks x B=%d = %d fits, %d cores\n", nrow(TASKS), B, nrow(JOBS), NUM.CORES)); flush.console()
-ari <- numeric(0); t0 <- Sys.time()
-for (ch in chunks) {
-  ## One bootstrap replicate per job. It resamples the cells of the dataset by the job's index vector,
-  ## applies the same preparation as to_seurat_counts() in analysis.R (underscore to dash in gene
-  ## names, CsparseMatrix), reruns Normalize/HVG/Scale/PCA/Neighbors/Clusters at the original
-  ## settings, and scores the adjusted Rand index against the reference clusters on the same resampled
-  ## cells. A failed replicate returns NA and the job log names it.
-  r   <- mclapply(ch, function(j) {
-    tk  <- TASKS[JOBS$k[j], ]
-    d   <- CSTAB.INPUTS$data[[tk$dataset]]
-    tryCatch({
-      idx <- CSTAB.INPUTS$idx[[tk$dataset]][, JOBS$b[j]]
-      boot_counts <- d$counts[, idx]
-      rownames(boot_counts) <- gsub("_", "-", rownames(d$counts), fixed = TRUE)
-      colnames(boot_counts) <- make.unique(colnames(d$counts)[idx])
-      boot_counts <- as(boot_counts, "CsparseMatrix")
-      boot_obj <- CreateSeuratObject(counts = boot_counts)
-      boot_obj <- NormalizeData(boot_obj, normalization.method = "LogNormalize", scale.factor = 10000, verbose = FALSE)
-      boot_obj <- FindVariableFeatures(boot_obj, selection.method = "vst", nfeatures = d$nfeatures, verbose = FALSE)
-      boot_obj <- ScaleData(boot_obj, features = rownames(boot_obj), verbose = FALSE)
-      boot_obj <- RunPCA(boot_obj, features = VariableFeatures(boot_obj), verbose = FALSE)
-      boot_obj <- FindNeighbors(boot_obj, reduction = "pca", dims = 1:d$dims_n, annoy.metric = d$metric, verbose = FALSE)
-      boot_obj <- FindClusters(boot_obj, resolution = tk$res, verbose = FALSE)
-      adjustedRandIndex(as.integer(CSTAB.INPUTS$ref[[tk$task]][idx]), as.integer(Idents(boot_obj)))
-    }, error = function(e) { message(sprintf("%s replicate %d: %s", tk$task, JOBS$b[j], conditionMessage(e))); NA_real_ })
-  }, mc.cores = NUM.CORES, mc.preschedule = FALSE)
-  ari <- c(ari, vapply(r, function(x) if (is.numeric(x) && length(x) == 1) x else NA_real_, numeric(1)))   # a lost worker stays an NA slot
-  el  <- as.numeric(difftime(Sys.time(), t0, units = "mins"))
-  cat(sprintf("[%s] %d / %d fits  elapsed %.1f min  eta %.1f min\n", format(Sys.time(), "%H:%M:%S"),
-              length(ari), nrow(JOBS), el, (nrow(JOBS) - length(ari)) * el / length(ari))); flush.console()
+## bootstrap_ari_job: one bootstrap replicate (job j of the tasks x replicates table). It resamples the cells of the dataset by the job's
+## index vector, applies the same preparation as to_seurat_counts() in analysis.R (underscore to dash in gene names, CsparseMatrix),
+## reruns Normalize/HVG/Scale/PCA/Neighbors/Clusters at the original settings, and scores the adjusted Rand index against the reference
+## clusters on the same resampled cells. A failed replicate returns NA and the job log names it.
+bootstrap_ari_job <- function(j, inputs, jobs, tasks) {
+  tk  <- tasks[jobs$k[j], ]
+  d   <- inputs$data[[tk$dataset]]
+  tryCatch({
+    idx <- inputs$idx[[tk$dataset]][, jobs$b[j]]
+    boot_counts <- d$counts[, idx]
+    rownames(boot_counts) <- gsub("_", "-", rownames(d$counts), fixed = TRUE)
+    colnames(boot_counts) <- make.unique(colnames(d$counts)[idx])
+    boot_counts <- as(boot_counts, "CsparseMatrix")
+    boot_obj <- CreateSeuratObject(counts = boot_counts)
+    boot_obj <- NormalizeData(boot_obj, normalization.method = "LogNormalize", scale.factor = 10000, verbose = FALSE)
+    boot_obj <- FindVariableFeatures(boot_obj, selection.method = "vst", nfeatures = d$nfeatures, verbose = FALSE)
+    boot_obj <- ScaleData(boot_obj, features = rownames(boot_obj), verbose = FALSE)
+    boot_obj <- RunPCA(boot_obj, features = VariableFeatures(boot_obj), verbose = FALSE)
+    boot_obj <- FindNeighbors(boot_obj, reduction = "pca", dims = 1:d$dims_n, annoy.metric = d$metric, verbose = FALSE)
+    boot_obj <- FindClusters(boot_obj, resolution = tk$res, verbose = FALSE)
+    adjustedRandIndex(as.integer(inputs$ref[[tk$task]][idx]), as.integer(Idents(boot_obj)))
+  }, error = function(e) { message(sprintf("%s replicate %d: %s", tk$task, jobs$b[j], conditionMessage(e))); NA_real_ })
 }
-CSTAB.ARI <- split(ari, factor(TASKS$task[JOBS$k], levels = TASKS$task))
-cat(sprintf("replicates completed: %d / %d\n", sum(is.finite(ari)), length(ari)))
 
-## ---- Stage 2: marker enrichment at each dataset's final resolution ----
-## Clusters within a dataset are spread over the forked workers
-par_apply <- function(X, FUN) mclapply(X, FUN, mc.cores = NUM.CORES, mc.preschedule = FALSE)
-## For each cluster: marker genes against the rest of the SAME dataset's cells (FindMarkers with
-## ident.2 left at its default) and GO/KEGG over-representation of the up and down markers
-## (run_enrichment), for however many clusters the dataset has. The object carries its own final,
-## validated clustering in Idents, so the question answered is whether the clustering validated for
-## THIS dataset corresponds to distinguishable biology; no GSEA is computed. A dataset with fewer than
-## two clusters gives NULL (with a message); otherwise the entry is a list of
-## markers/up/down/up_enrich/down_enrich/background/cluster_ids, one element per cluster, keyed by cluster ID.
-CSTAB.MARKERS <- lapply(setNames(names(CSTAB.MARKER.OBJS), names(CSTAB.MARKER.OBJS)), function(d) {
-  obj <- assemble_cluster_stability(CSTAB.INPUTS, CSTAB.ARI, d, CSTAB.MARKER.OBJS[[d]])$final_obj
-  cat(sprintf("marker enrichment: %s, %d clusters\n", DS.LABELS[[d]], length(levels(Idents(obj))))); flush.console()
+## dataset_marker_enrichment: for each cluster of dataset d at its final resolution, marker genes against the rest of the SAME dataset's
+## cells (FindMarkers with ident.2 left at its default) and GO/KEGG over-representation of the up and down markers (run_enrichment).
+## The object carries its own final, validated clustering in Idents, so the question answered is whether the clustering validated for
+## THIS dataset corresponds to distinguishable biology; no GSEA is computed. A dataset with fewer than two clusters gives NULL (with a
+## message); otherwise the entry is a list of markers/up/down/up_enrich/down_enrich/background/cluster_ids, one element per cluster.
+dataset_marker_enrichment <- function(d, ari, inputs, marker_objs, labels, kegg_data) {
+  obj <- assemble_cluster_stability(inputs, ari, d, marker_objs[[d]])$final_obj
+  cat(sprintf("marker enrichment: %s, %d clusters\n", labels[[d]], length(levels(Idents(obj))))); flush.console()
   cluster_ids <- sort(unique(as.character(Idents(obj))))
   if (length(cluster_ids) < 2) {
-    cat(sprintf("%s: only one cluster found; skipping the per-cluster marker/enrichment comparison.\n", DS.LABELS[[d]]))
+    cat(sprintf("%s: only one cluster found; skipping the per-cluster marker/enrichment comparison.\n", labels[[d]]))
     return(NULL)
   }
 
@@ -107,15 +79,45 @@ CSTAB.MARKERS <- lapply(setNames(names(CSTAB.MARKER.OBJS), names(CSTAB.MARKER.OB
   down_genes_list  <- lapply(down_list, gene_vec)
 
   enrich <- setNames(par_apply(cluster_ids, function(cc) list(
-    up   = run_enrichment(names(up_genes_list[[cc]]),   names(background_list[[cc]]), kegg_data = KEGG.DATA),
-    down = run_enrichment(names(down_genes_list[[cc]]), names(background_list[[cc]]), kegg_data = KEGG.DATA))), cluster_ids)
+    up   = run_enrichment(names(up_genes_list[[cc]]),   names(background_list[[cc]]), kegg_data = kegg_data),
+    down = run_enrichment(names(down_genes_list[[cc]]), names(background_list[[cc]]), kegg_data = kegg_data))), cluster_ids)
   up_enrich   <- lapply(enrich, `[[`, "up")
   down_enrich <- lapply(enrich, `[[`, "down")
 
   list(markers = markers_list, up = up_list, down = down_list,
        up_enrich = up_enrich, down_enrich = down_enrich,
        background = background_list, cluster_ids = cluster_ids)
-})
+}
+
+load("cluster_stability_inputs.rda")
+
+NUM.CORES <- as.integer(Sys.getenv("SLURM_CPUS_PER_TASK", unset = detectCores()))
+TASKS <- CSTAB.INPUTS$tasks
+B     <- CSTAB.INPUTS$key$B
+
+## ---- Stage 1: bootstrap replicates ----
+## b varies fastest, so replicates of one task stay contiguous and in order
+JOBS <- expand.grid(b = seq_len(B), k = seq_len(nrow(TASKS)))
+
+## Chunked so the master prints progress to the job log
+chunks <- split(seq_len(nrow(JOBS)), ceiling(seq_len(nrow(JOBS)) / max(NUM.CORES, ceiling(nrow(JOBS) / 40))))
+cat(sprintf("stability bootstrap start: %d tasks x B=%d = %d fits, %d cores\n", nrow(TASKS), B, nrow(JOBS), NUM.CORES)); flush.console()
+ari <- numeric(0); t0 <- Sys.time()
+for (ch in chunks) {
+  r   <- mclapply(ch, bootstrap_ari_job, mc.cores = NUM.CORES, mc.preschedule = FALSE, inputs = CSTAB.INPUTS, jobs = JOBS, tasks = TASKS)
+  ari <- c(ari, vapply(r, function(x) if (is.numeric(x) && length(x) == 1) x else NA_real_, numeric(1)))   # a lost worker stays an NA slot
+  el  <- as.numeric(difftime(Sys.time(), t0, units = "mins"))
+  cat(sprintf("[%s] %d / %d fits  elapsed %.1f min  eta %.1f min\n", format(Sys.time(), "%H:%M:%S"),
+              length(ari), nrow(JOBS), el, (nrow(JOBS) - length(ari)) * el / length(ari))); flush.console()
+}
+CSTAB.ARI <- split(ari, factor(TASKS$task[JOBS$k], levels = TASKS$task))
+cat(sprintf("replicates completed: %d / %d\n", sum(is.finite(ari)), length(ari)))
+
+## ---- Stage 2: marker enrichment at each dataset's final resolution ----
+## Clusters within a dataset are spread over the forked workers
+par_apply <- function(X, FUN) mclapply(X, FUN, mc.cores = NUM.CORES, mc.preschedule = FALSE)
+## Marker genes and enrichment for every cluster of each dataset, keyed by cluster ID (see dataset_marker_enrichment()).
+CSTAB.MARKERS <- lapply(setNames(names(CSTAB.MARKER.OBJS), names(CSTAB.MARKER.OBJS)), dataset_marker_enrichment, ari = CSTAB.ARI, inputs = CSTAB.INPUTS, marker_objs = CSTAB.MARKER.OBJS, labels = DS.LABELS, kegg_data = KEGG.DATA)
 
 CSTAB.KEY <- CSTAB.INPUTS$key
 save(CSTAB.ARI, CSTAB.MARKERS, CSTAB.KEY, file = "cluster_stability_output.rda")
