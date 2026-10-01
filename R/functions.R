@@ -11,7 +11,6 @@
 ###   1. OFFSET NEGATIVE-BINOMIAL FIT
 ###     neg_binom_fit_offset() - Offset NB fit for one gene: exposure-weighted mean plus glm.nb dispersion, with a Poisson-vs-NB pre-check.
 ###     fit_counts_offset() - Matrix version of neg_binom_fit_offset(): fits every gene (row) against its exposure vector.
-###     boot_disp_logse() - Bootstrap SE of log(size) over cells, for one gene.
 ###     .fit_one() - Offset NB fit for one gene, used throughout the bootstrap and permutation machinery.
 ###     .fit_split() - Splits a pooled sample by a pre-drawn permutation and fits each half with .fit_one().
 ###   1b. INTERNAL-PILOT SPLIT FRACTION (f*)
@@ -56,13 +55,11 @@
 ###     nb_residuals() - Pearson residuals from the offset NB fit, genes x cells.
 ###     shrink_cor() - Analytic shrinkage of a correlation matrix toward the identity matrix.
 ###     coexpr_decompose() - Decomposes the point-estimate correlation structure into total/cis/trans/dpar_sc/dpar_se matrices.
-###     coexpr_raw_cor() - Raw (unshrunk) per-dataset correlation matrices, kept for diagnostic comparison against the shrunk versions.
 ###     coexpr_axis_cis_trans() - Exact cis/trans decomposition of one eigenvector's eigenvalue, via total = cis + trans.
 ###     make_coexpr_draws() - Builds the cell-resampling draws used by the co-expression bootstrap.
 ###     coexpr_bootstrap_one() - One bootstrap draw of the co-expression decomposition, for one resampled cell set.
 ###     make_coexpr_perm_draws() - Builds the draws used by the co-expression permutation null.
 ###     coexpr_perm_one() - One permutation draw's top-N squared-eigenvalue spectrum for total/cis/trans/dpar_sc/dpar_se.
-###     assemble_coexpr_bootstrap() - Builds CB (per-pair estimate/SE/z/p) from the point estimate and the streaming bootstrap accumulator.
 ###     coexpr_acc_init() - Initializes the streaming sum/sum-of-squares accumulator used by the co-expression bootstrap.
 ###     coexpr_acc_update() - Folds one chunk of coexpr_bootstrap_one() draws into the running accumulator.
 ###     coexpr_acc_finalize() - Converts the finished accumulator into CB's per-pair estimate/SE structure.
@@ -79,10 +76,8 @@
 ###     class_anova() - One-way ANOVA testing whether a continuous score differs across class levels.
 ###     coexpr_class_table() - Pair-level regulatory classification (five-way) built from cis and trans p-values, BH-adjusted.
 ###     coexpr_dom_class_table() - Pair-level dominance classification, the co-expression analog of classify_dom().
-###     coexpr_gene_degree() - Per-gene degree in the co-expression divergence network, how many.
 ###     plot_coexpr_cis_trans() - Cis vs trans scatter for co-expression pairs, coloured by pair-level regulatory class.
 ###     plot_coexpr_dom_class() - Dpar_sc vs dpar_se scatter for co-expression pairs, coloured by pair-level dominance class.
-###     plot_coexpr_pair() - Residual scatter for one gene pair in each parent dataset, with per-dataset correlation in the legend.
 ###     check_coexpr_pairs() - Confirms a loaded CB object's pair count matches CO.GENES, catching a stale cluster output file.
 ###     seed_compare_core() - Shared scatter/correlation/ratio core for the two two-seed adequacy checks below.
 ###     coexpr_seed_compare() - Two-seed adequacy check for the co-expression bootstrap: compares CB between two independent seeds.
@@ -104,7 +99,6 @@
 ###     class_heatmap() - Log2(observed/expected) association heatmap between two class vectors, with BH-adjusted significance (levels auto-derived from data).
 ###     .heatmap_legend() - Draws class_heatmap()'s color-to-value legend strip beside the heatmap.
 ###     class_identity_overlap() - Cohen's kappa plus per-class Jaccard overlap between two class vectors on the same genes.
-###     .cohen_kappa() - Cohen's kappa for a class-by-class contingency table, used by class_identity_overlap().
 ###     summarize_class_overlap() - One printable summary row (n, concordance, kappa, permutation p) per class-overlap comparison.
 ###     plot_cis_trans_class() - Cis vs trans scatter for one quantity, coloured by class, with SE bars drawn behind points.
 ###     plot_mean_bfreq_class() - Mean vs noise scatter with per-class regulatory and dominance slopes overlaid.
@@ -114,10 +108,8 @@
 ###     run_enrichment() - Runs GO (BP/MF/CC, simplified) and KEGG enrichment for one gene set against a fixed universe.
 ###     n_sig_terms() - Counts significant terms (q < threshold) in one enrichResult, 0 for a NULL or empty result.
 ###     summarize_go_sets() - One summary row per gene set: size plus significant-term counts across BP/MF/CC/KEGG.
-###     plot_geneset_direction_stack() - Stacked barplot showing each class's membership split by direction within a gene set.
 ###     cluster_marker_enrichment() - Marker/enrichment comparison of each cluster against the rest of a dataset's own cells, generalized to however many clusters it has.
 ###     plot_cluster_marker_enrichment() - Writes cluster_marker_enrichment()'s per-cluster up/down enrichment to one pdf via barplot_enrich_pair().
-###     report_cluster_marker_enrichment() - Console-text mirror of plot_cluster_marker_enrichment(): significant terms and p-values per cluster and direction, via print_enrich_brief().
 ###     score_cell_cycle_by_cluster() - Cell-cycle phase scoring (CellCycleScoring()/AddModuleScore()) extended to a dataset's own validated clustering; violin plot, phase-composition-by-cluster barplot, and console table.
 ###     go_gene_set() - Pulls all genes (including descendant terms) annotated to a GO term from org.Sc.sgd.db, for building an independently-sourced module-score gene set.
 ###     score_modules_by_cluster() - Continuous module-score validation (AddModuleScore()) of a cluster's marker-based identity against named, independently-sourced gene sets; violin plot, per-cluster mean +/- SE barplot, and console table.
@@ -160,7 +152,6 @@
 ###     plot_hvg_elbow() - Diagnostic plot for hvg_elbow()'s output: full curve, chosen cutoff, and floor marked.
 ###     sweep_cluster_resolution() - Resolution sweep with a minimum-cluster-size guard; picks the coarsest resolution near-maximal silhouette width.
 ###     plot_resolution_sweep() - Diagnostic plot for sweep_cluster_resolution()'s output: silhouette vs. resolution, guard-excluded points and the chosen resolution marked.
-###     bootstrap_cluster_stability() - Bootstrap resampling of cells at a chosen resolution; mean adjusted Rand index against the original clustering.
 ###     bootstrap_compare_resolutions() - Bootstrap-compares the chosen resolution against the grid's highest-silhouette plateau; returns the bootstrap-validated final resolution and reclustered object.
 ###     report_bootstrap_compare() - Prints bootstrap_compare_resolutions()'s table and logs a resolution override when the bootstrap-validated final resolution differs from the one originally chosen.
 ###   12. CLUSTER-BASED NOISE PARTITIONING (within/between-cluster variance vs. the intrinsic/extrinsic decomposition)
@@ -176,7 +167,6 @@
 ###   13. POWER ANALYSIS (simulation and fit, shared with the SLURM job power_grid.R)
 ###     fit_offset_nb() - Offset NB fit for one simulated gene: exposure-weighted mean plus MLE dispersion via direct log-likelihood optimization.
 ###     fit_offset_nb_mm() - Closed-form method-of-moments dispersion estimate, used for permutation-null replicates.
-###     fit_split_nb() - Splits a pooled simulated sample by a pre-drawn permutation and fits each half with fit_offset_nb().
 ###     fit_split_nb_mm() - Same split, fit with the method-of-moments estimator.
 ###     perm_pval() - Two-sided permutation p-value with add-one continuity correction.
 ###     size_log2_ratio() - Log2 ratio of SIZE (burst frequency) between two fits, NA if either side is non-positive or non-finite.
@@ -185,17 +175,20 @@
 ###     line_colors() - Color ramp sized to the number of lines drawn in one panel.
 ###     cluster_cols() - Cluster colors from the plum ramp, n colors via interpolation.
 ###     umap_plot() - UMAP with the shared cluster palette and on-plot labels.
-###     plot_palette_swatches() - Swatch figure of every palette under normal, deutan, and protan views.
 ###     plot_lines() - Plots one line per column of a matrix against a shared x vector, with reference lines at power 0.05 and 0.9.
 ###     legend_page() - One legend page mapping each line color to the value it represents.
 ###     min_detectable_ratio() - Minimum SIZE.RATIO reaching a target power, for the minimum-detectable-ratio summary heatmap.
 ###   14. EXTERNAL NOISE VALIDATION
 ###     cor_row() - Spearman rank correlation between two vectors, with pairwise-complete filtering.
 ###     add_burst_terms() - Implied Fano factor, burst size, and burst frequency algebraically recovered from a reported mean and CV^2.
-###   15. UNUSED (not called by analysis.R or any cluster/scripts job; kept for manual/interactive use)
-###     pilot_split_se(), boot_contrasts(), permute_contrasts(), coexpr_bootstrap() - serial, local counterparts of the "_one" functions the pipeline calls directly via parLapply.
-###     refine_by_boundary(), chk(), chk_prec() - gene-fit calibration helpers for the Poisson/NB boundary and per-bin convergence/precision.
-###     bootstrap_compare_resolutions() - local bootstrap comparison of clustering resolutions, superseded by the cluster_stability.R round trip.
+###   15. UNUSED (no caller in analysis.R or cluster/scripts; available for interactive use)
+###     15a. Serial local counterparts of cluster-run functions
+###       pilot_split_se(), boot_contrasts(), permute_contrasts(), coexpr_bootstrap(), bootstrap_cluster_stability(), bootstrap_compare_resolutions() - one-machine versions of the computations the cluster jobs distribute.
+###       assemble_coexpr_bootstrap() - Builds CB from coexpr_bootstrap()'s per-draw results.
+###     15b. Gene-fit calibration helpers
+###       refine_by_boundary(), boot_disp_logse(), chk(), chk_prec() - Poisson/NB boundary reclassification and per-bin convergence/precision summaries.
+###     15c. Diagnostics and plots for interactive use
+###       coexpr_raw_cor(), coexpr_gene_degree(), plot_coexpr_pair(), .cohen_kappa(), report_cluster_marker_enrichment(), plot_geneset_direction_stack(), fit_split_nb(), plot_palette_swatches().
 ###############################################################
 
 library(MASS)   # glm.nb, ships with base R
@@ -319,15 +312,6 @@ fit_counts_offset <- function(mat, exposure) {
     BFREQ = size, BSIZE = mu / size,
     row.names = rownames(mat)
   )
-}
-
-## Bootstrap dispersion uncertainty over cells (one gene)
-boot_disp_logse <- function(y, exposure, B = 200, seed = 1) {
-  if (!is.null(dim(y))) stop("boot_disp_logse() takes one gene's counts")
-  set.seed(seed); n <- length(y)
-  lt <- replicate(B, log(neg_binom_fit_offset(y[sample.int(n, n, TRUE)], exposure[sample.int(n, n, TRUE)])["disp"]))
-  finite <- is.finite(lt)
-  c(disp_logse_boot = if (sum(finite) > 1) sd(lt[finite]) else NA_real_, boundary_frac   = mean(!finite))
 }
 
 ## ============================================================
@@ -1339,16 +1323,6 @@ coexpr_decompose <- function(resid, ploidy_f = attr(resid, "ploidy_f")) {
   out
 }
 
-## Raw per-dataset shrinkage correlation matrices, kept separately from
-## coexpr_decompose() (which only keeps differences). This is for testing
-## whether observed correlation MAGNITUDE is attenuated at low
-## reliability, a bias question, distinct from whether bootstrap SE
-## tracks reliability (a variance question, already tested and found
-## flat within CO.GENES). Same shrink_cor() calls, nothing new computed.
-coexpr_raw_cor <- function(resid) {
-  list(Rsc  = shrink_cor(t(resid$MIX.SC)), Rse  = shrink_cor(t(resid$MIX.SE)), Rhsc = shrink_cor(t(resid$HYB.SC)), Rhse = shrink_cor(t(resid$HYB.SE)))
-}
-
 ## Exact cis/trans decomposition of a given eigenvector's eigenvalue.
 ## total_mat = cis_mat + trans_mat elementwise, so for any vector v, the
 ## quadratic form v'(total)v splits exactly as v'(cis)v + v'(trans)v.
@@ -1468,33 +1442,6 @@ coexpr_perm_one <- function(draw, resid, nSC, nSE, n_keep = 15) {
   dpar_se_null <- topk(shrink_cor(t(perm.b.se)) - shrink_cor(t(perm.a.se)))
 
   list(total = topk(d$total), cis = topk(d$cis), trans = topk(d$trans), dpar_sc = dpar_sc_null, dpar_se = dpar_se_null)
-}
-
-## Assembles CB (per-pair est/se/z/p) from a point estimate
-## (coexpr_decompose(resid)) and a list of per-draw results, one element
-## per B from coexpr_bootstrap_one(). Same est/se/z/p structure the old
-## inline loop produced, just built from pre-computed draw results so this
-## step is cheap regardless of where the draws themselves were run.
-assemble_coexpr_bootstrap <- function(resid, pt, draw_results) {
-  p  <- nrow(resid$MIX.SC); gn <- rownames(resid$MIX.SC)
-  up <- which(upper.tri(matrix(0, p, p)))
-  ij <- arrayInd(up, c(p, p))
-  base <- data.frame(gene_i = gn[ij[, 1]], gene_j = gn[ij[, 2]])
-
-  acc <- list(total   = do.call(rbind, lapply(draw_results, `[[`, "total")),
-              cis     = do.call(rbind, lapply(draw_results, `[[`, "cis")),
-              trans   = do.call(rbind, lapply(draw_results, `[[`, "trans")),
-              dpar_sc = do.call(rbind, lapply(draw_results, `[[`, "dpar_sc")),
-              dpar_se = do.call(rbind, lapply(draw_results, `[[`, "dpar_se")))
-
-  mk <- function(est, boot) { se <- apply(boot, 2, sd, na.rm = TRUE)
-    data.frame(base, est = est, se = se, z = est / se, p = 2 * pnorm(-abs(est / se))) }
-
-  list(total   = mk(pt$total[up],   acc$total),
-       cis     = mk(pt$cis[up],     acc$cis),
-       trans   = mk(pt$trans[up],   acc$trans),
-       dpar_sc = mk(pt$dpar_sc[up], acc$dpar_sc),
-       dpar_se = mk(pt$dpar_se[up], acc$dpar_se), lambda = pt$lambda)
 }
 
 ## Streaming accumulator for the co-expression bootstrap SE. Holding all B
@@ -1809,29 +1756,6 @@ coexpr_dom_class_table <- function(CB, sig = 0.05) {
              class = cls, stringsAsFactors = FALSE)
 }
 
-## Per-gene degree in the co-expression divergence network, how many
-## partners each gene has a BH-significant divergent pair with, split by
-## which contrast drives it. degree_any uses the five-class call so it
-## matches Figure 11 exactly rather than re-deriving significance. Genes
-## with high degree_any are candidates for being actual rewiring hubs
-## rather than one member of a single divergent pair.
-## class_table: coexpr_class_table() output. genes: CO.GENES, so genes
-## with zero hits still appear with degree 0 rather than being dropped.
-coexpr_gene_degree <- function(class_table, genes, sig = 0.05) {
-  count_for <- function(hit) {
-    tab <- table(c(class_table$gene_i[hit], class_table$gene_j[hit]))
-    out <- setNames(integer(length(genes)), genes)
-    out[names(tab)] <- tab[names(tab)]
-    out
-  }
-  data.frame(gene         = genes,
-             degree_total = count_for(class_table$total_padj < sig),
-             degree_cis   = count_for(class_table$cis_padj   < sig),
-             degree_trans = count_for(class_table$trans_padj < sig),
-             degree_any   = count_for(class_table$class != "Conserved"),
-             row.names = NULL)
-}
-
 ## ============================================================
 ## Fig 11 : co-expression cis vs trans (per gene pair)
 ## ============================================================
@@ -1873,20 +1797,6 @@ plot_coexpr_dom_class <- function(DT, main = NULL, lim = NULL) {
   abline(h = 0, v = 0, col = COLOR.GREY[["dark"]])
   points(x, y, pch = 16, cex = 0.4, col = col)
   legend("topleft", legend = DOM.CLASS, col = COLOR.LIST.2, pch = 16, bty = "n", cex = 0.8)
-}
-
-## Residual scatter for one gene pair in each parent dataset, Sc in red
-## and Se in blue, with the per-dataset correlation in the legend.
-## resid: RESID (genes x cells per dataset). gi, gj: gene names.
-plot_coexpr_pair <- function(resid, gi, gj, main = NULL) {
-  xsc <- resid$MIX.SC[gi, ]; ysc <- resid$MIX.SC[gj, ]
-  xse <- resid$MIX.SE[gi, ]; yse <- resid$MIX.SE[gj, ]
-  lim_x <- range(c(xsc, xse), finite = TRUE)
-  lim_y <- range(c(ysc, yse), finite = TRUE)
-  if (is.null(main)) main <- sprintf("%s vs %s", gi, gj)
-  plot(xsc, ysc, pch = 16, cex = 0.5, col = adjustcolor(SPECIES.COLOR[["Sc"]], 0.5), xlim = lim_x, ylim = lim_y, xlab = gi, ylab = gj, main = main)
-  points(xse, yse, pch = 16, cex = 0.5, col = adjustcolor(SPECIES.COLOR[["Se"]], 0.5))
-  legend("topleft", bty = "n", pch = 16, col = SPECIES.COLOR[c("Sc", "Se")], legend = c(sprintf("Sc  r = %.2f", cor(xsc, ysc, use = "complete.obs")), sprintf("Se  r = %.2f", cor(xse, yse, use = "complete.obs"))))
 }
 
 ## Two-seed adequacy check for the co-expression bootstrap, same idea as
@@ -2264,30 +2174,6 @@ class_heatmap <- function(class_a, class_b, brk = length(COLOR.LIST.3), fdr = 0.
 ## ============================================================
 ## Gene-identity overlap between two categorical classifications
 ## ============================================================
-## class_heatmap() answers "is any one cell of the mean-class x
-## noise-class table over- or under-represented" -- eleven separate
-## per-cell hypergeometric tests. The claim that heatmap is usually used
-## to support in text ("mean-divergence and noise-divergence
-## classification aren't just two labels attached to the same underlying
-## gene identity") needs one overall number instead: Cohen's kappa is the
-## standard chance-corrected agreement statistic for two categorical
-## classifications of the same items, with kappa = 0 meaning the two
-## classifications agree no more than their own class-size distributions
-## would produce by chance, and kappa = 1 meaning perfect agreement.
-##
-## po is the observed fraction of genes assigned the same class label by
-## both classifications (the table's diagonal). pe is the fraction that
-## would agree by chance alone, given each classification's own marginal
-## class-size distribution (rowSums(tab)/n and colSums(tab)/n), which is
-## exactly the expectation used by class_heatmap's per-cell test, summed
-## over the diagonal instead of tested cell by cell.
-.cohen_kappa <- function(tab) {
-  n  <- sum(tab)
-  po <- sum(diag(tab)) / n
-  pe <- sum(rowSums(tab) * colSums(tab)) / n^2
-  (po - pe) / (1 - pe)
-}
-
 ## class_identity_overlap: kappa plus two complements. Per-class Jaccard
 ## is computed directly on gene membership (|A_k intersect B_k| /
 ## |A_k union B_k|), not from the contingency table margins, so a high
@@ -2692,24 +2578,6 @@ plot_cluster_marker_enrichment <- function(res, label, pdf_path, width = 7, heig
   dev.off()
 }
 
-## Console-text mirror of plot_cluster_marker_enrichment(): for every
-## cluster and direction (up/down), prints each ontology's significant
-## terms via print_enrich_brief() (Description, p.adjust, Count), so the
-## results are readable without opening the pdf and remain available
-## even for a term set whose barplot failed to render (see
-## barplot_enrich_pair()'s per-plot tryCatch).
-report_cluster_marker_enrichment <- function(res, label, q = 0.2) {
-  if (is.null(res)) return(invisible(NULL))
-  for (cc in res$cluster_ids) {
-    cat(sprintf("\n%s cluster %s vs rest\n", label, cc))
-    for (ont in c("BP", "MF", "CC", "KEGG")) {
-      cat(sprintf(" %s, up (higher in cluster %s):\n", ont, cc));   print_enrich_brief(res$up_enrich[[cc]][[ont]],   q = q)
-      cat(sprintf(" %s, down (lower in cluster %s):\n", ont, cc));  print_enrich_brief(res$down_enrich[[cc]][[ont]], q = q)
-    }
-  }
-  invisible(NULL)
-}
-
 ## Cell-cycle phase scoring extended to a dataset's own validated
 ## clustering (Idents already set, e.g. YSC.MIX.SE, YSC.HYB.SC,
 ## YSC.HYB.SE), rather than only YSC.MERGE. Reuses the same three
@@ -2946,121 +2814,6 @@ species_composition_report <- function(cc1, cc2, met1, met2, diag1, diag2, label
 ## enrichment of one specific gene set (e.g. a GO/KEGG hit's core genes)
 ## across the regulatory classification
 ## ============================================================
-## For each level of the regulatory classification (Conserved, Cis, Trans,
-## Cis + Trans, Compensatory), shows how much of that class's membership in
-## a pre-defined gene set comes from genes with significantly higher
-## parental noise or mean in Sc (bottom segment) versus Se (top segment).
-## Direction is defined exactly as in build_reg_go_sets: the sign of the
-## total parental contrast, gated by its own permutation p at `sig`,
-## independent of which component (cis or trans) drives the class call.
-##
-## Each segment's height and its significance test share the same
-## denominator, the direction-restricted subgroup size within that class
-## (n), not the class total (n_class), so a class with very few
-## direction-significant genes gets a short, honestly uncertain segment
-## rather than an inflated one. n_class and n are both returned so this is
-## checkable. A per-segment two-sided hypergeometric test (gene_set vs
-## universe, n draws) is BH-corrected across every level x direction cell;
-## cells with padj < fdr get a star. bg_rate (gene_set size / universe
-## size) is drawn as a dashed reference line, since a class x direction bar
-## is only interpretable relative to how often the gene set turns up by
-## chance genome-wide.
-##
-## Both segments use the class's own colour from cols (default
-## COLOR.LIST.1, positionally matched to levels exactly as classify_reg
-## does); the Se segment is cross-hatched (two overlaid polygon() calls at
-## angle and angle + 90) so it stays visually distinct from Sc without a
-## second colour scheme. Sample size n is printed inside each segment,
-## since some splits (Reinforcing and Compensatory especially) will be
-## thin, and a tall bar built on a handful of genes should not visually
-## outweigh one built on many.
-##
-## Args: BURST.CONTRASTS, PR as elsewhere; gene_set (character vector of gene IDs to
-##   test, e.g. a significant GO term's core genes); universe (character
-##   vector, the tested background, e.g. BURST.CONTRASTS$gene); quantity ("mean" or
-##   "bfreq"); levels (REG.CLASS by default); sig (threshold for the
-##   direction call); fdr (BH threshold for stars); cols; hatch_density,
-##   hatch_angle (polygon() hatching parameters for the Se segment).
-## Plots to the current device. Returns invisibly a data.frame with one row
-##   per level x direction: level, direction, n_class, n, n_in_set,
-##   frac_within_dir, height, p, padj.
-plot_geneset_direction_stack <- function(BURST.CONTRASTS, PR, gene_set, universe, quantity = c("mean", "bfreq", "bsize", "kbal"), levels = REG.CLASS, sig = 0.05, fdr = 0.05, cols = COLOR.LIST.1, hatch_density = 18, hatch_angle = 45, main = NULL, ylab = NULL) {
-  quantity <- match.arg(quantity)
-  gene_set <- intersect(gene_set, universe)
-  bg_rate  <- length(gene_set) / length(universe)
-
-  class_vec <- reg_class_vec(BURST.CONTRASTS, PR, quantity, sig)
-  genes <- BURST.CONTRASTS$gene
-  i    <- match(genes, PR$gene)
-  est  <- BURST.CONTRASTS[[paste0(quantity, "_total_est")]]
-  p0   <- PR[[paste0(quantity, "_total_q")]][i]
-  dirn <- ifelse(!is.finite(p0) | p0 >= sig, "ns", ifelse(est > 0, "Sc", "Se"))
-
-  calc <- function(k, d) {
-    n_class <- length(intersect(genes[!is.na(class_vec) & class_vec == k], universe))
-    sel <- !is.na(class_vec) & class_vec == k & dirn == d
-    g   <- intersect(genes[sel], universe)
-    n   <- length(g); hit <- length(intersect(g, gene_set))
-    pp  <- if (n > 0) {
-      po <- phyper(hit - 1, length(gene_set), length(universe) - length(gene_set), n, lower.tail = FALSE)
-      pu <- phyper(hit,     length(gene_set), length(universe) - length(gene_set), n, lower.tail = TRUE)
-      2 * min(po, pu, 0.5)
-    } else NA_real_
-    data.frame(level = k, direction = d, n_class = n_class, n = n, n_in_set = hit,
-               frac_within_dir = if (n > 0) hit / n else NA_real_, p = pp,
-               stringsAsFactors = FALSE)
-  }
-
-  RES <- do.call(rbind, lapply(levels, function(k) rbind(calc(k, "Sc"), calc(k, "Se"))))
-  RES$padj   <- p.adjust(RES$p, "BH")
-  RES$height <- ifelse(is.na(RES$frac_within_dir), 0, RES$frac_within_dir)
-
-  pick <- function(v) { x <- RES[[v]][RES$direction == "Sc"]; names(x) <- RES$level[RES$direction == "Sc"]; x[levels] }
-  pick_se <- function(v) { x <- RES[[v]][RES$direction == "Se"]; names(x) <- RES$level[RES$direction == "Se"]; x[levels] }
-  h_sc <- pick("height");    h_se <- pick_se("height")
-  n_sc <- pick("n");         n_se <- pick_se("n")
-  padj_sc <- pick("padj");   padj_se <- pick_se("padj")
-
-  if (is.null(ylab)) ylab <- "fraction of direction-specific subgroup in gene set"
-  if (is.null(main))  main <- paste0(quantity, ": gene set representation by class")
-
-  n_lev <- length(levels)
-  bar_w <- 0.7
-  xpos  <- seq_len(n_lev)
-  ymax  <- suppressWarnings(max(c(h_sc + h_se, bg_rate), na.rm = TRUE)) * 1.25
-  if (!is.finite(ymax) || ymax <= 0) ymax <- 1
-
-  op <- par(mar = c(8, 5, 3, 1)); on.exit(par(op))
-  plot(NA, xlim = c(0.3, n_lev + 0.7), ylim = c(0, ymax), xaxt = "n", xlab = "", ylab = ylab, main = main)
-  axis(1, at = xpos, labels = levels, las = 2)
-  abline(h = bg_rate, lty = 2, col = COLOR.GREY[["dark"]])
-
-  for (idx in seq_len(n_lev)) {
-    col_k <- cols[idx]
-    ink_k <- if (sum(col2rgb(col_k) * c(0.299, 0.587, 0.114)) < 110) "white" else "black"   # readable on dark fills
-    x0 <- xpos[idx] - bar_w / 2; x1 <- xpos[idx] + bar_w / 2
-    hs <- if (is.na(h_sc[idx])) 0 else h_sc[idx]
-    he <- if (is.na(h_se[idx])) 0 else h_se[idx]
-
-    rect(x0, 0, x1, hs, col = col_k, border = "black")
-    if (he > 0) {
-      rect(x0, hs, x1, hs + he, col = col_k, border = "black")
-      polygon(c(x0, x1, x1, x0), c(hs, hs, hs + he, hs + he), density = hatch_density, angle = hatch_angle, col = ink_k, border = NA)
-      polygon(c(x0, x1, x1, x0), c(hs, hs, hs + he, hs + he), density = hatch_density, angle = hatch_angle + 90, col = ink_k, border = NA)
-    }
-
-    if (!is.na(n_sc[idx]) && n_sc[idx] > 0) text(xpos[idx], hs / 2,      paste0("n=", n_sc[idx]), cex = 0.65, col = ink_k)
-    if (!is.na(n_se[idx]) && n_se[idx] > 0) text(xpos[idx], hs + he / 2, paste0("n=", n_se[idx]), cex = 0.65, col = ink_k)
-
-    if (!is.na(padj_sc[idx]) && padj_sc[idx] < fdr) text(xpos[idx], hs + ymax * 0.02,      "*", cex = 1.3, font = 2)
-    if (!is.na(padj_se[idx]) && padj_se[idx] < fdr) text(xpos[idx], hs + he + ymax * 0.02, "*", cex = 1.3, font = 2)
-  }
-
- legend("topright", legend = c("Sc-higher", "Se-higher"), fill = COLOR.GREY[["mid"]], density = c(NA, hatch_density), angle = hatch_angle, border = "black", bty = "n", cex = 0.8)
-
-  invisible(RES[, c("level", "direction", "n_class", "n", "n_in_set", "frac_within_dir", "height", "p", "padj")])
-}
-
 ## ============================================================
 ## 9. PUBLICATION FIGURES
 ## ============================================================
@@ -4437,15 +4190,6 @@ boot_ari_one <- function(counts, idx, ref_clusters, nfeatures, dims_n, resolutio
   adjustedRandIndex(as.integer(ref_clusters[idx]), as.integer(Idents(boot_obj)))
 }
 
-## Serial wrapper around boot_ari_one(), kept as the local path. Draws
-## come from make_boot_idx() unless a matrix is supplied.
-bootstrap_cluster_stability <- function(counts, clusters, nfeatures, dims_n, resolution, metric = "manhattan", B = 20, seed = 1,
-                                        idx = make_boot_idx(ncol(counts), B, seed)) {
-  ari <- vapply(seq_len(ncol(idx)), function(b)
-    boot_ari_one(counts, idx[, b], clusters, nfeatures, dims_n, resolution, metric), numeric(1))
-  list(mean_ari = mean(ari), ari = ari)
-}
-
 ## Coarsest resolution within the contiguous plateau of ok that shares
 ## the same cluster count as the resolution with the single highest
 ## silhouette. Grouping by cluster count rather than by a silhouette
@@ -4837,14 +4581,6 @@ fit_offset_nb_mm <- function(y, expo) {
   c(mu = mu_hat, size = theta_mm)
 }
 
-## Splits a pooled sample at position n1 using a pre-drawn permutation
-## of indices and fits each half with the MLE, mirroring .fit_split()
-## above for the power simulation's own fit function.
-fit_split_nb <- function(y, expo, perm, n1) {
-  g1 <- perm[seq_len(n1)]; g0 <- perm[(n1 + 1):length(perm)]
-  list(a = fit_offset_nb(y[g1], expo[g1]), b = fit_offset_nb(y[g0], expo[g0]))
-}
-
 ## Same split, fit with the method-of-moments estimator. Used inside the
 ## permutation loop, which runs NI times per simulated dataset.
 fit_split_nb_mm <- function(y, expo, perm, n1) {
@@ -4965,35 +4701,6 @@ umap_plot <- function(obj, title = NULL, group.by = NULL) {
   lv   <- if (is.factor(ids)) levels(droplevels(ids)) else sort(unique(as.character(ids)))
   cols <- setNames(cluster_cols(length(lv)), lv)
   DimPlot(obj, reduction = "umap", group.by = group.by, cols = cols, label = TRUE, repel = TRUE) + ggtitle(title)
-}
-
-## Draws every palette as a swatch row, in normal vision and (when the colorspace
-## package is installed) simulated deuteranopia and protanopia. file = NULL draws
-## on the open device.
-plot_palette_swatches <- function(file = NULL) {
-  pals <- list(
-    "Species"            = SPECIES.COLOR,
-    "Regulatory"         = COLOR.LIST.1,
-    "Dominance"          = COLOR.LIST.2,
-    "Heatmap (diverging)" = COLOR.LIST.3,
-    "Sequential"         = COLOR.SEQ[round(seq(1, 100, length.out = 11))],
-    "Power lines"        = line_colors(6),
-    "Clusters"           = cluster_cols(6),
-    "Cell cycle"         = COLOR.PHASE,
-    "Neutrals, accent"   = c(COLOR.GREY, accent = COLOR.ACCENT))
-  views <- list(normal = identity)
-  if (requireNamespace("colorspace", quietly = TRUE))
-    views <- c(views, list(deutan = colorspace::deutan, protan = colorspace::protan))
-  if (!is.null(file)) { pdf(file, width = 3 * length(views) + 1.5, height = 0.42 * length(pals) + 0.6); on.exit(dev.off()) }
-  op <- par(mfrow = c(length(pals), length(views)), mar = c(0.1, 7.5, 1.1, 0.4))
-  on.exit(par(op), add = TRUE, after = FALSE)   # restore par before the device closes
-  for (i in seq_along(pals)) for (v in seq_along(views)) {
-    cols <- views[[v]](unname(pals[[i]]))
-    plot.new(); plot.window(xlim = c(0, length(cols)), ylim = c(0, 1))
-    rect(seq_along(cols) - 1, 0, seq_along(cols), 1, col = cols, border = "white", lwd = 1.5)
-    if (v == 1) mtext(names(pals)[i], side = 2, las = 1, cex = 0.6, line = 0.3)
-    if (i == 1) mtext(names(views)[v], side = 3, cex = 0.65, line = 0.2)
-  }
 }
 
 ## Color ramp with n colors, one per line in a panel.
@@ -5326,35 +5033,32 @@ mean_adjusted_noise <- function(mean, cv2, span = 0.3) {
 }
 
 ## ============================================================
-## 15. UNUSED (not called by analysis.R or any cluster/scripts job)
+## 15. UNUSED (no caller in analysis.R or cluster/scripts)
 ## ============================================================
-## Every function below was cross-referenced against analysis.R and every
-## script in cluster/scripts/ and has no caller in either. Each is confirmed
-## removable without changing what the pipeline computes; they are kept here,
-## grouped separately from the functions the pipeline actually uses, for manual
-## or interactive use.
+## Each function below has no caller in analysis.R, in cluster/scripts/, or
+## in any function those reach. Keeping them here separates the code the
+## pipeline runs (Sections 1-14) from code kept for interactive use.
 ##
-## pilot_split_se(), boot_contrasts(), permute_contrasts(), and
-## coexpr_bootstrap() are serial, local counterparts of pilot_split_se_one(),
-## boot_contrasts_one(), permute_contrasts_one(), and coexpr_bootstrap_one():
-## the pipeline calls the "_one" form directly via parLapply in
-## gene_pilot.R, gene_boot.R, gene_perm.R, and coexpr_boot.R. These serial
-## wrappers are for running the same computation locally on a small gene set
-## without the cluster round trip.
+## 15a. Serial local counterparts of cluster-run functions. Each runs on one
+## machine the computation that a cluster job distributes, which suits a
+## quick check on a small gene set or a small B:
+##   pilot_split_se()               <- pilot_split_se_one() in gene_pilot.R
+##   boot_contrasts()               <- boot_contrasts_one() in gene_boot.R
+##   permute_contrasts()            <- permute_contrasts_one() in gene_perm.R
+##   coexpr_bootstrap()             <- coexpr_bootstrap_one() in coexpr_boot.R
+##   bootstrap_cluster_stability()  <- boot_ari_one() in cluster_stability.R
+## assemble_coexpr_bootstrap() builds CB from coexpr_bootstrap()'s draws; the
+## cluster path builds CB with coexpr_acc_finalize(). The cluster-stability
+## comparison runs through cluster_stability_inputs(), cluster_stability.R,
+## assemble_cluster_stability(), and report_bootstrap_compare();
+## bootstrap_compare_resolutions() is its single-call local form, and
+## plateau_coarsest() (Section 11) serves both.
 ##
-## refine_by_boundary(), chk(), and chk_prec() are gene-fit calibration
-## helpers: refine_by_boundary() reclassifies borderline DISP = Inf calls
-## near the Poisson/NB boundary, and chk()/chk_prec() summarize a fit
-## frame's convergence and precision by mean-count bin.
+## 15b. Gene-fit calibration helpers for the Poisson/NB boundary and for
+## convergence and precision by mean-count bin: refine_by_boundary(),
+## boot_disp_logse(), chk(), chk_prec().
 ##
-## bootstrap_compare_resolutions() bootstrap-compares a chosen clustering
-## resolution against the grid's highest-silhouette plateau in a single
-## local call. The pipeline instead runs that same comparison through the
-## cluster: cluster_stability_inputs() packages the candidate resolutions,
-## cluster_stability.R runs the bootstrap resampling, and
-## assemble_cluster_stability() plus report_bootstrap_compare() assemble and
-## print the result. plateau_coarsest(), which this function calls, is still
-## used directly by cluster_stability_inputs() and is defined in Section 11.
+## 15c. Diagnostics and plots for interactive use.
 
 ## Serial convenience wrapper for a quick local check on a handful of
 ## genes. The pipeline calls pilot_split_se_one() directly via parLapply
@@ -5440,4 +5144,296 @@ bootstrap_compare_resolutions <- function(sweep, counts, nfeatures, dims_n, metr
   final_res <- table$res[which.max(table$boot_mean_ari)]
   final_obj <- FindClusters(sweep$obj, resolution = final_res, verbose = FALSE)
   list(table = table, final_res = final_res, final_obj = final_obj)
+}
+
+## ---- 15a (continued) ----
+
+## Assembles CB (per-pair est/se/z/p) from a point estimate
+## (coexpr_decompose(resid)) and a list of per-draw results, one element
+## per B from coexpr_bootstrap_one(). Same est/se/z/p structure the old
+## inline loop produced, just built from pre-computed draw results so this
+## step is cheap regardless of where the draws themselves were run.
+assemble_coexpr_bootstrap <- function(resid, pt, draw_results) {
+  p  <- nrow(resid$MIX.SC); gn <- rownames(resid$MIX.SC)
+  up <- which(upper.tri(matrix(0, p, p)))
+  ij <- arrayInd(up, c(p, p))
+  base <- data.frame(gene_i = gn[ij[, 1]], gene_j = gn[ij[, 2]])
+
+  acc <- list(total   = do.call(rbind, lapply(draw_results, `[[`, "total")),
+              cis     = do.call(rbind, lapply(draw_results, `[[`, "cis")),
+              trans   = do.call(rbind, lapply(draw_results, `[[`, "trans")),
+              dpar_sc = do.call(rbind, lapply(draw_results, `[[`, "dpar_sc")),
+              dpar_se = do.call(rbind, lapply(draw_results, `[[`, "dpar_se")))
+
+  mk <- function(est, boot) { se <- apply(boot, 2, sd, na.rm = TRUE)
+    data.frame(base, est = est, se = se, z = est / se, p = 2 * pnorm(-abs(est / se))) }
+
+  list(total   = mk(pt$total[up],   acc$total),
+       cis     = mk(pt$cis[up],     acc$cis),
+       trans   = mk(pt$trans[up],   acc$trans),
+       dpar_sc = mk(pt$dpar_sc[up], acc$dpar_sc),
+       dpar_se = mk(pt$dpar_se[up], acc$dpar_se), lambda = pt$lambda)
+}
+
+## Serial wrapper around boot_ari_one(), kept as the local path. Draws
+## come from make_boot_idx() unless a matrix is supplied.
+bootstrap_cluster_stability <- function(counts, clusters, nfeatures, dims_n, resolution, metric = "manhattan", B = 20, seed = 1,
+                                        idx = make_boot_idx(ncol(counts), B, seed)) {
+  ari <- vapply(seq_len(ncol(idx)), function(b)
+    boot_ari_one(counts, idx[, b], clusters, nfeatures, dims_n, resolution, metric), numeric(1))
+  list(mean_ari = mean(ari), ari = ari)
+}
+
+## ---- 15b (continued) ----
+
+## Bootstrap dispersion uncertainty over cells (one gene)
+boot_disp_logse <- function(y, exposure, B = 200, seed = 1) {
+  if (!is.null(dim(y))) stop("boot_disp_logse() takes one gene's counts")
+  set.seed(seed); n <- length(y)
+  lt <- replicate(B, log(neg_binom_fit_offset(y[sample.int(n, n, TRUE)], exposure[sample.int(n, n, TRUE)])["disp"]))
+  finite <- is.finite(lt)
+  c(disp_logse_boot = if (sum(finite) > 1) sd(lt[finite]) else NA_real_, boundary_frac   = mean(!finite))
+}
+
+## ---- 15c (continued) ----
+
+## Raw per-dataset shrinkage correlation matrices, kept separately from
+## coexpr_decompose() (which only keeps differences). This is for testing
+## whether observed correlation MAGNITUDE is attenuated at low
+## reliability, a bias question, distinct from whether bootstrap SE
+## tracks reliability (a variance question, already tested and found
+## flat within CO.GENES). Same shrink_cor() calls, nothing new computed.
+coexpr_raw_cor <- function(resid) {
+  list(Rsc  = shrink_cor(t(resid$MIX.SC)), Rse  = shrink_cor(t(resid$MIX.SE)), Rhsc = shrink_cor(t(resid$HYB.SC)), Rhse = shrink_cor(t(resid$HYB.SE)))
+}
+
+## Per-gene degree in the co-expression divergence network, how many
+## partners each gene has a BH-significant divergent pair with, split by
+## which contrast drives it. degree_any uses the five-class call so it
+## matches Figure 11 exactly rather than re-deriving significance. Genes
+## with high degree_any are candidates for being actual rewiring hubs
+## rather than one member of a single divergent pair.
+## class_table: coexpr_class_table() output. genes: CO.GENES, so genes
+## with zero hits still appear with degree 0 rather than being dropped.
+coexpr_gene_degree <- function(class_table, genes, sig = 0.05) {
+  count_for <- function(hit) {
+    tab <- table(c(class_table$gene_i[hit], class_table$gene_j[hit]))
+    out <- setNames(integer(length(genes)), genes)
+    out[names(tab)] <- tab[names(tab)]
+    out
+  }
+  data.frame(gene         = genes,
+             degree_total = count_for(class_table$total_padj < sig),
+             degree_cis   = count_for(class_table$cis_padj   < sig),
+             degree_trans = count_for(class_table$trans_padj < sig),
+             degree_any   = count_for(class_table$class != "Conserved"),
+             row.names = NULL)
+}
+
+## Residual scatter for one gene pair in each parent dataset, Sc in red
+## and Se in blue, with the per-dataset correlation in the legend.
+## resid: RESID (genes x cells per dataset). gi, gj: gene names.
+plot_coexpr_pair <- function(resid, gi, gj, main = NULL) {
+  xsc <- resid$MIX.SC[gi, ]; ysc <- resid$MIX.SC[gj, ]
+  xse <- resid$MIX.SE[gi, ]; yse <- resid$MIX.SE[gj, ]
+  lim_x <- range(c(xsc, xse), finite = TRUE)
+  lim_y <- range(c(ysc, yse), finite = TRUE)
+  if (is.null(main)) main <- sprintf("%s vs %s", gi, gj)
+  plot(xsc, ysc, pch = 16, cex = 0.5, col = adjustcolor(SPECIES.COLOR[["Sc"]], 0.5), xlim = lim_x, ylim = lim_y, xlab = gi, ylab = gj, main = main)
+  points(xse, yse, pch = 16, cex = 0.5, col = adjustcolor(SPECIES.COLOR[["Se"]], 0.5))
+  legend("topleft", bty = "n", pch = 16, col = SPECIES.COLOR[c("Sc", "Se")], legend = c(sprintf("Sc  r = %.2f", cor(xsc, ysc, use = "complete.obs")), sprintf("Se  r = %.2f", cor(xse, yse, use = "complete.obs"))))
+}
+
+## class_heatmap() answers "is any one cell of the mean-class x
+## noise-class table over- or under-represented" -- eleven separate
+## per-cell hypergeometric tests. The claim that heatmap is usually used
+## to support in text ("mean-divergence and noise-divergence
+## classification aren't just two labels attached to the same underlying
+## gene identity") needs one overall number instead: Cohen's kappa is the
+## standard chance-corrected agreement statistic for two categorical
+## classifications of the same items, with kappa = 0 meaning the two
+## classifications agree no more than their own class-size distributions
+## would produce by chance, and kappa = 1 meaning perfect agreement.
+##
+## po is the observed fraction of genes assigned the same class label by
+## both classifications (the table's diagonal). pe is the fraction that
+## would agree by chance alone, given each classification's own marginal
+## class-size distribution (rowSums(tab)/n and colSums(tab)/n), which is
+## exactly the expectation used by class_heatmap's per-cell test, summed
+## over the diagonal instead of tested cell by cell.
+.cohen_kappa <- function(tab) {
+  n  <- sum(tab)
+  po <- sum(diag(tab)) / n
+  pe <- sum(rowSums(tab) * colSums(tab)) / n^2
+  (po - pe) / (1 - pe)
+}
+
+## Console-text mirror of plot_cluster_marker_enrichment(): for every
+## cluster and direction (up/down), prints each ontology's significant
+## terms via print_enrich_brief() (Description, p.adjust, Count), so the
+## results are readable without opening the pdf and remain available
+## even for a term set whose barplot failed to render (see
+## barplot_enrich_pair()'s per-plot tryCatch).
+report_cluster_marker_enrichment <- function(res, label, q = 0.2) {
+  if (is.null(res)) return(invisible(NULL))
+  for (cc in res$cluster_ids) {
+    cat(sprintf("\n%s cluster %s vs rest\n", label, cc))
+    for (ont in c("BP", "MF", "CC", "KEGG")) {
+      cat(sprintf(" %s, up (higher in cluster %s):\n", ont, cc));   print_enrich_brief(res$up_enrich[[cc]][[ont]],   q = q)
+      cat(sprintf(" %s, down (lower in cluster %s):\n", ont, cc));  print_enrich_brief(res$down_enrich[[cc]][[ont]], q = q)
+    }
+  }
+  invisible(NULL)
+}
+
+## For each level of the regulatory classification (Conserved, Cis, Trans,
+## Cis + Trans, Compensatory), shows how much of that class's membership in
+## a pre-defined gene set comes from genes with significantly higher
+## parental noise or mean in Sc (bottom segment) versus Se (top segment).
+## Direction is defined exactly as in build_reg_go_sets: the sign of the
+## total parental contrast, gated by its own permutation p at `sig`,
+## independent of which component (cis or trans) drives the class call.
+##
+## Each segment's height and its significance test share the same
+## denominator, the direction-restricted subgroup size within that class
+## (n), not the class total (n_class), so a class with very few
+## direction-significant genes gets a short, honestly uncertain segment
+## rather than an inflated one. n_class and n are both returned so this is
+## checkable. A per-segment two-sided hypergeometric test (gene_set vs
+## universe, n draws) is BH-corrected across every level x direction cell;
+## cells with padj < fdr get a star. bg_rate (gene_set size / universe
+## size) is drawn as a dashed reference line, since a class x direction bar
+## is only interpretable relative to how often the gene set turns up by
+## chance genome-wide.
+##
+## Both segments use the class's own colour from cols (default
+## COLOR.LIST.1, positionally matched to levels exactly as classify_reg
+## does); the Se segment is cross-hatched (two overlaid polygon() calls at
+## angle and angle + 90) so it stays visually distinct from Sc without a
+## second colour scheme. Sample size n is printed inside each segment,
+## since some splits (Reinforcing and Compensatory especially) will be
+## thin, and a tall bar built on a handful of genes should not visually
+## outweigh one built on many.
+##
+## Args: BURST.CONTRASTS, PR as elsewhere; gene_set (character vector of gene IDs to
+##   test, e.g. a significant GO term's core genes); universe (character
+##   vector, the tested background, e.g. BURST.CONTRASTS$gene); quantity ("mean" or
+##   "bfreq"); levels (REG.CLASS by default); sig (threshold for the
+##   direction call); fdr (BH threshold for stars); cols; hatch_density,
+##   hatch_angle (polygon() hatching parameters for the Se segment).
+## Plots to the current device. Returns invisibly a data.frame with one row
+##   per level x direction: level, direction, n_class, n, n_in_set,
+##   frac_within_dir, height, p, padj.
+plot_geneset_direction_stack <- function(BURST.CONTRASTS, PR, gene_set, universe, quantity = c("mean", "bfreq", "bsize", "kbal"), levels = REG.CLASS, sig = 0.05, fdr = 0.05, cols = COLOR.LIST.1, hatch_density = 18, hatch_angle = 45, main = NULL, ylab = NULL) {
+  quantity <- match.arg(quantity)
+  gene_set <- intersect(gene_set, universe)
+  bg_rate  <- length(gene_set) / length(universe)
+
+  class_vec <- reg_class_vec(BURST.CONTRASTS, PR, quantity, sig)
+  genes <- BURST.CONTRASTS$gene
+  i    <- match(genes, PR$gene)
+  est  <- BURST.CONTRASTS[[paste0(quantity, "_total_est")]]
+  p0   <- PR[[paste0(quantity, "_total_q")]][i]
+  dirn <- ifelse(!is.finite(p0) | p0 >= sig, "ns", ifelse(est > 0, "Sc", "Se"))
+
+  calc <- function(k, d) {
+    n_class <- length(intersect(genes[!is.na(class_vec) & class_vec == k], universe))
+    sel <- !is.na(class_vec) & class_vec == k & dirn == d
+    g   <- intersect(genes[sel], universe)
+    n   <- length(g); hit <- length(intersect(g, gene_set))
+    pp  <- if (n > 0) {
+      po <- phyper(hit - 1, length(gene_set), length(universe) - length(gene_set), n, lower.tail = FALSE)
+      pu <- phyper(hit,     length(gene_set), length(universe) - length(gene_set), n, lower.tail = TRUE)
+      2 * min(po, pu, 0.5)
+    } else NA_real_
+    data.frame(level = k, direction = d, n_class = n_class, n = n, n_in_set = hit,
+               frac_within_dir = if (n > 0) hit / n else NA_real_, p = pp,
+               stringsAsFactors = FALSE)
+  }
+
+  RES <- do.call(rbind, lapply(levels, function(k) rbind(calc(k, "Sc"), calc(k, "Se"))))
+  RES$padj   <- p.adjust(RES$p, "BH")
+  RES$height <- ifelse(is.na(RES$frac_within_dir), 0, RES$frac_within_dir)
+
+  pick <- function(v) { x <- RES[[v]][RES$direction == "Sc"]; names(x) <- RES$level[RES$direction == "Sc"]; x[levels] }
+  pick_se <- function(v) { x <- RES[[v]][RES$direction == "Se"]; names(x) <- RES$level[RES$direction == "Se"]; x[levels] }
+  h_sc <- pick("height");    h_se <- pick_se("height")
+  n_sc <- pick("n");         n_se <- pick_se("n")
+  padj_sc <- pick("padj");   padj_se <- pick_se("padj")
+
+  if (is.null(ylab)) ylab <- "fraction of direction-specific subgroup in gene set"
+  if (is.null(main))  main <- paste0(quantity, ": gene set representation by class")
+
+  n_lev <- length(levels)
+  bar_w <- 0.7
+  xpos  <- seq_len(n_lev)
+  ymax  <- suppressWarnings(max(c(h_sc + h_se, bg_rate), na.rm = TRUE)) * 1.25
+  if (!is.finite(ymax) || ymax <= 0) ymax <- 1
+
+  op <- par(mar = c(8, 5, 3, 1)); on.exit(par(op))
+  plot(NA, xlim = c(0.3, n_lev + 0.7), ylim = c(0, ymax), xaxt = "n", xlab = "", ylab = ylab, main = main)
+  axis(1, at = xpos, labels = levels, las = 2)
+  abline(h = bg_rate, lty = 2, col = COLOR.GREY[["dark"]])
+
+  for (idx in seq_len(n_lev)) {
+    col_k <- cols[idx]
+    ink_k <- if (sum(col2rgb(col_k) * c(0.299, 0.587, 0.114)) < 110) "white" else "black"   # readable on dark fills
+    x0 <- xpos[idx] - bar_w / 2; x1 <- xpos[idx] + bar_w / 2
+    hs <- if (is.na(h_sc[idx])) 0 else h_sc[idx]
+    he <- if (is.na(h_se[idx])) 0 else h_se[idx]
+
+    rect(x0, 0, x1, hs, col = col_k, border = "black")
+    if (he > 0) {
+      rect(x0, hs, x1, hs + he, col = col_k, border = "black")
+      polygon(c(x0, x1, x1, x0), c(hs, hs, hs + he, hs + he), density = hatch_density, angle = hatch_angle, col = ink_k, border = NA)
+      polygon(c(x0, x1, x1, x0), c(hs, hs, hs + he, hs + he), density = hatch_density, angle = hatch_angle + 90, col = ink_k, border = NA)
+    }
+
+    if (!is.na(n_sc[idx]) && n_sc[idx] > 0) text(xpos[idx], hs / 2,      paste0("n=", n_sc[idx]), cex = 0.65, col = ink_k)
+    if (!is.na(n_se[idx]) && n_se[idx] > 0) text(xpos[idx], hs + he / 2, paste0("n=", n_se[idx]), cex = 0.65, col = ink_k)
+
+    if (!is.na(padj_sc[idx]) && padj_sc[idx] < fdr) text(xpos[idx], hs + ymax * 0.02,      "*", cex = 1.3, font = 2)
+    if (!is.na(padj_se[idx]) && padj_se[idx] < fdr) text(xpos[idx], hs + he + ymax * 0.02, "*", cex = 1.3, font = 2)
+  }
+
+ legend("topright", legend = c("Sc-higher", "Se-higher"), fill = COLOR.GREY[["mid"]], density = c(NA, hatch_density), angle = hatch_angle, border = "black", bty = "n", cex = 0.8)
+
+  invisible(RES[, c("level", "direction", "n_class", "n", "n_in_set", "frac_within_dir", "height", "p", "padj")])
+}
+
+## Splits a pooled sample at position n1 using a pre-drawn permutation
+## of indices and fits each half with the MLE, mirroring .fit_split()
+## above for the power simulation's own fit function.
+fit_split_nb <- function(y, expo, perm, n1) {
+  g1 <- perm[seq_len(n1)]; g0 <- perm[(n1 + 1):length(perm)]
+  list(a = fit_offset_nb(y[g1], expo[g1]), b = fit_offset_nb(y[g0], expo[g0]))
+}
+
+## Draws every palette as a swatch row, in normal vision and (when the colorspace
+## package is installed) simulated deuteranopia and protanopia. file = NULL draws
+## on the open device.
+plot_palette_swatches <- function(file = NULL) {
+  pals <- list(
+    "Species"            = SPECIES.COLOR,
+    "Regulatory"         = COLOR.LIST.1,
+    "Dominance"          = COLOR.LIST.2,
+    "Heatmap (diverging)" = COLOR.LIST.3,
+    "Sequential"         = COLOR.SEQ[round(seq(1, 100, length.out = 11))],
+    "Power lines"        = line_colors(6),
+    "Clusters"           = cluster_cols(6),
+    "Cell cycle"         = COLOR.PHASE,
+    "Neutrals, accent"   = c(COLOR.GREY, accent = COLOR.ACCENT))
+  views <- list(normal = identity)
+  if (requireNamespace("colorspace", quietly = TRUE))
+    views <- c(views, list(deutan = colorspace::deutan, protan = colorspace::protan))
+  if (!is.null(file)) { pdf(file, width = 3 * length(views) + 1.5, height = 0.42 * length(pals) + 0.6); on.exit(dev.off()) }
+  op <- par(mfrow = c(length(pals), length(views)), mar = c(0.1, 7.5, 1.1, 0.4))
+  on.exit(par(op), add = TRUE, after = FALSE)   # restore par before the device closes
+  for (i in seq_along(pals)) for (v in seq_along(views)) {
+    cols <- views[[v]](unname(pals[[i]]))
+    plot.new(); plot.window(xlim = c(0, length(cols)), ylim = c(0, 1))
+    rect(seq_along(cols) - 1, 0, seq_along(cols), 1, col = cols, border = "white", lwd = 1.5)
+    if (v == 1) mtext(names(pals)[i], side = 2, las = 1, cex = 0.6, line = 0.3)
+    if (i == 1) mtext(names(views)[v], side = 3, cex = 0.65, line = 0.2)
+  }
 }
