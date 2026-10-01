@@ -32,7 +32,7 @@ Source: `docs/function_review.md` (item numbers refer to its section 3), re-chec
 
 - `sig_hist` errors if a contrast is Inf (restrict `range()` to finite values).
 - `kegg_local` selects the pathway-name column by position (`KEGGPATHID2NAME[[2]]`), against the select-by-name rule.
-- `boot_disp_logse` (unused) draws two independent index vectors for counts and exposures; `refine_by_boundary` inherits it.
+- `refine_by_boundary` (unused) draws two independent index vectors for counts and exposures in its bootstrap, pairing one cell's count with another cell's library size.
 - `.fit_split`, `fit_split_nb_mm`, `fit_split_nb`: `perm[(n1 + 1):length(perm)]` misbehaves when `n1 == length(perm)`.
 - Edge cases in `class_overlap_heatmap`, `se_alpha_col`, `shrink_cor`, `class_anova`, `gene_reliability`, `cor_row`, `to_numeric_matrix`, `read_header_line`.
 - `set.seed()` on the global RNG in `class_identity_overlap`, `make_boot_idx`, `check_intrinsic_reliability`, the `eiv_boot_ci` block and `pilot_split_se_one` (serial use). `make_coexpr_draws` and `make_coexpr_perm_draws` share `SEED.COEXPR`.
@@ -50,7 +50,6 @@ Source: `docs/function_review.md` (item numbers refer to its section 3), re-chec
 
 - The Section 15 serial wrappers were deleted and the eight cluster-only functions now live in their cluster scripts (`gene_pilot.R`, `gene_boot.R`, `gene_perm.R`, `coexpr_boot.R`, `cluster_stability.R`). `functions.R` Section 15 now holds only the unused calibration helpers, diagnostics and plots, and `fit_offset_nb_mm`.
 - Remaining merge candidates: plot bodies shared by `plot_cis_trans`, `plot_mean_bfreq`, `plot_burst_kinetics`; `seed_compare_core` wrappers; `.cohen_kappa` versus the inline kappa; the per-dataset blocks in `analysis.R` around the external-source correlations that could be a loop.
-- Single-use helpers nested in other functions (for example `mad_lower`, `.fstar_from_r`) could be inlined into their one caller.
 - Hoist repeated constants (theta cap `1e6`, `optimize` interval `c(-4, 15)`, axis count 15).
 - Group the shared plotting helpers (`line_colors`, `cluster_cols`, `umap_plot`, `plot_lines`, `legend_page`, `open_grid_pdf`) into their own section.
 - Doc comments on some inlined blocks in `analysis.R` still read as the former function signature; reword them to describe the step.
