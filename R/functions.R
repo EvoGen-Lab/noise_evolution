@@ -13,15 +13,15 @@
 ###     console_start() / console_stop() - Per-section console transcript (section{N}_console.txt).
 ###   1. OFFSET NEGATIVE-BINOMIAL FIT
 ###     neg_binom_fit_offset() - Offset NB fit for one gene: rate (mu) and NB size (disp) from .fit_one(), with glm.nb asymptotic log-scale SEs; disp = Inf when a Poisson-vs-NB pre-check finds no overdispersion.
-###     fit_counts_offset() - Matrix version of neg_binom_fit_offset(): fits every gene (row) against its exposure vector.
+###     fit_counts_offset() - Matrix version: fit_counts_offset_row() over every gene (row) against its exposure vector.
 ###     .fit_one() - The pipeline's single NB estimator (mu = sum(y)/sum(exposure), disp by 1-D likelihood given mu): observed fits, every bootstrap and permutation replicate, and the power grid.
-###     .fit_split() - Splits a pooled sample by a pre-drawn permutation and fits each half with .fit_one().
+###     .fit_split() - Splits a pooled sample by a pre-drawn permutation and fits each half with `fit` (default .fit_one()); the gene-level null and the power grid share it.
 ###   1b. INTERNAL-PILOT SPLIT FRACTION (f*)
 ###     pilot_split_se_one() - One gene's bootstrap SE of log(mu) and log(size) for the four split-independent pilot datasets, plus the covariance of the two hybrid alleles' estimates from shared resampled cells.
 ###     pilot_split_se() - Serial wrapper running pilot_split_se_one() across a gene set, for a quick local check.
 ###     estimate_f_star() - Pooled optimal split fraction (f*) for the mean and noise axes, from the pilot SEs and the full hybrid allele-contrast variance.
 ###     split_indices_by_depth() - Depth-matched split of depth-ordered hybrid cells at an arbitrary fraction.
-###     fit_counts_offset_row() - Single-gene row version of fit_counts_offset(), for parLapply distribution across genes.
+###     fit_counts_offset_row() - One gene's NB fit and derived columns (DISP, MU, VAR, FANO, CV, BFREQ, BSIZE), the single place those are built; the unit parLapply distributes across genes.
 ###     fit_counts_offset_parallel() - Runs fit_counts_offset_row() across all genes on an already-open cluster.
 ###     raw_gene_prefilter() - Fit-free preliminary gene filter with depth-scaled abundance and an absolute detection floor, ahead of the real NB fit.
 ###     .fstar_from_r() - Closed-form optimal split fraction f* from the parent/hybrid noise ratio r.
@@ -55,6 +55,7 @@
 ###   6. PERMUTATION NULL  (per-gene significance for the contrasts)
 ###     fdr_columns() - Benjamini-Hochberg q-value column beside every permutation p-value column.
 ###     make_perms() - Pre-draws the permutation label vectors for every mode, so all genes share one set of null relabelings.
+###     perm_pval() - Two-sided permutation p-value with add-one continuity correction, shared with the power grid.
 ###     permute_contrasts_one() - One gene's permutation-null contrasts across all modes, including kinetic balance; the unit of work parLapply distributes in gene_perm.R.
 ###     permute_contrasts() - Serial, local wrapper running permute_contrasts_one() across all genes.
 ###   7. CO-EXPRESSION  (residual co-fluctuation, cis/trans decomposed)
@@ -66,10 +67,10 @@
 ###     coexpr_bootstrap_one() - One bootstrap draw of the co-expression decomposition, for one resampled cell set.
 ###     make_coexpr_perm_draws() - Builds the draws used by the co-expression permutation null.
 ###     coexpr_perm_one() - One permutation draw's top-N squared-eigenvalue spectrum for total/cis/trans/dpar_sc/dpar_se.
-###     coexpr_acc_init() - Initializes the streaming sum/sum-of-squares accumulator used by the co-expression bootstrap.
+###     coexpr_acc_init() - Initializes the streaming sum/sum-of-squares accumulator over the five co-expression parts (.COEXPR_PARTS).
 ###     coexpr_acc_update() - Folds one chunk of coexpr_bootstrap_one() draws into the running accumulator.
 ###     coexpr_acc_finalize() - Converts the finished accumulator into CB's per-pair estimate/SE structure.
-###     coexpr_bootstrap() - Serial, local wrapper running the co-expression bootstrap without the cluster round trip.
+###     coexpr_bootstrap() - Serial, local wrapper running the co-expression bootstrap through the same accumulator, without the cluster round trip.
 ###     gene_reliability() - Per-gene reliability score: the fraction of a gene's variance that is real signal versus sampling noise.
 ###     check_coexpr_reliability() - Tests whether observed co-expression bootstrap SE tracks the NB-predicted attenuation factor.
 ###     row_cor() - Row-wise Pearson correlation between two same-shape matrices.
@@ -181,9 +182,6 @@
 ###     plot_within_between_by_class() - Boxplot of within_between_decomp()'s ratio split by regulatory or dominance class, with class_anova()'s omnibus test and Tukey pairwise comparisons.
 ###     report_within_between_by_class() - Runs plot_within_between_by_class() for two datasets side by side against one classification axis; writes the combined figure and prints both datasets' test statistics.
 ###   13. POWER ANALYSIS (simulation and fit, shared with the SLURM job power_grid.R)
-###     fit_offset_nb() - .fit_one() for one simulated gene, with the result named c(mu, size): the power grid fits observed contrasts and permutation nulls with the analysis's own estimator.
-###     fit_split_nb() - Splits a pooled simulated sample by a pre-drawn permutation and fits each half with fit_offset_nb().
-###     perm_pval() - Two-sided permutation p-value with add-one continuity correction.
 ###     size_log2_ratio() - Log2 ratio of SIZE (burst frequency) between two fits, NA if either side is non-positive or non-finite.
 ###     power_grid_row() - Power for one (MEAN.READS, N.CELLS, SIZE) row, across every SIZE.RATIO value at once.
 ###     open_grid_pdf() - Opens a PDF sized to the panel grid it is about to hold, with tight margins throughout.
@@ -207,13 +205,12 @@
 ###   15. UNUSED (no caller in analysis.R or cluster/scripts; kept for interactive use, not part of the run)
 ###     15a. Serial local counterparts of cluster-run functions
 ###       pilot_split_se(), boot_contrasts(), permute_contrasts(), coexpr_bootstrap(), bootstrap_cluster_stability(), bootstrap_compare_resolutions() - one-machine versions of the computations the cluster jobs distribute.
-###       assemble_coexpr_bootstrap() - Builds CB from coexpr_bootstrap()'s per-draw results.
 ###     15b. Gene-fit calibration helpers
 ###       refine_by_boundary(), boot_disp_logse(), chk(), chk_prec() - Poisson/NB boundary reclassification and per-bin convergence/precision summaries.
 ###     15c. Diagnostics and plots for interactive use
 ###       coexpr_raw_cor(), coexpr_gene_degree(), plot_coexpr_pair(), .cohen_kappa(), report_cluster_marker_enrichment(), plot_geneset_direction_stack(), plot_palette_swatches().
 ###     15d. Method-of-moments alternative to the power-grid estimator
-###       fit_offset_nb_mm(), fit_split_nb_mm() - closed-form NB size estimate and its permutation split; roughly 20x faster than the likelihood fit, not used by the power grid.
+###       fit_offset_nb_mm() - closed-form NB size estimate with the .fit_one() interface (use as .fit_split(..., fit = fit_offset_nb_mm)); roughly 20x faster than the likelihood fit, not used by the power grid.
 ###############################################################
 
 library(MASS)   # glm.nb, ships with base R
@@ -280,8 +277,8 @@ neg_binom_fit_offset <- function(y, exposure) {
 # from a 1-D likelihood maximization over log(theta) given that mu, after a Poisson-vs-NB
 # pre-check (Pearson chi-square / df <= 1 gives disp = Inf). neg_binom_fit_offset() uses it
 # for the observed fits, boot_contrasts_one() and permute_contrasts_one() for every resample,
-# and fit_offset_nb() for the power grid. Returns c(mu, disp); base R only and RNG-free,
-# so fork-safe.
+# and power_grid_row() for the simulated observed contrast and its null. Returns c(mu, disp);
+# base R only and RNG-free, so fork-safe.
 .fit_one <- function(counts, expo) {
   keep <- is.finite(counts) & is.finite(expo) & expo > 0
   y <- counts[keep]; e <- expo[keep]
@@ -307,11 +304,12 @@ neg_binom_fit_offset <- function(y, exposure) {
 }
 
 # Splits a pooled sample at position n1 of a pre-drawn index permutation and fits each
-# half with .fit_one(): the permutation null for a two-group contrast (labels are
-# exchangeable under H0). Returns list(a = first n1 cells, b = remaining cells).
-.fit_split <- function(counts, expo, perm, n1) {
+# half with `fit` (default .fit_one()): the permutation null for a two-group contrast (labels
+# are exchangeable under H0). Used by the gene-level null and the power grid. Returns
+# list(a = first n1 cells, b = remaining cells).
+.fit_split <- function(counts, expo, perm, n1, fit = .fit_one) {
   g1 <- perm[seq_len(n1)]; g0 <- perm[(n1 + 1):length(perm)]
-  list(a = .fit_one(counts[g1], expo[g1]), b = .fit_one(counts[g0], expo[g0]))
+  list(a = fit(counts[g1], expo[g1]), b = fit(counts[g0], expo[g0]))
 }
 
 ## Fits every gene (row) of a genes x cells matrix against one shared exposure vector
@@ -319,20 +317,7 @@ neg_binom_fit_offset <- function(y, exposure) {
 ## SEs, MEAN_CT, N_EXPR, and derived VAR, FANO, CV, BFREQ (= DISP) and BSIZE (= MU / DISP).
 fit_counts_offset <- function(mat, exposure) {
   stopifnot(ncol(mat) == length(exposure))
-  n <- nrow(mat)
-  size <- mu <- disp_logse <- mu_logse <- numeric(n)
-  for (i in seq_len(n)) {
-    f <- neg_binom_fit_offset(mat[i, ], exposure)
-    size[i] <- f["disp"]; mu[i] <- f["mu"]
-    disp_logse[i] <- f["disp_logse"]; mu_logse[i] <- f["mu_logse"]
-  }
-  data.frame(
-    DISP = size, MU = mu, DISP_LOGSE = disp_logse, MU_LOGSE = mu_logse,
-    MEAN_CT = rowSums(mat) / ncol(mat), N_EXPR = rowSums(mat > 0),
-    VAR = mu + mu^2 / size, FANO = 1 + mu / size, CV = sqrt(1 / size + 1 / mu),
-    BFREQ = size, BSIZE = mu / size,
-    row.names = rownames(mat)
-  )
+  do.call(rbind, lapply(seq_len(nrow(mat)), fit_counts_offset_row, mat = mat, exposure = exposure))
 }
 
 ## ============================================================
@@ -480,16 +465,14 @@ split_indices_by_depth <- function(n, f) {
 ## frequency (BFREQ = DISP). BSIZE is the separate derived quantity MU / DISP (mean
 ## count per burst); DISP and BSIZE are distinct quantities.
 fit_counts_offset_row <- function(i, mat, exposure) {
-  f <- neg_binom_fit_offset(mat[i, ], exposure)
   y <- mat[i, ]
+  f <- neg_binom_fit_offset(y, exposure)
+  disp <- f[["disp"]]; mu <- f[["mu"]]
   data.frame(
-    DISP = unname(f["disp"]), MU = unname(f["mu"]),
-    DISP_LOGSE = unname(f["disp_logse"]), MU_LOGSE = unname(f["mu_logse"]),
+    DISP = disp, MU = mu, DISP_LOGSE = f[["disp_logse"]], MU_LOGSE = f[["mu_logse"]],
     MEAN_CT = sum(y) / length(y), N_EXPR = sum(y > 0),
-    VAR = unname(f["mu"]) + unname(f["mu"])^2 / unname(f["disp"]),
-    FANO = 1 + unname(f["mu"]) / unname(f["disp"]),
-    CV = sqrt(1 / unname(f["disp"]) + 1 / unname(f["mu"])),
-    BFREQ = unname(f["disp"]), BSIZE = unname(f["mu"]) / unname(f["disp"]),
+    VAR = mu + mu^2 / disp, FANO = 1 + mu / disp, CV = sqrt(1 / disp + 1 / mu),
+    BFREQ = disp, BSIZE = mu / disp,
     row.names = rownames(mat)[i])
 }
 
@@ -734,10 +717,10 @@ make_draws <- function(ncells, B, seed = 1) {
 
 ## CV2 (squared coefficient of variation) of one fitted group: 1/mu + 1/disp, the Poisson plus
 ## overdispersion terms. Returns NA unless mu and disp are finite and positive, so the bootstrap
-## SD sees only valid values.
-.cv2_of <- function(z) {
-  m <- unname(z[["mu"]]); k <- unname(z[["disp"]])
-  if (is.finite(m) && m > 0 && is.finite(k) && k > 0) 1 / m + 1 / k else NA_real_
+## SD and the permutation null see only valid values. The single CV2 formula for the bootstrap,
+## the permutation null and the observed fits.
+.cv2_of <- function(mu, disp) {
+  if (is.finite(mu) && mu > 0 && is.finite(disp) && disp > 0) 1 / mu + 1 / disp else NA_real_
 }
 
 ## One gene's paired bootstrap: refits all 13 groups on each pre-drawn resample, forms every mode's
@@ -767,7 +750,7 @@ boot_contrasts_one <- function(g, mats, expos, fits, draws) {
       HYB.SE   = fg(mats$HYB.SE,   expos$HYB,    d$HYB))
     gv.mu <- lapply(f, function(z) unname(z[["mu"]]))
     gv.bf <- lapply(f, function(z) unname(z[["disp"]]))
-    gv.cv <- lapply(f, .cv2_of)
+    gv.cv <- lapply(f, function(z) .cv2_of(z[["mu"]], z[["disp"]]))
     for (k in seq_along(modes)) {
       grp <- .MODES[[modes[k]]]
       mu <- unlist(gv.mu[grp]); bf <- unlist(gv.bf[grp]); cv <- unlist(gv.cv[grp])
@@ -784,7 +767,7 @@ boot_contrasts_one <- function(g, mats, expos, fits, draws) {
   }
   pm <- point("MU",    function(row) row[["MU"]])
   ps <- point("BFREQ", function(row) row[["DISP"]])
-  pc <- point("CV2",   function(row) { m <- row[["MU"]]; k <- row[["DISP"]]; if (is.finite(m) && m > 0 && is.finite(k) && k > 0) 1/m + 1/k else NA_real_ })
+  pc <- point("CV2",   function(row) .cv2_of(row[["MU"]], row[["DISP"]]))
   out <- list(gene = g)
   for (md in .OUT_MODES) {
     smd <- .BFREQ_SOURCE[[md]]
@@ -1047,6 +1030,15 @@ make_perms <- function(ncells, NPERM, seed = 1) {
     inhSE   = sample.int(nHYB + nSE)))
 }
 
+## perm_pval: two-sided permutation p-value on |statistic| with an add-one correction, so a
+## finite null never yields p = 0; non-finite null draws are dropped. Shared by the gene-level
+## permutation null (permute_contrasts_one) and the power grid (power_grid_row).
+perm_pval <- function(obs, null) {
+  ok <- is.finite(null)
+  if (!is.finite(obs) || sum(ok) < 1) return(NA_real_)
+  (1 + sum(abs(null[ok]) >= abs(obs))) / (1 + sum(ok))
+}
+
 ## One gene's permutation null: refits the relabeled groups for every mode and permutation, compares
 ## the observed contrasts (mean, bfreq, CV2, bsize, kbal) with the null by a two-sided permutation p, and
 ## adds ploidy-adjusted p-values for dpar when ploidy_shift is supplied. bsize and kbal nulls recombine
@@ -1058,7 +1050,7 @@ permute_contrasts_one <- function(g, mats, expos, fits, perms, ploidy_shift = NU
   Nc <- matrix(NA_real_, B, length(modes), dimnames = list(NULL, modes))
   gv   <- setNames(lapply(names(fits), function(grp) fits[[grp]][g, ]), names(fits))
   gvmu <- lapply(gv, function(z) z[["MU"]]); gvbf <- lapply(gv, function(z) z[["DISP"]])
-  gvcv <- lapply(gv, function(z) { m <- z[["MU"]]; k <- z[["DISP"]]; if (is.finite(m) && m > 0 && is.finite(k) && k > 0) 1/m + 1/k else NA_real_ })
+  gvcv <- lapply(gv, function(z) .cv2_of(z[["MU"]], z[["DISP"]]))
   obs.m <- vapply(modes, function(m) .contrast_value(m, gvmu, "MU"),    numeric(1))
   obs.s <- vapply(modes, function(m) .contrast_value(m, gvbf, "BFREQ"), numeric(1))
   obs.c <- vapply(modes, function(m) .contrast_value(m, gvcv, "CV2"),   numeric(1))
@@ -1074,9 +1066,8 @@ permute_contrasts_one <- function(g, mats, expos, fits, perms, ploidy_shift = NU
   nSC <- length(cMIXsc); nSE <- length(cMIXse); nHYB <- length(cHYBc)
   rat <- function(a, b, q) { x <- a[q]; y <- b[q]
     if (is.finite(x) && x > 0 && is.finite(y) && y > 0) l2(x) - l2(y) else NA_real_ }
-  ## CV2 = 1/mu + 1/disp from the mu and disp fields of a .fit_one()/.fit_split() result.
-  cv2_of <- function(f) { m <- f["mu"]; k <- f["disp"]; if (is.finite(m) && m > 0 && is.finite(k) && k > 0) 1/m + 1/k else NA_real_ }
-  ratcv2 <- function(a, b) { x <- cv2_of(a); y <- cv2_of(b)
+  ## CV2 contrast of two .fit_one()/.fit_split() results
+  ratcv2 <- function(a, b) { x <- .cv2_of(a[["mu"]], a[["disp"]]); y <- .cv2_of(b[["mu"]], b[["disp"]])
     if (is.finite(x) && x > 0 && is.finite(y) && y > 0) l2(x) - l2(y) else NA_real_ }
   for (b in seq_len(B)) {
     p <- perms[[b]]
@@ -1112,7 +1103,7 @@ permute_contrasts_one <- function(g, mats, expos, fits, perms, ploidy_shift = NU
     fs <- .fit_one(synth, es)
     if (is.finite(fs["mu"])   && fs["mu"]   > 0) Nm[b,"dom"] <- l2(fs["mu"])   - mp.m
     if (is.finite(fs["disp"]) && fs["disp"] > 0) Ns[b,"dom"] <- l2(fs["disp"]) - mp.s
-    fs.cv <- cv2_of(fs)
+    fs.cv <- .cv2_of(fs[["mu"]], fs[["disp"]])
     if (is.finite(fs.cv) && fs.cv > 0) Nc[b,"dom"] <- l2(fs.cv) - mp.c
     d1 <- .fit_split(c(cHYBc, cMIXsc), c(expos$HYB, expos$MIX.SC), p$dparSC, nHYB)
     Nm[b,"dpar_sc"] <- rat(d1$a, d1$b, "mu"); Ns[b,"dpar_sc"] <- rat(d1$a, d1$b, "disp"); Nc[b,"dpar_sc"] <- ratcv2(d1$a, d1$b)
@@ -1123,18 +1114,15 @@ permute_contrasts_one <- function(g, mats, expos, fits, perms, ploidy_shift = NU
     i2 <- .fit_split(c(cHYBse, cMIXse), c(expos$HYB, expos$MIX.SE), p$inhSE, nHYB)
     Nm[b,"inh_se"] <- rat(i2$a, i2$b, "mu"); Ns[b,"inh_se"] <- rat(i2$a, i2$b, "disp"); Nc[b,"inh_se"] <- ratcv2(i2$a, i2$b)
   }
-  pval <- function(obs, null) { ok <- is.finite(null)
-    if (!is.finite(obs) || sum(ok) < 1) return(NA_real_)
-    (1 + sum(abs(null[ok]) >= abs(obs))) / (1 + sum(ok)) }
   out <- list(gene = g)
   for (md in .OUT_MODES) {
     smd <- .BFREQ_SOURCE[[md]]
     out[[paste0("mean_", md, "_obs")]]  <- unname(obs.m[md])
-    out[[paste0("mean_", md, "_p")]]    <- pval(obs.m[md], Nm[, md])
+    out[[paste0("mean_", md, "_p")]]    <- perm_pval(obs.m[md], Nm[, md])
     out[[paste0("bfreq_", md, "_obs")]] <- unname(obs.s[smd])
-    out[[paste0("bfreq_", md, "_p")]]   <- pval(obs.s[smd], Ns[, smd])
+    out[[paste0("bfreq_", md, "_p")]]   <- perm_pval(obs.s[smd], Ns[, smd])
     out[[paste0("cv2_", md, "_obs")]]   <- unname(obs.c[smd])
-    out[[paste0("cv2_", md, "_p")]]     <- pval(obs.c[smd], Nc[, smd])
+    out[[paste0("cv2_", md, "_p")]]     <- perm_pval(obs.c[smd], Nc[, smd])
 
     ## bsize null: mean null minus bfreq null, permutation by permutation. Where md == smd the two
     ## draws share one relabeling, so their correlation carries through. For cis and trans they come
@@ -1142,14 +1130,14 @@ permute_contrasts_one <- function(g, mats, expos, fits, perms, ploidy_shift = NU
     bs_null <- Nm[, md] - Ns[, smd]
     obs.bs  <- unname(obs.m[md]) - unname(obs.s[smd])
     out[[paste0("bsize_", md, "_obs")]] <- obs.bs
-    out[[paste0("bsize_", md, "_p")]]   <- pval(obs.bs, bs_null)
+    out[[paste0("bsize_", md, "_p")]]   <- perm_pval(obs.bs, bs_null)
 
     ## kbal = bfreq - bsize; its null is the bfreq null minus the bsize null from the same draws, so
     ## kbal gets a permutation p-value for every mode, usable by classify_reg()/classify_dom().
     kbal_null <- Ns[, smd] - bs_null
     obs.kbal  <- unname(obs.s[smd]) - obs.bs
     out[[paste0("kbal_", md, "_obs")]] <- obs.kbal
-    out[[paste0("kbal_", md, "_p")]]   <- pval(obs.kbal, kbal_null)
+    out[[paste0("kbal_", md, "_p")]]   <- perm_pval(obs.kbal, kbal_null)
 
     ## Ploidy-adjusted p-values for the hybrid-versus-parent noise contrasts.
     ## HYB.COMB sums two alleles, which raises bfreq by the shift s (see
@@ -1171,7 +1159,7 @@ permute_contrasts_one <- function(g, mats, expos, fits, perms, ploidy_shift = NU
       s.own <- unname(ploidy_shift[g])
       for (tag in c("ploidy", "ind")) {
         ob <- adj(if (tag == "ploidy") s.own else 1)
-        for (q in names(nulls)) out[[paste0(q, "_", md, "_p_", tag)]] <- pval(ob[[q]], nulls[[q]])
+        for (q in names(nulls)) out[[paste0(q, "_", md, "_p_", tag)]] <- perm_pval(ob[[q]], nulls[[q]])
       }
     }
   }
@@ -1299,6 +1287,51 @@ coexpr_bootstrap_one <- function(draw, resid) {
   list(total = d$total[up], cis = d$cis[up], trans = d$trans[up], dpar_sc = d$dpar_sc[up], dpar_se = d$dpar_se[up])
 }
 
+## The five decompositions the co-expression bootstrap tracks, in the order coexpr_bootstrap_one()
+## returns them.
+.COEXPR_PARTS <- c("total", "cis", "trans", "dpar_sc", "dpar_se")
+
+## Streaming accumulator for the co-expression bootstrap SE. Holding every draw (a B x pairs matrix
+## per contrast) costs O(B x pairs) memory and pairs grows as p^2. A standard deviation needs only
+## sum(x) and sum(x^2) per pair, so folding in each chunk's draws keeps peak memory at
+## O(chunk_size x pairs) and the raw draws can be discarded. p: number of genes (nrow of a RESID
+## matrix), used to build the upper-triangle index once. Tracks the parts in .COEXPR_PARTS.
+coexpr_acc_init <- function(p) {
+  up <- which(upper.tri(matrix(0, p, p)))
+  z  <- numeric(length(up))
+  sums <- unlist(lapply(.COEXPR_PARTS, function(nm) setNames(list(z, z), paste0(c("sum_", "sumsq_"), nm))), recursive = FALSE)
+  c(list(up = up, n = 0L), sums)
+}
+
+## Folds one chunk of coexpr_bootstrap_one() results (a list of per-draw lists) into the running
+## sums and draw count; the caller can discard chunk_results afterwards.
+coexpr_acc_update <- function(acc, chunk_results) {
+  acc$n <- acc$n + length(chunk_results)
+  for (nm in .COEXPR_PARTS) {
+    m <- do.call(rbind, lapply(chunk_results, `[[`, nm))
+    acc[[paste0("sum_", nm)]]   <- acc[[paste0("sum_", nm)]]   + colSums(m)
+    acc[[paste0("sumsq_", nm)]] <- acc[[paste0("sumsq_", nm)]] + colSums(m^2)
+  }
+  acc
+}
+
+## Finishes the accumulator into the CB structure: for each part a data.frame of
+## gene_i/gene_j/est/se/z/p, plus lambda. est is the point estimate pt, se the bootstrap SD from the
+## running sums, z = est/se and p the two-sided normal tail.
+coexpr_acc_finalize <- function(resid, pt, acc) {
+  p  <- nrow(resid$MIX.SC); gn <- rownames(resid$MIX.SC)
+  ij <- arrayInd(acc$up, c(p, p))
+  base <- data.frame(gene_i = gn[ij[, 1]], gene_j = gn[ij[, 2]])
+
+  se_of <- function(s, ss) sqrt(pmax(0, (ss - s^2 / acc$n) / (acc$n - 1)))
+  mk <- function(est, s, ss) { se <- se_of(s, ss)
+    data.frame(base, est = est, se = se, z = est / se, p = 2 * pnorm(-abs(est / se))) }
+
+  parts <- lapply(setNames(.COEXPR_PARTS, .COEXPR_PARTS), function(nm)
+    mk(pt[[nm]][acc$up], acc[[paste0("sum_", nm)]], acc[[paste0("sumsq_", nm)]]))
+  c(parts, list(lambda = pt$lambda))
+}
+
 ## Draws for the joint permutation null of the total, cis, trans, dpar_sc and dpar_se spectra
 ## (rank-matched axis testing); one draw yields all five null spectra. idx: a random re-split of the
 ## pooled parent cells into pseudo-Sc / pseudo-Se groups of the original sizes (total's null).
@@ -1355,64 +1388,6 @@ coexpr_perm_one <- function(draw, resid, nSC, nSE, n_keep = 15) {
   dpar_se_null <- topk(shrink_cor(t(perm.b.se)) - shrink_cor(t(perm.a.se)))
 
   list(total = topk(d$total), cis = topk(d$cis), trans = topk(d$trans), dpar_sc = dpar_sc_null, dpar_se = dpar_se_null)
-}
-
-## Streaming accumulator for the co-expression bootstrap SE. Holding every draw (a B x pairs matrix
-## per contrast) costs O(B x pairs) memory and pairs grows as p^2. A standard deviation needs only
-## sum(x) and sum(x^2) per pair, so folding in each chunk's draws keeps peak memory at
-## O(chunk_size x pairs) and the raw draws can be discarded. p: number of genes (nrow of a RESID
-## matrix), used to build the upper-triangle index once. Tracks total, cis, trans, dpar_sc, dpar_se.
-coexpr_acc_init <- function(p) {
-  up <- which(upper.tri(matrix(0, p, p)))
-  z  <- numeric(length(up))
-  list(up = up, n = 0L,
-       sum_total = z, sumsq_total = z,
-       sum_cis   = z, sumsq_cis   = z,
-       sum_trans = z, sumsq_trans = z,
-       sum_dpar_sc = z, sumsq_dpar_sc = z,
-       sum_dpar_se = z, sumsq_dpar_se = z)
-}
-
-## Folds one chunk of coexpr_bootstrap_one() results (a list of per-draw lists) into the running
-## sums and draw count; the caller can discard chunk_results afterwards.
-coexpr_acc_update <- function(acc, chunk_results) {
-  m_total   <- do.call(rbind, lapply(chunk_results, `[[`, "total"))
-  m_cis     <- do.call(rbind, lapply(chunk_results, `[[`, "cis"))
-  m_trans   <- do.call(rbind, lapply(chunk_results, `[[`, "trans"))
-  m_dpar_sc <- do.call(rbind, lapply(chunk_results, `[[`, "dpar_sc"))
-  m_dpar_se <- do.call(rbind, lapply(chunk_results, `[[`, "dpar_se"))
-  acc$n <- acc$n + nrow(m_total)
-  acc$sum_total   <- acc$sum_total   + colSums(m_total)
-  acc$sumsq_total <- acc$sumsq_total + colSums(m_total^2)
-  acc$sum_cis     <- acc$sum_cis     + colSums(m_cis)
-  acc$sumsq_cis   <- acc$sumsq_cis   + colSums(m_cis^2)
-  acc$sum_trans   <- acc$sum_trans   + colSums(m_trans)
-  acc$sumsq_trans <- acc$sumsq_trans + colSums(m_trans^2)
-  acc$sum_dpar_sc   <- acc$sum_dpar_sc   + colSums(m_dpar_sc)
-  acc$sumsq_dpar_sc <- acc$sumsq_dpar_sc + colSums(m_dpar_sc^2)
-  acc$sum_dpar_se   <- acc$sum_dpar_se   + colSums(m_dpar_se)
-  acc$sumsq_dpar_se <- acc$sumsq_dpar_se + colSums(m_dpar_se^2)
-  acc
-}
-
-## Finishes the accumulator into the CB structure: for each of total/cis/trans/dpar_sc/dpar_se a
-## data.frame of gene_i/gene_j/est/se/z/p, plus lambda. est is the point estimate pt, se the bootstrap
-## SD from the running sums, z = est/se and p the two-sided normal tail.
-coexpr_acc_finalize <- function(resid, pt, acc) {
-  p  <- nrow(resid$MIX.SC); gn <- rownames(resid$MIX.SC)
-  ij <- arrayInd(acc$up, c(p, p))
-  base <- data.frame(gene_i = gn[ij[, 1]], gene_j = gn[ij[, 2]])
-
-  se_of <- function(s, ss) sqrt(pmax(0, (ss - s^2 / acc$n) / (acc$n - 1)))
-  mk <- function(est, s, ss) { se <- se_of(s, ss)
-    data.frame(base, est = est, se = se, z = est / se, p = 2 * pnorm(-abs(est / se))) }
-
-  list(total   = mk(pt$total[acc$up],   acc$sum_total,   acc$sumsq_total),
-       cis     = mk(pt$cis[acc$up],     acc$sum_cis,     acc$sumsq_cis),
-       trans   = mk(pt$trans[acc$up],   acc$sum_trans,   acc$sumsq_trans),
-       dpar_sc = mk(pt$dpar_sc[acc$up], acc$sum_dpar_sc, acc$sumsq_dpar_sc),
-       dpar_se = mk(pt$dpar_se[acc$up], acc$sum_dpar_se, acc$sumsq_dpar_se),
-       lambda = pt$lambda)
 }
 
 ## Per-gene reliability: the fraction of a gene's total NB variance (mu + mu^2/k) that is biological
@@ -4175,35 +4150,10 @@ report_within_between_by_class <- function(wb_a, wb_b, class, gene_ref, class_le
 ## ============================================================
 ## 13. POWER ANALYSIS (simulation and fit, shared with the SLURM job power_grid.R)
 ## ============================================================
-## fit_offset_nb: the NB fit for one simulated gene. It is .fit_one() with the result
-## named c(mu, size): mu is the exposure-weighted mean rate and size (the NB theta, the
-## burst-frequency axis of the power grid) is the likelihood maximizer given mu. Using the
-## analysis's own estimator makes simulated power describe the test that runs on the data.
-fit_offset_nb <- function(y, expo) {
-  f <- .fit_one(y, expo)
-  c(mu = unname(f["mu"]), size = unname(f["disp"]))
-}
-
-## fit_split_nb: splits a pooled sample at position n1 using a pre-drawn permutation of
-## indices and fits each half with fit_offset_nb(). Runs inside the permutation loop, NI
-## times per simulated dataset, so the null is estimated exactly as the observed contrast is.
-fit_split_nb <- function(y, expo, perm, n1) {
-  g1 <- perm[seq_len(n1)]; g0 <- perm[(n1 + 1):length(perm)]
-  list(a = fit_offset_nb(y[g1], expo[g1]), b = fit_offset_nb(y[g0], expo[g0]))
-}
-
-## perm_pval: two-sided permutation p-value on |statistic| with an add-one
-## correction, so a finite null never yields p = 0; non-finite null draws are dropped.
-perm_pval <- function(obs, null) {
-  ok <- is.finite(null)
-  if (!is.finite(obs) || sum(ok) < 1) return(NA_real_)
-  (1 + sum(abs(null[ok]) >= abs(obs))) / (1 + sum(ok))
-}
-
-## size_log2_ratio: log2 ratio of SIZE (burst frequency) between two fits,
-## NA if either side is non-positive or non-finite.
+## size_log2_ratio: log2 ratio of the NB size (disp, the burst-frequency axis) between two
+## .fit_one() results, NA if either side is non-positive or non-finite.
 size_log2_ratio <- function(fit_a, fit_b) {
-  a <- fit_a["size"]; b <- fit_b["size"]
+  a <- fit_a[["disp"]]; b <- fit_b[["disp"]]
   if (is.finite(a) && a > 0 && is.finite(b) && b > 0) log2(a) - log2(b) else NA_real_
 }
 
@@ -4251,7 +4201,7 @@ power_grid_row <- function(i, GRID, MEAN.READS, N.CELLS, SIZE, SIZE.RATIO, EXPOS
   FA.LIST <- vector("list", NJ)
   for (j in seq_len(NJ)) {
     X.LIST[[j]]  <- rnbinom(n = N.SC.X, size = SIZE.1.X, mu = MEAN.READS.X*EXPO.X.LIST[[j]])
-    FA.LIST[[j]] <- fit_offset_nb(X.LIST[[j]], EXPO.X.LIST[[j]])  #full MLE, shared across SIZE.RATIO below
+    FA.LIST[[j]] <- .fit_one(X.LIST[[j]], EXPO.X.LIST[[j]])  #shared across SIZE.RATIO below
   }
 
   P.ALL <- matrix(NA_real_, NJ, length(SIZE.RATIO))
@@ -4260,13 +4210,13 @@ power_grid_row <- function(i, GRID, MEAN.READS, N.CELLS, SIZE, SIZE.RATIO, EXPOS
     for (j in seq_len(NJ)) {
       EXPO.Y <- EXPO.Y.LIST[[j]]
       Y  <- rnbinom(n = N.SE.X, size = SIZE.2.X, mu = MEAN.READS.X*EXPO.Y)
-      fb <- fit_offset_nb(Y, EXPO.Y)   #full MLE for the observed contrast
+      fb <- .fit_one(Y, EXPO.Y)   #same estimator as the null below
       OBS <- size_log2_ratio(FA.LIST[[j]], fb)
 
       XY <- c(X.LIST[[j]], Y); EXPO.XY <- c(EXPO.X.LIST[[j]], EXPO.Y)
       NULL.DIST <- numeric(NI)
       for (k in seq_len(NI)) {
-        sp <- fit_split_nb(XY, EXPO.XY, PERM.LIST[[k]], N.SC.X)  #same MLE as the observed contrast
+        sp <- .fit_split(XY, EXPO.XY, PERM.LIST[[k]], N.SC.X)  #same estimator as the observed contrast
         NULL.DIST[k] <- size_log2_ratio(sp$a, sp$b)
       }
       P.ALL[j, qi] <- perm_pval(OBS, NULL.DIST)
@@ -4620,9 +4570,8 @@ mean_adjusted_noise <- function(mean, cv2, span = 0.3) {
 ##   permute_contrasts()            <- permute_contrasts_one() in gene_perm.R
 ##   coexpr_bootstrap()             <- coexpr_bootstrap_one() in coexpr_boot.R
 ##   bootstrap_cluster_stability()  <- boot_ari_one() in cluster_stability.R
-## assemble_coexpr_bootstrap() builds CB from coexpr_bootstrap()'s draws; the
-## cluster path builds CB with coexpr_acc_finalize(). The cluster-stability
-## comparison runs through cluster_stability_inputs(), cluster_stability.R,
+## coexpr_bootstrap() builds CB with the same coexpr_acc_*() accumulator the cluster job
+## uses. The cluster-stability comparison runs through cluster_stability_inputs(), cluster_stability.R,
 ## assemble_cluster_stability(), and report_bootstrap_compare();
 ## bootstrap_compare_resolutions() is its single-call local form, and
 ## plateau_coarsest() (Section 11) serves both.
@@ -4633,8 +4582,7 @@ mean_adjusted_noise <- function(mean, cv2, span = 0.3) {
 ##
 ## 15c. Diagnostics and plots for interactive use.
 ##
-## 15d. Method-of-moments alternative to the power-grid estimator: fit_offset_nb_mm(),
-## fit_split_nb_mm().
+## 15d. Method-of-moments alternative to the power-grid estimator: fit_offset_nb_mm().
 
 ## Serial form of pilot_split_se_one() over a gene vector (one row per gene),
 ## for a quick local check on a handful of genes. gene_pilot.R distributes the
@@ -4655,16 +4603,16 @@ boot_contrasts <- function(mats, expos, fits, genes, draws)
 permute_contrasts <- function(mats, expos, fits, genes, perms, ...)
   do.call(rbind, lapply(genes, permute_contrasts_one, mats = mats, expos = expos, fits = fits, perms = perms, ...))
 
-## Serial, local convenience wrapper built from the same primitives the
-## cluster job uses. Fine for a quick small-B check; real runs at
-## N.COEXPR go through coexpr_boot.R instead, since each draw redoes a
-## full shrink_cor per dataset and that cost adds up fast at B in the
-## thousands.
+## Serial, local convenience wrapper built from the same primitives the cluster job uses
+## (coexpr_bootstrap_one() and the coexpr_acc_*() accumulator). Fine for a quick small-B check;
+## real runs at N.COEXPR go through coexpr_boot.R instead, since each draw redoes a full
+## shrink_cor per dataset and that cost adds up fast at B in the thousands.
 coexpr_bootstrap <- function(resid, B = 200, seed = 1) {
   pt    <- coexpr_decompose(resid)
   draws <- make_coexpr_draws(ncol(resid$MIX.SC), ncol(resid$MIX.SE), ncol(resid$HYB.SC), B, seed)
-  draw_results <- lapply(draws, coexpr_bootstrap_one, resid = resid)
-  assemble_coexpr_bootstrap(resid, pt, draw_results)
+  acc   <- coexpr_acc_init(nrow(resid$MIX.SC))
+  acc   <- coexpr_acc_update(acc, lapply(draws, coexpr_bootstrap_one, resid = resid))
+  coexpr_acc_finalize(resid, pt, acc)
 }
 
 ## ---- 15b ----
@@ -4724,33 +4672,6 @@ bootstrap_compare_resolutions <- function(sweep, counts, nfeatures, dims_n, metr
 }
 
 ## ---- 15a (continued) ----
-
-## Assembles CB (per-pair est/se/z/p) from the point estimate
-## coexpr_decompose(resid) and a list of per-draw results, one element per
-## draw from coexpr_bootstrap_one(). The SE is the SD of each pair's draws,
-## z = est/se, and p is two-sided normal. Building CB from stored draws makes
-## this step cheap wherever the draws were computed.
-assemble_coexpr_bootstrap <- function(resid, pt, draw_results) {
-  p  <- nrow(resid$MIX.SC); gn <- rownames(resid$MIX.SC)
-  up <- which(upper.tri(matrix(0, p, p)))
-  ij <- arrayInd(up, c(p, p))
-  base <- data.frame(gene_i = gn[ij[, 1]], gene_j = gn[ij[, 2]])
-
-  acc <- list(total   = do.call(rbind, lapply(draw_results, `[[`, "total")),
-              cis     = do.call(rbind, lapply(draw_results, `[[`, "cis")),
-              trans   = do.call(rbind, lapply(draw_results, `[[`, "trans")),
-              dpar_sc = do.call(rbind, lapply(draw_results, `[[`, "dpar_sc")),
-              dpar_se = do.call(rbind, lapply(draw_results, `[[`, "dpar_se")))
-
-  mk <- function(est, boot) { se <- apply(boot, 2, sd, na.rm = TRUE)
-    data.frame(base, est = est, se = se, z = est / se, p = 2 * pnorm(-abs(est / se))) }
-
-  list(total   = mk(pt$total[up],   acc$total),
-       cis     = mk(pt$cis[up],     acc$cis),
-       trans   = mk(pt$trans[up],   acc$trans),
-       dpar_sc = mk(pt$dpar_sc[up], acc$dpar_sc),
-       dpar_se = mk(pt$dpar_se[up], acc$dpar_se), lambda = pt$lambda)
-}
 
 ## Serial form of boot_ari_one(): mean and per-replicate adjusted Rand index
 ## of the clustering of resampled cells against the reference clusters. The
@@ -5004,34 +4925,28 @@ plot_palette_swatches <- function(file = NULL) {
 
 ## ---- 15d: method-of-moments alternative to the power-grid estimator ----
 ## Closed-form NB size estimate that avoids the likelihood optimization. The power grid
-## fits observed contrasts and permutation nulls with fit_offset_nb() so both sides share
-## one estimator; these two functions are the faster, less exact alternative.
+## fits observed contrasts and permutation nulls with .fit_one() so both sides share one
+## estimator; this is the faster, less exact alternative.
 
-## Method-of-moments NB size estimate, closed form. The Pearson statistic
-## sum((y-mu)^2/mu) has expectation (n-1) + sum(mu)/theta under the NB model, so solving
-## for theta gives a direct estimate with no iteration. It is far cheaper than the
-## likelihood fit but less efficient, so the power grid uses fit_offset_nb() on both the
-## observed contrast and the permutation null.
+## Method-of-moments NB size estimate, closed form, returning c(mu, disp) like .fit_one(). The
+## Pearson statistic sum((y-mu)^2/mu) has expectation (n-1) + sum(mu)/theta under the NB model,
+## so solving for theta gives a direct estimate with no iteration. It is far cheaper than the
+## likelihood fit but less efficient, so the power grid uses .fit_one() on both the observed
+## contrast and the permutation null; pass this as .fit_split(..., fit = fit_offset_nb_mm) to
+## trade efficiency for speed.
 fit_offset_nb_mm <- function(y, expo) {
   keep <- is.finite(y) & is.finite(expo) & expo > 0
   y <- y[keep]; expo <- expo[keep]
   n <- length(y)
-  if (n < 2) return(c(mu = NA_real_, size = NA_real_))
+  if (n < 2) return(c(mu = NA_real_, disp = NA_real_))
 
   mu_hat <- sum(y) / sum(expo)
-  if (sum(y) == 0) return(c(mu = 0, size = NA_real_))
+  if (sum(y) == 0) return(c(mu = 0, disp = NA_real_))
 
   mu_i <- mu_hat * expo
   pearson <- sum((y - mu_i)^2 / mu_i) / (n - 1)
-  if (pearson <= 1) return(c(mu = mu_hat, size = Inf))
+  if (pearson <= 1) return(c(mu = mu_hat, disp = Inf))
 
   theta_mm <- sum(mu_i) / ((n - 1) * (pearson - 1))
-  c(mu = mu_hat, size = theta_mm)
-}
-
-## fit_split_nb_mm: splits a pooled sample at position n1 using a pre-drawn permutation of
-## indices and fits each half with fit_offset_nb_mm().
-fit_split_nb_mm <- function(y, expo, perm, n1) {
-  g1 <- perm[seq_len(n1)]; g0 <- perm[(n1 + 1):length(perm)]
-  list(a = fit_offset_nb_mm(y[g1], expo[g1]), b = fit_offset_nb_mm(y[g0], expo[g0]))
+  c(mu = mu_hat, disp = theta_mm)
 }
