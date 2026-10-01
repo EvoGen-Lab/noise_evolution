@@ -224,7 +224,7 @@ MIX.SE['MT_F',] <- MIX.SE['MT_F',]+MIX.SE['MT_R',]; MIX.SE <- MIX.SE[!(row.names
 # Mitochondrial ratios in hybrid
 # MITO.IGNORE flags hybrid cells with zero Sc or Se mitochondrial reads.
 # The two histograms plot the per-cell log2(Sc/Se) mitochondrial read ratio, 
-# and total Sc read depth split by whether a cell was flagged in MITO.IGNORE (red).
+# and total Sc read depth split by whether a cell was flagged in MITO.IGNORE.
 HYB.MITO.CELLS <- intersect(colnames(HYB.SC), colnames(HYB.SE))
 HYB.SC.MITO <- HYB.SC['MT_F', HYB.MITO.CELLS]
 HYB.SE.MITO <- HYB.SE['MT_F', HYB.MITO.CELLS]
@@ -265,8 +265,6 @@ QC.STATS <- list(
   MIX.SE = list(lib = colSums(MIX.SE), det = colSums(MIX.SE > 0)),
   HYB    = list(lib = colSums(HYB.SC) + colSums(HYB.SE),
                 det = colSums(HYB.SC > 0) + colSums(HYB.SE > 0)))
-# Genes-detected floor was dropped entirely (too aggressive, especially on
-# the already-small MIX.SC dataset); library size alone now decides
 QC.CELLS <- lapply(QC.STATS, function(s) qc_cell_keep(s$lib, k = CELL.MAD.K))
 QC.TITLES <- c(MIX.SC = "Sc Parent", MIX.SE = "Se Parent", HYB = "Hybrid (alleles pooled)")
 pdf(file.path(FIGURE.DIR, "extra/S_cell_count_threshold_qc.pdf"), width = 12, height = 4, useDingbats = FALSE)
@@ -438,6 +436,11 @@ DRAWS <- make_draws(NCELLS, N.BOOT, SEED.BOOT)
 PERMS <- make_perms(NCELLS, N.PERM, SEED.PERM)
 
 # gene_boot.R and gene_perm.R for the cluster
+
+## ---- Cluster round trip: Rscript gene_boot.R / gene_boot.R 2 / gene_perm.R ----
+## gene_boot.R    reads gene_boot1_inputs.rda, writes gene_boot1_output.rda (BOOT.CONTRASTS)
+## gene_boot.R 2  reads gene_boot2_inputs.rda, writes gene_boot2_output.rda (BOOT.CONTRASTS, loaded in 2.4)
+## gene_perm.R    reads gene_perm_inputs.rda,  writes gene_perm_output.rda  (PERM.RESULTS)
 save(CONTRAST.MATS, CONTRAST.EXPOS, CONTRAST.FITS, GENES, DRAWS, N.BOOT, SEED.BOOT, file = file.path(INPUT.DIR, "gene_boot1_inputs.rda"))
 save(CONTRAST.MATS, CONTRAST.EXPOS, CONTRAST.FITS, GENES, PERMS, N.PERM, SEED.PERM, PLOIDY.SHIFT, file = file.path(INPUT.DIR, "gene_perm_inputs.rda"))
 
@@ -445,10 +448,6 @@ save(CONTRAST.MATS, CONTRAST.EXPOS, CONTRAST.FITS, GENES, PERMS, N.PERM, SEED.PE
 DRAWS <- make_draws(NCELLS, N.BOOT, SEED.BOOT + 1)
 save(CONTRAST.MATS, CONTRAST.EXPOS, CONTRAST.FITS, GENES, DRAWS, N.BOOT, file = file.path(INPUT.DIR, "gene_boot2_inputs.rda"))
 
-## ---- Cluster round trip: Rscript gene_boot.R / gene_boot.R 2 / gene_perm.R ----
-## gene_boot.R    reads gene_boot1_inputs.rda, writes gene_boot1_output.rda (BOOT.CONTRASTS)
-## gene_boot.R 2  reads gene_boot2_inputs.rda, writes gene_boot2_output.rda (BOOT.CONTRASTS, loaded in 2.4)
-## gene_perm.R    reads gene_perm_inputs.rda,  writes gene_perm_output.rda  (PERM.RESULTS)
 load(file.path(OUTPUT.DIR, "gene_boot1_output.rda"))           # BOOT.CONTRASTS
 load(file.path(OUTPUT.DIR, "gene_perm_output.rda"))            # PERM.RESULTS
 ## ---- end cluster round trip (gene_boot2_output.rda is loaded in 2.4) ----
@@ -784,16 +783,17 @@ RANK.CHECK$r2
 ## 4.2 Bootstrap for coexpression
 # Two independent seeds at the same B
 DRAWS.COEXPR <- make_coexpr_draws(ncol(RESID$MIX.SC), ncol(RESID$MIX.SE), ncol(RESID$HYB.SC), N.COEXPR, SEED.COEXPR)
+## ---- Cluster round trip: Rscript coexpr_boot.R / coexpr_boot.R 2 ----
+## coexpr_boot.R    reads coexpr_boot1_inputs.rda, writes coexpr_boot1_output.rda (CB)
+## coexpr_boot.R 2  reads coexpr_boot2_inputs.rda, writes coexpr_boot2_output.rda (CB2)
 save(RESID, COEXPR.POINT, DRAWS.COEXPR, file = file.path(INPUT.DIR, "coexpr_boot1_inputs.rda"))
 
 DRAWS.COEXPR <- make_coexpr_draws(ncol(RESID$MIX.SC), ncol(RESID$MIX.SE), ncol(RESID$HYB.SC), N.COEXPR, SEED.COEXPR + 1)
 save(RESID, COEXPR.POINT, DRAWS.COEXPR, file = file.path(INPUT.DIR, "coexpr_boot2_inputs.rda"))
 
-## ---- Cluster round trip: Rscript coexpr_boot.R / coexpr_boot.R 2 ----
-## coexpr_boot.R    reads coexpr_boot1_inputs.rda, writes coexpr_boot1_output.rda (CB)
-## coexpr_boot.R 2  reads coexpr_boot2_inputs.rda, writes coexpr_boot2_output.rda (CB, loaded in 4.4)
 load(file.path(OUTPUT.DIR, "coexpr_boot1_output.rda"))   # CB ($total, $cis, $trans, $lambda)
-## ---- end cluster round trip (coexpr_boot2_output.rda is loaded in 4.4) ----
+CB2 <- local({ load(file.path(OUTPUT.DIR, "coexpr_boot2_output.rda")); CB })
+## ---- end cluster round trip ----
 
 ## 4.3 Bootstrap reliability check
 # Tests whether pairwise bootstrap SE tracks the NB-predicted
@@ -809,7 +809,6 @@ REL.CHECK$floor_summary
 ## 4.4 Bootstrap adequacy check
 # Confirms the bootstrap SE has converged at N.COEXPR
 EXPECTED.PAIRS <- choose(length(CO.GENES), 2)
-CB2 <- local({ load(file.path(OUTPUT.DIR, "coexpr_boot2_output.rda")); CB })
 check_coexpr_pairs(CB2, EXPECTED.PAIRS, "coexpr_boot2_output.rda")
 
 pdf(file.path(FIGURE.DIR, "extra/S_coexpr_seed_compare.pdf"), width = 15, height = 3.2, useDingbats = FALSE)
@@ -847,13 +846,12 @@ N.HYB <- ncol(RESID$HYB.SC)
 N.KEEP        <- 15
 N.PERM.COEXPR <- 10000
 DRAWS.PERM.COEXPR <- make_coexpr_perm_draws(N.SC, N.SE, N.HYB, N.PERM.COEXPR, seed = SEED.COEXPR)
-save(RESID, N.SC, N.SE, N.KEEP, DRAWS.PERM.COEXPR, file = file.path(INPUT.DIR, "coexpr_perm_inputs.rda"))
-
 ## ---- Cluster round trip: Rscript coexpr_perm.R ----
-## Reads coexpr_perm_inputs.rda (saved above), writes coexpr_perm_output.rda
-## (NULL.TOTAL.RANKS, NULL.CIS.RANKS, NULL.TRANS.RANKS, NULL.DPAR.SC.RANKS,
-## NULL.DPAR.SE.RANKS, loaded in 4.9)
-## ---- end cluster round trip (coexpr_perm_output.rda is loaded in 4.9) ----
+## Reads coexpr_perm_inputs.rda (saved below), writes coexpr_perm_output.rda
+## (NULL.TOTAL.RANKS, NULL.CIS.RANKS, NULL.TRANS.RANKS, NULL.DPAR.SC.RANKS, NULL.DPAR.SE.RANKS)
+save(RESID, N.SC, N.SE, N.KEEP, DRAWS.PERM.COEXPR, file = file.path(INPUT.DIR, "coexpr_perm_inputs.rda"))
+load(file.path(OUTPUT.DIR, "coexpr_perm_output.rda"))   # NULL.TOTAL.RANKS, NULL.CIS.RANKS, NULL.TRANS.RANKS, NULL.DPAR.SC.RANKS, NULL.DPAR.SE.RANKS
+## ---- end cluster round trip ----
 
 ## 4.7 Rank check and candidate axes
 # Runs coexpr_rank_check() on each of the five divergence matrices and
@@ -923,8 +921,6 @@ for (ax in COEXPR.AXES) {
 # Runs coexpr_axis_validate() on each matrix: the k-th largest
 # candidate axis (by variance share) is tested against the null's own
 # k-th largest squared eigenvalue, rank-matched 
-load(file.path(OUTPUT.DIR, "coexpr_perm_output.rda"))   # NULL.TOTAL.RANKS, NULL.CIS.RANKS, NULL.TRANS.RANKS, NULL.DPAR.SC.RANKS, NULL.DPAR.SE.RANKS
-
 NULL.RANKS.LIST <- list(total = NULL.TOTAL.RANKS, cis = NULL.CIS.RANKS, trans = NULL.TRANS.RANKS, dpar_sc = NULL.DPAR.SC.RANKS, dpar_se = NULL.DPAR.SE.RANKS)
 
 VALIDATED.LIST <- list()
@@ -1341,10 +1337,10 @@ SCORE.SE <- score_promoters(PROM.SE)
 # and promoter coordinates.
 NUPOP.INPUTS.SC <- nupop_cluster_inputs(GENOME.SC, PROM.SC)
 NUPOP.INPUTS.SE <- nupop_cluster_inputs(GENOME.SE, PROM.SE)
-save(NUPOP.INPUTS.SC, NUPOP.INPUTS.SE, file = file.path(INPUT.DIR, "nupop_inputs.rda"))
 
 ## ---- Cluster round trip: Rscript nupop_occupancy.R ----
-## Reads nupop_inputs.rda (saved above), writes nupop_output.rda (NUPOP.OCC.SC, NUPOP.OCC.SE)
+## Reads nupop_inputs.rda (saved below), writes nupop_output.rda (NUPOP.OCC.SC, NUPOP.OCC.SE)
+save(NUPOP.INPUTS.SC, NUPOP.INPUTS.SE, file = file.path(INPUT.DIR, "nupop_inputs.rda"))
 load(file.path(OUTPUT.DIR, "nupop_output.rda"))
 ## ---- end cluster round trip ----
 OCC.SC <- score_promoters_nupop(PROM.SC, NUPOP.OCC.SC)
