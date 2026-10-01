@@ -43,6 +43,7 @@
 ###     eiv_table() - Table of disattenuated mean-size coupling across a set of modes.
 ###   5. PLOTS (gene-level, square symmetric panels, SE bars)
 ###     .sym() - Symmetric axis limits spanning a vector of values plus their SE.
+###     .se_scatter() - Shared SE-bar scatter body of the three gene-level scatters below.
 ###     plot_cis_trans() - Cis vs trans scatter for one quantity (mean/bfreq/bsize/kbal/cv2) on a shared symmetric range, with SE bars.
 ###     plot_mean_bfreq() - Mean vs burst-frequency (NB dispersion) contrast scatter for one mode, with SE bars.
 ###     plot_burst_kinetics() - Burst kinetics scatter for one mode: net mean change against the stored kinetic-balance contrast.
@@ -78,8 +79,7 @@
 ###     class_anova() - One-way ANOVA testing whether a continuous score differs across class levels.
 ###     coexpr_class_table() - Pair-level regulatory classification (five-way) built from cis and trans p-values, BH-adjusted.
 ###     coexpr_dom_class_table() - Pair-level dominance classification, the co-expression analog of classify_dom().
-###     plot_coexpr_cis_trans() - Cis vs trans scatter for co-expression pairs, coloured by pair-level regulatory class.
-###     plot_coexpr_dom_class() - Dpar_sc vs dpar_se scatter for co-expression pairs, coloured by pair-level dominance class.
+###     plot_coexpr_scatter() - Co-expression pair scatter coloured by pair-level class: cis vs trans by regulatory class (Figure 11) or hybrid-vs-parent dominance.
 ###     check_coexpr_pairs() - Confirms a loaded CB object's pair count matches CO.GENES, catching a stale cluster output file.
 ###     seed_compare_core() - Shared scatter/correlation/ratio core for the two two-seed adequacy checks below.
 ###     coexpr_seed_compare() - Two-seed adequacy check for the co-expression bootstrap: compares CB between two independent seeds.
@@ -97,8 +97,8 @@
 ###     ploidy_shift() - Per-gene expected log2 rise in bfreq when HYB.COMB sums two alleles (from allele weights and the intrinsic fraction).
 ###     ploidy_adjust_dpar() - Removes that shift from the dpar noise estimates (bfreq, bsize, kbal, cv2) and keeps the raw values beside them.
 ###     ploidy_coexpr_factor() - Per-gene factor that puts HYB.COMB residual correlations on the per-genome scale of the haploid parents.
-###     class_overlap_heatmap() - Shared contingency-table/statistics core for the two class-overlap heatmaps below.
-###     class_heatmap() - Log2(observed/expected) association heatmap between two class vectors, with BH-adjusted significance (levels auto-derived from data).
+###     .overlap_lor() - Log2((observed + 0.5) / (expected + 0.5)) of a class contingency table; one definition for the heatmap colours and shared_overlap_rng().
+###     class_overlap_heatmap() - Log2(observed/expected) association heatmap between two class vectors with BH-adjusted significance; levels auto-derived from the data or fixed so panels share axes (Figures 2 and 6, diagnostics).
 ###     .heatmap_legend() - Draws the fold-enrichment color strip beside the class-overlap heatmaps (called by class_overlap_heatmap()).
 ###     class_identity_overlap() - Cohen's kappa plus per-class Jaccard overlap between two class vectors on the same genes.
 ###     summarize_class_overlap() - One printable summary row (n, concordance, kappa, permutation p) per class-overlap comparison.
@@ -123,10 +123,8 @@
 ###     species_composition_bound() - Cohen's d and rank-sum test between two species/allele views on one continuous axis, combined with a noise-association effect size into a bound on expected noise shift.
 ###     species_composition_report() - Runs species_composition_bound() across the cell-cycle axis and the three metabolic module scores for one species/allele pair.
 ###   9. PUBLICATION FIGURES
-###     plot_class_overlap() - Mean-class x size-class enrichment heatmap (log2 obs/exp, BH-adjusted significance, explicit shared levels).
 ###     shared_overlap_rng() - One common log2(obs/exp) colour half-range for a set of overlap heatmaps.
-###     kbal_sig() - Bootstrap z-test on kinetic balance (burst frequency minus size) for one mode.
-###     plot_burst_kinetics_sig() - Scatter of net mean change vs kinetic balance with SE bars, points shaded by kbal_sig() significance; returns kbal_sig()'s data frame.
+###     plot_burst_kinetics_sig() - Scatter of net mean change vs kinetic balance with SE bars (Figure 4), points shaded by a z-test on the stored kinetic balance; returns gene, y, sy, p and direction.
 ###     plot_dom_class() - Dominance scatter in the parent frame (or A/D rotation), coloured by dominance class.
 ###     plot_violins() - ggplot2 violin plot of a burst quantity, split by regulatory and dominance class.
 ###     intrinsic_fraction() - Two-allele intrinsic/extrinsic noise decomposition, Poisson-shot-noise corrected.
@@ -203,7 +201,7 @@
 ###     15b. Gene-fit calibration helpers
 ###       refine_by_boundary(), boot_disp_logse(), chk(), chk_prec() - Poisson/NB boundary reclassification and per-bin convergence/precision summaries.
 ###     15c. Diagnostics and plots for interactive use
-###       coexpr_raw_cor(), coexpr_gene_degree(), plot_coexpr_pair(), .cohen_kappa(), report_cluster_marker_enrichment(), plot_geneset_direction_stack(), plot_palette_swatches().
+###       coexpr_raw_cor(), coexpr_gene_degree(), plot_coexpr_pair(), report_cluster_marker_enrichment(), plot_geneset_direction_stack(), plot_palette_swatches().
 ###     15d. Method-of-moments alternative to the power-grid estimator
 ###       fit_offset_nb_mm() - closed-form NB size estimate with the .fit_one() interface (use as .fit_split(..., fit = fit_offset_nb_mm)); roughly 20x faster than the likelihood fit, not used by the power grid.
 ###############################################################
@@ -853,24 +851,38 @@ eiv_table <- function(BURST.CONTRASTS, modes = c("total","cis","trans","dom","dp
 ## Symmetric axis limits about zero that cover value +/- error.
 .sym <- function(v, e) { m <- max(abs(c(v + e, v - e)), na.rm = TRUE); c(-m, m) }
 
+## .se_scatter(): scatter of one contrast against another with SE bars, the shared body of
+## plot_cis_trans(), plot_mean_bfreq() and plot_burst_kinetics(). With diagonals = TRUE both axes share
+## one symmetric range (unless lim is given) and the dotted +/-45 degree lines are drawn, so
+## same-direction and opposite-direction changes are readable. With diagonals = FALSE each axis gets its
+## own symmetric range. Only genes with a finite estimate and SE on both axes are drawn.
+.se_scatter <- function(x, sx, y, sy, xlab, ylab, main, lim = NULL, diagonals = TRUE, bar_col, pt_col) {
+  ok <- is.finite(x) & is.finite(y) & is.finite(sx) & is.finite(sy)
+  x <- x[ok]; y <- y[ok]; sx <- sx[ok]; sy <- sy[ok]
+  if (diagonals) {
+    if (is.null(lim)) { m <- max(abs(c(x + sx, x - sx, y + sy, y - sy)), na.rm = TRUE); lim <- c(-m, m) }
+    xlim <- ylim <- lim
+  } else {
+    xlim <- .sym(x, sx); ylim <- .sym(y, sy)
+  }
+  op <- par(pty = "s"); on.exit(par(op))
+  plot(NA, xlim = xlim, ylim = ylim, xlab = xlab, ylab = ylab, main = main)
+  if (diagonals) { abline(0, 1, lty = 3, col = COLOR.GREY[["mid"]]); abline(0, -1, lty = 3, col = COLOR.GREY[["mid"]]) }
+  abline(h = 0, v = 0, col = COLOR.GREY[["dark"]])
+  segments(x - sx, y, x + sx, y, col = bar_col)
+  segments(x, y - sy, x, y + sy, col = bar_col)
+  points(x, y, pch = 16, cex = 0.5, col = pt_col)
+}
+
 ## cis vs trans for one quantity: "mean", "bfreq", "bsize", "kbal", "cv2". Both axes share one
 ## symmetric range, so the dotted +/-45 degree lines (same direction, compensatory) are meaningful.
 plot_cis_trans <- function(BURST.CONTRASTS, quantity = c("mean", "bfreq", "bsize", "kbal", "cv2"), main = NULL, lim = NULL, bar_col = adjustcolor(COLOR.GREY[["dark"]], 0.33), pt_col = "black") {
   quantity <- match.arg(quantity)
   lab <- c(mean = "mean", bfreq = "burst frequency", bsize = "burst size", kbal = "frequency-size balance", cv2 = "CV2")[quantity]
-  cx <- BURST.CONTRASTS[[paste0(quantity, "_cis_est")]];  sx <- BURST.CONTRASTS[[paste0(quantity, "_cis_se")]]
-  cy <- BURST.CONTRASTS[[paste0(quantity, "_trans_est")]]; sy <- BURST.CONTRASTS[[paste0(quantity, "_trans_se")]]
-  ok <- is.finite(cx) & is.finite(cy) & is.finite(sx) & is.finite(sy)
-  cx <- cx[ok]; cy <- cy[ok]; sx <- sx[ok]; sy <- sy[ok]
-  if (is.null(lim)) { m <- max(abs(c(cx + sx, cx - sx, cy + sy, cy - sy)), na.rm = TRUE); lim <- c(-m, m) }
   if (is.null(main)) main <- lab
-  op <- par(pty = "s"); on.exit(par(op))
-  plot(NA, xlim = lim, ylim = lim, xlab = paste(lab, "cis (log2)"), ylab = paste(lab, "trans (log2)"), main = main)
-  abline(0, 1, lty = 3, col = COLOR.GREY[["mid"]]); abline(0, -1, lty = 3, col = COLOR.GREY[["mid"]])
-  abline(h = 0, v = 0, col = COLOR.GREY[["dark"]])
-  segments(cx - sx, cy, cx + sx, cy, col = bar_col)
-  segments(cx, cy - sy, cx, cy + sy, col = bar_col)
-  points(cx, cy, pch = 16, cex = 0.5, col = pt_col)
+  .se_scatter(BURST.CONTRASTS[[paste0(quantity, "_cis_est")]],   BURST.CONTRASTS[[paste0(quantity, "_cis_se")]],
+              BURST.CONTRASTS[[paste0(quantity, "_trans_est")]], BURST.CONTRASTS[[paste0(quantity, "_trans_se")]],
+              xlab = paste(lab, "cis (log2)"), ylab = paste(lab, "trans (log2)"), main = main, lim = lim, bar_col = bar_col, pt_col = pt_col)
 }
 
 ## Mean vs burst-frequency (NB dispersion) contrast for one mode, with SE bars. Both axes share one
@@ -878,19 +890,10 @@ plot_cis_trans <- function(BURST.CONTRASTS, quantity = c("mean", "bfreq", "bsize
 ## in eiv_table().
 plot_mean_bfreq <- function(BURST.CONTRASTS, mode = c("total","cis","trans","dom","dpar_sc","dpar_se","inh_sc","inh_se"), main = NULL, bar_col = adjustcolor(COLOR.GREY[["dark"]], 0.33), pt_col = "black") {
   mode <- match.arg(mode)
-  x <- BURST.CONTRASTS[[paste0("mean_", mode, "_est")]]; sx <- BURST.CONTRASTS[[paste0("mean_", mode, "_se")]]
-  y <- BURST.CONTRASTS[[paste0("bfreq_", mode, "_est")]]; sy <- BURST.CONTRASTS[[paste0("bfreq_", mode, "_se")]]
-  ok <- is.finite(x) & is.finite(y) & is.finite(sx) & is.finite(sy)
-  x <- x[ok]; y <- y[ok]; sx <- sx[ok]; sy <- sy[ok]
   if (is.null(main)) main <- paste0("mean vs noise: ", mode)
-  m <- max(abs(c(x + sx, x - sx, y + sy, y - sy)), na.rm = TRUE); lim <- c(-m, m)
-  op <- par(pty = "s"); on.exit(par(op))
-  plot(NA, xlim = lim, ylim = lim, xlab = "mean (log2)", ylab = "dispersion (log2)", main = main)
-  abline(0, 1, lty = 3, col = COLOR.GREY[["mid"]]); abline(0, -1, lty = 3, col = COLOR.GREY[["mid"]])
-  abline(h = 0, v = 0, col = COLOR.GREY[["dark"]])
-  segments(x - sx, y, x + sx, y, col = bar_col)
-  segments(x, y - sy, x, y + sy, col = bar_col)
-  points(x, y, pch = 16, cex = 0.5, col = pt_col)
+  .se_scatter(BURST.CONTRASTS[[paste0("mean_", mode, "_est")]],  BURST.CONTRASTS[[paste0("mean_", mode, "_se")]],
+              BURST.CONTRASTS[[paste0("bfreq_", mode, "_est")]], BURST.CONTRASTS[[paste0("bfreq_", mode, "_se")]],
+              xlab = "mean (log2)", ylab = "dispersion (log2)", main = main, bar_col = bar_col, pt_col = pt_col)
 }
 
 ## Burst kinetics for one mode in rotated coordinates, which separate net mean change from the
@@ -900,17 +903,11 @@ plot_mean_bfreq <- function(BURST.CONTRASTS, mode = c("total","cis","trans","dom
 ## Both columns carry SEs propagated in add_burst_contrasts().
 plot_burst_kinetics <- function(BURST.CONTRASTS, mode = c("total","cis","trans","dom","dpar_sc","dpar_se","inh_sc","inh_se"), main = NULL, bar_col = adjustcolor(COLOR.GREY[["dark"]], 0.33), pt_col = "black") {
   mode <- match.arg(mode)
-  x <- BURST.CONTRASTS[[paste0("mean_", mode, "_est")]]; sx <- BURST.CONTRASTS[[paste0("mean_", mode, "_se")]]
-  y <- BURST.CONTRASTS[[paste0("kbal_", mode, "_est")]]; sy <- BURST.CONTRASTS[[paste0("kbal_", mode, "_se")]]
-  ok <- is.finite(x) & is.finite(y) & is.finite(sx) & is.finite(sy)
-  x <- x[ok]; y <- y[ok]; sx <- sx[ok]; sy <- sy[ok]
   if (is.null(main)) main <- paste0("burst kinetics: ", mode)
-  op <- par(pty = "s"); on.exit(par(op))
-  plot(NA, xlim = .sym(x, sx), ylim = .sym(y, sy), xlab = "net mean change (log2)", ylab = "frequency - amplitude (kinetic balance, log2)", main = main)
-  abline(h = 0, v = 0, col = COLOR.GREY[["dark"]])
-  segments(x - sx, y, x + sx, y, col = bar_col)
-  segments(x, y - sy, x, y + sy, col = bar_col)
-  points(x, y, pch = 16, cex = 0.5, col = pt_col)
+  .se_scatter(BURST.CONTRASTS[[paste0("mean_", mode, "_est")]], BURST.CONTRASTS[[paste0("mean_", mode, "_se")]],
+              BURST.CONTRASTS[[paste0("kbal_", mode, "_est")]], BURST.CONTRASTS[[paste0("kbal_", mode, "_se")]],
+              xlab = "net mean change (log2)", ylab = "frequency - amplitude (kinetic balance, log2)", main = main,
+              diagonals = FALSE, bar_col = bar_col, pt_col = pt_col)
 }
 
 ## significance-shaded histogram of a contrast, coloured by direction
@@ -1581,45 +1578,35 @@ coexpr_dom_class_table <- function(CB, sig = 0.05) {
 }
 
 ## ============================================================
-## Figure 11 : co-expression cis vs trans (per gene pair)
+## Figure 11 : co-expression cis vs trans (per gene pair); supplement: co-expression dominance
 ## ============================================================
-## CT is coexpr_class_table(CB), so the class shown is the BH-adjusted call used for the pair lists
-## and gene degree.
-plot_coexpr_cis_trans <- function(CT, main = NULL, lim = NULL) {
-  x <- CT$cis_est; y <- CT$trans_est; cls <- CT$class
-  ok <- is.finite(x) & is.finite(y) & !is.na(cls)
-  x<-x[ok]; y<-y[ok]; cls<-cls[ok]
-  col <- COLOR.LIST.1[match(cls,REG.CLASS)]
-  if (is.null(lim)) { m<-max(abs(c(x,y)),na.rm=TRUE); lim<-c(-m,m) }
-  if (is.null(main)) main<-"co-expression: cis vs trans"
-  op<-par(pty="s"); on.exit(par(op))
-  plot(NA, xlim=lim, ylim=lim, xlab="cis: hybrid Sc-Se change in correlation", ylab="trans: parents - hybrid (change in correlation)", main=main)
-  abline(0,1,lty=3,col=COLOR.GREY[["mid"]]); abline(0,-1,lty=3,col=COLOR.GREY[["mid"]])
-  abline(h=0,v=0,col=COLOR.GREY[["dark"]])
-  points(x,y,pch=16,cex=0.4,col=col)
-  legend("topleft",legend=REG.CLASS,col=COLOR.LIST.1,pch=16,bty="n",cex=0.8)
-}
-
-## ============================================================
-## Coexpr dominance : dpar_sc vs dpar_se scatter for co-expression pairs
-## ============================================================
-## DT is coexpr_dom_class_table(CB) output. Same axis pair as the
-## single-gene dominance scatter (plot_dom_class, frame = "parent"), just
-## for the pairwise correlation change rather than a single burst
-## quantity, so the two figures read the same way side by side.
-plot_coexpr_dom_class <- function(DT, main = NULL, lim = NULL) {
-  x <- DT$dpar_sc_est; y <- DT$dpar_se_est; cls <- DT$class
+## plot_coexpr_scatter(): scatter of co-expression pairs coloured by pair-level class. For type
+## "cis_trans" CT is coexpr_class_table(CB): cis against trans change in correlation, coloured by the
+## BH-adjusted regulatory call used for the pair lists and gene degree (Figure 11). For type
+## "dominance" CT is coexpr_dom_class_table(CB): hybrid minus Sc parent against hybrid minus Se
+## parent, the pairwise analogue of plot_dom_class(frame = "parent"), so the two read the same way
+## side by side. Both axes share one symmetric range (unless lim is given).
+plot_coexpr_scatter <- function(CT, type = c("cis_trans", "dominance"), main = NULL, lim = NULL) {
+  type <- match.arg(type)
+  spec <- switch(type,
+    cis_trans = list(x = "cis_est", y = "trans_est", levels = REG.CLASS, cols = COLOR.LIST.1,
+                     xlab = "cis: hybrid Sc-Se change in correlation", ylab = "trans: parents - hybrid (change in correlation)",
+                     main = "co-expression: cis vs trans"),
+    dominance = list(x = "dpar_sc_est", y = "dpar_se_est", levels = DOM.CLASS, cols = COLOR.LIST.2,
+                     xlab = "hybrid - Sc parent (correlation change)", ylab = "hybrid - Se parent (correlation change)",
+                     main = "co-expression: dominance"))
+  x <- CT[[spec$x]]; y <- CT[[spec$y]]; cls <- CT$class
   ok <- is.finite(x) & is.finite(y) & !is.na(cls)
   x <- x[ok]; y <- y[ok]; cls <- cls[ok]
-  col <- COLOR.LIST.2[match(cls, DOM.CLASS)]
+  col <- spec$cols[match(cls, spec$levels)]
   if (is.null(lim)) { m <- max(abs(c(x, y)), na.rm = TRUE); lim <- c(-m, m) }
-  if (is.null(main)) main <- "co-expression: dominance"
+  if (is.null(main)) main <- spec$main
   op <- par(pty = "s"); on.exit(par(op))
-  plot(NA, xlim = lim, ylim = lim, xlab = "hybrid - Sc parent (correlation change)", ylab = "hybrid - Se parent (correlation change)", main = main)
+  plot(NA, xlim = lim, ylim = lim, xlab = spec$xlab, ylab = spec$ylab, main = main)
   abline(0, 1, lty = 3, col = COLOR.GREY[["mid"]]); abline(0, -1, lty = 3, col = COLOR.GREY[["mid"]])
   abline(h = 0, v = 0, col = COLOR.GREY[["dark"]])
   points(x, y, pch = 16, cex = 0.4, col = col)
-  legend("topleft", legend = DOM.CLASS, col = COLOR.LIST.2, pch = 16, bty = "n", cex = 0.8)
+  legend("topleft", legend = spec$levels, col = spec$cols, pch = 16, bty = "n", cex = 0.8)
 }
 
 ## Verifies that a loaded coexpr_boot*_output.rda CB object has the pair count CO.GENES implies,
@@ -1895,14 +1882,24 @@ dom_class_vec <- function(BURST.CONTRASTS, PR, quantity = c("mean", "bfreq", "bs
   text(rx + diff(usr[1:2])*0.16, mean(usr[3:4]), "fold enrichment (obs/exp)", srt = 270, cex = 0.55, xpd = NA)
 }
 
-## Shared core of the class-overlap heatmaps: a categorical contingency table between two
+## .overlap_lor(tab): log2((observed + 0.5) / (expected + 0.5)) for a class-by-class contingency
+## table, expected from the marginals under independence. The 0.5 pseudocount keeps empty cells finite.
+## One definition for the heatmap colours and for shared_overlap_rng().
+.overlap_lor <- function(tab) {
+  exp <- outer(rowSums(tab), colSums(tab)) / sum(tab)
+  log2((tab + 0.5) / (exp + 0.5))
+}
+
+## Class-overlap heatmaps (Figures 2 and 6 and the Section 3.5 / 4.12 diagnostics): a categorical contingency table between two
 ## classifications, tested cell by cell against the hypergeometric null and colored by
 ## log2((observed + 0.5) / (expected + 0.5)). The star in each cell marks BH-corrected
 ## significance at fdr; the color always encodes the fold enrichment itself.
-## levels_a/levels_b: if NULL, table levels are the categories actually observed (used by
-## class_heatmap). If supplied, every level appears even when empty, which fixes the axis
-## order across panels (used by plot_class_overlap for Figures 2 and 6). cex_cell, fmt and
-## star_frac default to values suited to each case when left NULL.
+## levels_a/levels_b: if NULL, table levels are the categories actually observed (the diagnostic
+## heatmaps, where the two classifications do not always share a level set). If supplied, every level
+## appears even when empty, which fixes the axis order across panels (Figures 2 and 6, where each
+## panel in a row shares axes). cex_cell, fmt and star_frac default to values suited to each case
+## when left NULL. Cell text shows obs/exp as fold enrichment (2^lor) with a trailing "*" where the
+## BH-adjusted two-sided hypergeometric p < fdr.
 ## rng, when supplied, fixes the color scale's half-range in log2(obs/exp) units. Passing the
 ## same rng to related panels (e.g. the three regulatory overlap panels of Figure 2) makes a
 ## given color mean the same fold enrichment in all of them.
@@ -1917,8 +1914,7 @@ class_overlap_heatmap <- function(class_a, class_b, levels_a = NULL, levels_b = 
   a <- if (is.null(levels_a)) factor(class_a[keep]) else factor(class_a[keep], levels = levels_a)
   b <- if (is.null(levels_b)) factor(class_b[keep]) else factor(class_b[keep], levels = levels_b)
   tab <- table(a, b); n <- sum(tab)
-  exp <- outer(rowSums(tab), colSums(tab)) / n
-  lor <- log2((tab + 0.5) / (exp + 0.5))
+  lor <- .overlap_lor(tab)
   pv  <- matrix(NA_real_, nrow(tab), ncol(tab))
   for (i in seq_len(nrow(tab))) for (j in seq_len(ncol(tab))) {
     q <- tab[i, j]; m <- rowSums(tab)[i]; k <- colSums(tab)[j]
@@ -1958,13 +1954,6 @@ class_overlap_heatmap <- function(class_a, class_b, levels_a = NULL, levels_b = 
   invisible(list(table = tab, log2_obs_exp = lor, padj = padj))
 }
 
-## class_heatmap: class_overlap_heatmap() with levels taken from the observed categories.
-## Used for the Section 3.5 / 4.12 diagnostic heatmaps, where the two classifications do
-## not always share the same level set.
-class_heatmap <- function(class_a, class_b, brk = length(COLOR.LIST.3), fdr = 0.01, cols = COLOR.LIST.3, cex_axis = 0.75, cex_cell = 0.65, xlab = NULL, ylab = NULL) {
-  class_overlap_heatmap(class_a, class_b, levels_a = NULL, levels_b = NULL, brk = brk, fdr = fdr, cols = cols, cex_axis = cex_axis, cex_cell = cex_cell, xlab = xlab, ylab = ylab)
-}
-
 ## ============================================================
 ## Gene-identity overlap between two categorical classifications
 ## ============================================================
@@ -1975,7 +1964,10 @@ class_heatmap <- function(class_a, class_b, brk = length(COLOR.LIST.3), fdr = 0.
 ## (Cis, Trans, ...); each level gets its own number. The null reshuffles which gene carries
 ## which class_b label. A label permutation holds both class-size distributions fixed, so the
 ## chance concordance pe is identical in every replicate and is computed once. Integer
-## coding plus tabulate() keeps the nperm-fold loop cheap.
+## coding plus tabulate() keeps the nperm-fold loop cheap. Concordance po is the diagonal fraction of the
+## class table, chance concordance pe = sum(rowSums(tab) * colSums(tab)) / n^2 comes from the two
+## marginal class-size distributions, and kappa = (po - pe) / (1 - pe) is 0 at chance agreement and 1
+## for identical labelling.
 class_identity_overlap <- function(class_a, class_b, levels = REG.CLASS, nperm = 2000, seed = 1) {
   keep <- !is.na(class_a) & !is.na(class_b)
   a <- factor(class_a[keep], levels = levels)
@@ -2535,85 +2527,45 @@ species_composition_report <- function(cc1, cc2, met1, met2, diag1, diag2, label
 ## ============================================================
 ## Figures 2 and 6 : mean-class x size-class enrichment heatmaps (regulatory classes; dominance classes)
 ## ============================================================
-## Cell colour encodes log2(obs/exp) for all cells. Cell text shows
-## obs/exp as fold enrichment (2^lor), with a trailing "*" where the
-## BH-adjusted two-sided hypergeometric p < fdr. 2.0* means the
-## co-occurrence is twice as frequent as expected by chance; 0.4* means
-## 0.4x (2.5x depleted). Wraps class_overlap_heatmap() with explicit levels,
-## so every class appears even when empty and panels in a row share axes.
-plot_class_overlap <- function(class_a, class_b, levels_a, levels_b, fdr = 0.01, cols = COLOR.LIST.3, brk = length(cols), xlab = "burst frequency class", ylab = "mean class", cex_axis = 0.75, cex_cell = 0.7, rng = NULL) {
-  class_overlap_heatmap(class_a, class_b, levels_a = levels_a, levels_b = levels_b, brk = brk, fdr = fdr, cols = cols, cex_axis = cex_axis, cex_cell = cex_cell, xlab = xlab, ylab = ylab, rng = rng)
-}
-
 ## shared_overlap_rng(pairs, levels_common): common log2(obs/exp) half-range
 ## across a list of (class_a, class_b) pairs built on the same levels, using
 ## the same 0.5 pseudocount as class_overlap_heatmap(). Passing it as rng to
 ## a set of related panels gives them one colour scale.
 shared_overlap_rng <- function(pairs, levels_common) {
   lors <- lapply(pairs, function(p) {
-    tab <- table(factor(p[[1]], levels = levels_common), factor(p[[2]], levels = levels_common))
-    exp <- outer(rowSums(tab), colSums(tab)) / sum(tab)
-    log2((tab + 0.5) / (exp + 0.5))
+    .overlap_lor(table(factor(p[[1]], levels = levels_common), factor(p[[2]], levels = levels_common)))
   })
   max(sapply(lors, function(l) max(abs(l))), 1e-6)
 }
 
 ## ============================================================
-## Rotated burst kinetics, z-test shaded
+## Figure 4 : rotated burst kinetics, z-test shaded
 ## ============================================================
-## kbal_sig(BURST.CONTRASTS, mode, sig): bootstrap z-test of the kinetic
-## balance y = bfreq - bsize (SE propagated from the bfreq/mean SEs and
-## their correlation) for one mode. Returns gene, y, sy, p and direction
-## (sig_pos / sig_neg / ns at p < sig).
-kbal_sig <- function(BURST.CONTRASTS, mode = "total", sig = 0.05) {
-  bf <- BURST.CONTRASTS[[paste0("bfreq_",mode,"_est")]]; bs <- BURST.CONTRASTS[[paste0("bsize_",mode,"_est")]]
-  sm <- BURST.CONTRASTS[[paste0("mean_",mode,"_se")]];   ss <- BURST.CONTRASTS[[paste0("bfreq_",mode,"_se")]]
-  r  <- BURST.CONTRASTS[[paste0("cor_",mode)]]
-  ## As in add_burst_contrasts: cor_<mode> is NA for cis/trans, a
-  ## structural zero covariance rather than a missing value
-  r[!is.finite(r)] <- 0
-  ok <- is.finite(bf)&is.finite(bs)&is.finite(sm)&is.finite(ss)
-  bf<-bf[ok]; bs<-bs[ok]; sm<-sm[ok]; ss<-ss[ok]; r<-r[ok]
-  covFB <- r*sm*ss - ss^2
-  seS   <- sqrt(pmax(0, sm^2+ss^2-2*r*sm*ss))
-  y  <- bf - bs
-  sy <- sqrt(pmax(0, ss^2+seS^2-2*covFB))
-  p  <- 2*pnorm(-abs(y)/sy)
-  dir <- ifelse(!is.finite(p)|p>=sig, "ns", ifelse(y>0, "sig_pos", "sig_neg"))
-  data.frame(gene=BURST.CONTRASTS$gene[ok], y=y, sy=sy, p=p, direction=dir,
-             stringsAsFactors=FALSE)
-}
-
-## plot_burst_kinetics_sig() (Figure 4): scatter of net mean change (x = bfreq + bsize)
-## against kinetic balance (y = bfreq - bsize) with SE bars. The rotation
-## separates the two burst kinetics: movement along x is a change in total
-## mean, movement along y is a shift between frequency and size. Points
-## significant in kbal_sig() are drawn black over grey n.s. points. Returns
-## the kbal_sig() data frame invisibly for the companion barplot.
+## plot_burst_kinetics_sig() (Figure 4): scatter of net mean change (x) against kinetic balance
+## (y = bfreq - bsize) with SE bars, read from the mean_ and kbal_ columns add_burst_contrasts() stores. The
+## rotation separates the two burst kinetics: movement along x is a change in total mean, movement
+## along y is a shift between frequency and size. A gene is significant when its kinetic balance
+## differs from 0 by a two-sided z-test (nominal p < sig); significant points are drawn black over
+## grey n.s. points. Returns invisibly a data frame of gene, y, sy, p and direction (sig_pos,
+## sig_neg or ns) for the companion barplot.
 plot_burst_kinetics_sig <- function(BURST.CONTRASTS, mode = "total", sig = 0.05, main = NULL, bar_col = adjustcolor(COLOR.GREY[["dark"]], 0.25), sig_col = "black", ns_col = COLOR.GREY[["mid"]]) {
-  ks <- kbal_sig(BURST.CONTRASTS, mode, sig)
-  bf <- BURST.CONTRASTS[[paste0("bfreq_",mode,"_est")]]; bs <- BURST.CONTRASTS[[paste0("bsize_",mode,"_est")]]
-  sm <- BURST.CONTRASTS[[paste0("mean_",mode,"_se")]];   ss <- BURST.CONTRASTS[[paste0("bfreq_",mode,"_se")]]
-  r  <- BURST.CONTRASTS[[paste0("cor_",mode)]]
-  ## As in add_burst_contrasts: cor_<mode> is NA for cis/trans, a
-  ## structural zero covariance rather than a missing value
-  r[!is.finite(r)] <- 0
-  ok <- is.finite(bf)&is.finite(bs)&is.finite(sm)&is.finite(ss)
-  bf<-bf[ok]; bs<-bs[ok]; sm<-sm[ok]; ss<-ss[ok]; r<-r[ok]
-  covFB <- r*sm*ss - ss^2
-  seS   <- sqrt(pmax(0, sm^2+ss^2-2*r*sm*ss))
-  x  <- bf + bs; sx <- sqrt(pmax(0, ss^2+seS^2+2*covFB))
-  y  <- ks$y;    sy <- ks$sy
-  sig_idx <- ks$direction != "ns"
-  if (is.null(main)) main <- paste0("burst kinetics: ",mode)
-  op <- par(pty="s"); on.exit(par(op))
-  plot(NA, xlim=.sym(x, sx), ylim=.sym(y, sy), xlab="net mean change (log2)", ylab="frequency - amplitude (kinetic balance)", main=main)
-  abline(h=0,v=0,col=COLOR.GREY[["dark"]])
-  segments(x-sx, y, x+sx, y, col=bar_col)        # bars first
-  segments(x, y-sy, x, y+sy, col=bar_col)
-  points(x[!sig_idx], y[!sig_idx], pch=16, cex=0.5, col=ns_col)  # ns below
-  points(x[ sig_idx], y[ sig_idx], pch=16, cex=0.5, col=sig_col)  # sig on top
-  legend("topleft", legend=c(paste0("sig (p<", sig, ")"), "n.s."), col=c(sig_col, ns_col), pch=16, bty="n", cex=0.8)
+  x <- BURST.CONTRASTS[[paste0("mean_", mode, "_est")]]; sx <- BURST.CONTRASTS[[paste0("mean_", mode, "_se")]]
+  y <- BURST.CONTRASTS[[paste0("kbal_", mode, "_est")]]; sy <- BURST.CONTRASTS[[paste0("kbal_", mode, "_se")]]
+  ok <- is.finite(x) & is.finite(y) & is.finite(sx) & is.finite(sy)
+  genes <- BURST.CONTRASTS$gene[ok]; x <- x[ok]; sx <- sx[ok]; y <- y[ok]; sy <- sy[ok]
+  p   <- 2 * pnorm(-abs(y) / sy)
+  dir <- ifelse(!is.finite(p) | p >= sig, "ns", ifelse(y > 0, "sig_pos", "sig_neg"))
+  ks  <- data.frame(gene = genes, y = y, sy = sy, p = p, direction = dir, stringsAsFactors = FALSE)
+  sig_idx <- dir != "ns"
+  if (is.null(main)) main <- paste0("burst kinetics: ", mode)
+  op <- par(pty = "s"); on.exit(par(op))
+  plot(NA, xlim = .sym(x, sx), ylim = .sym(y, sy), xlab = "net mean change (log2)", ylab = "frequency - amplitude (kinetic balance)", main = main)
+  abline(h = 0, v = 0, col = COLOR.GREY[["dark"]])
+  segments(x - sx, y, x + sx, y, col = bar_col)        # bars first
+  segments(x, y - sy, x, y + sy, col = bar_col)
+  points(x[!sig_idx], y[!sig_idx], pch = 16, cex = 0.5, col = ns_col)  # ns below
+  points(x[ sig_idx], y[ sig_idx], pch = 16, cex = 0.5, col = sig_col)  # sig on top
+  legend("topleft", legend = c(paste0("sig (p<", sig, ")"), "n.s."), col = c(sig_col, ns_col), pch = 16, bty = "n", cex = 0.8)
   invisible(ks)
 }
 
@@ -4694,20 +4646,6 @@ plot_coexpr_pair <- function(resid, gi, gj, main = NULL) {
   plot(xsc, ysc, pch = 16, cex = 0.5, col = adjustcolor(SPECIES.COLOR[["Sc"]], 0.5), xlim = lim_x, ylim = lim_y, xlab = gi, ylab = gj, main = main)
   points(xse, yse, pch = 16, cex = 0.5, col = adjustcolor(SPECIES.COLOR[["Se"]], 0.5))
   legend("topleft", bty = "n", pch = 16, col = SPECIES.COLOR[c("Sc", "Se")], legend = c(sprintf("Sc  r = %.2f", cor(xsc, ysc, use = "complete.obs")), sprintf("Se  r = %.2f", cor(xse, yse, use = "complete.obs"))))
-}
-
-## Cohen's kappa for a square contingency table of two classifications of the
-## same items (rows = classification A, columns = B, same class order).
-## po is the observed agreement (the diagonal fraction); pe is the agreement
-## expected by chance from the two marginal class-size distributions,
-## sum(rowSums(tab) * colSums(tab)) / n^2. kappa = 0 means no more agreement
-## than chance and kappa = 1 means identical labelling. class_identity_overlap()
-## computes the same statistic with a permutation p-value.
-.cohen_kappa <- function(tab) {
-  n  <- sum(tab)
-  po <- sum(diag(tab)) / n
-  pe <- sum(rowSums(tab) * colSums(tab)) / n^2
-  (po - pe) / (1 - pe)
 }
 
 ## Console-text mirror of plot_cluster_marker_enrichment(): for every

@@ -555,9 +555,9 @@ dev.off()
 RNG.REG <- shared_overlap_rng(list(list(REG.MEAN.CLASS, REG.BFREQ.CLASS), list(REG.MEAN.CLASS, REG.BSIZE.CLASS), list(REG.MEAN.CLASS, REG.KBAL.CLASS)), REG.CLASS)
 pdf(file.path(FIGURE.DIR, "main/02_overlap_regulatory.pdf"), width = 21, height = 7, useDingbats = FALSE)
 par(mfrow = c(1, 3), mar = c(8, 8, 1, 1))
-plot_class_overlap(REG.MEAN.CLASS,  REG.BFREQ.CLASS, REG.CLASS, REG.CLASS, xlab = "burst frequency class", ylab = "mean class", rng = RNG.REG)
-plot_class_overlap(REG.MEAN.CLASS,  REG.BSIZE.CLASS, REG.CLASS, REG.CLASS, xlab = "burst size class",      ylab = "mean class", rng = RNG.REG)
-plot_class_overlap(REG.MEAN.CLASS,  REG.KBAL.CLASS,  REG.CLASS, REG.CLASS, xlab = "frequency-size balance class", ylab = "mean class", rng = RNG.REG)
+class_overlap_heatmap(REG.MEAN.CLASS, REG.BFREQ.CLASS, levels_a = REG.CLASS, levels_b = REG.CLASS, xlab = "burst frequency class", ylab = "mean class", rng = RNG.REG)
+class_overlap_heatmap(REG.MEAN.CLASS, REG.BSIZE.CLASS, levels_a = REG.CLASS, levels_b = REG.CLASS, xlab = "burst size class",      ylab = "mean class", rng = RNG.REG)
+class_overlap_heatmap(REG.MEAN.CLASS, REG.KBAL.CLASS, levels_a = REG.CLASS, levels_b = REG.CLASS, xlab = "frequency-size balance class", ylab = "mean class", rng = RNG.REG)
 dev.off()
 
 ## 3.2 Significance histograms for total, cis, and trans effects
@@ -659,15 +659,15 @@ dev.off()
 RNG.DOM <- shared_overlap_rng(list(list(DOM.MEAN.CLASS, DOM.BFREQ.CLASS), list(DOM.MEAN.CLASS, DOM.BSIZE.CLASS), list(DOM.MEAN.CLASS, DOM.KBAL.CLASS)), DOM.CLASS)
 pdf(file.path(FIGURE.DIR, "main/06_overlap_dominance.pdf"), width = 22.5, height = 7.5, useDingbats = FALSE)
 par(mfrow = c(1, 3), mar = c(9, 9, 1, 1))
-plot_class_overlap(DOM.MEAN.CLASS,  DOM.BFREQ.CLASS, DOM.CLASS, DOM.CLASS, xlab = "burst frequency class", ylab = "mean class", rng = RNG.DOM)
-plot_class_overlap(DOM.MEAN.CLASS,  DOM.BSIZE.CLASS, DOM.CLASS, DOM.CLASS, xlab = "burst size class",      ylab = "mean class", rng = RNG.DOM)
-plot_class_overlap(DOM.MEAN.CLASS,  DOM.KBAL.CLASS,  DOM.CLASS, DOM.CLASS, xlab = "frequency-size balance class", ylab = "mean class", rng = RNG.DOM)
+class_overlap_heatmap(DOM.MEAN.CLASS, DOM.BFREQ.CLASS, levels_a = DOM.CLASS, levels_b = DOM.CLASS, xlab = "burst frequency class", ylab = "mean class", rng = RNG.DOM)
+class_overlap_heatmap(DOM.MEAN.CLASS, DOM.BSIZE.CLASS, levels_a = DOM.CLASS, levels_b = DOM.CLASS, xlab = "burst size class",      ylab = "mean class", rng = RNG.DOM)
+class_overlap_heatmap(DOM.MEAN.CLASS, DOM.KBAL.CLASS, levels_a = DOM.CLASS, levels_b = DOM.CLASS, xlab = "frequency-size balance class", ylab = "mean class", rng = RNG.DOM)
 dev.off()
 
 ## Figure 4: rotated burst kinetics, z-test shaded + barplot.
 pdf(file.path(FIGURE.DIR, "main/04_burst_kinetics.pdf"), width = 9, height = 5, useDingbats = FALSE)
 par(mfrow = c(1, 2), mar = c(5, 4.5, 2, 1))
-KS <- plot_burst_kinetics_sig(BURST.CONTRASTS, mode = "total")   # returns kbal_sig df
+KS <- plot_burst_kinetics_sig(BURST.CONTRASTS, mode = "total")   # returns the gene/y/sy/p/direction table
 bp_counts <- table(factor(KS$direction, levels = c("sig_pos","sig_neg","ns")))
 barplot(bp_counts,
         col    = c(sig_pos = "black", sig_neg = COLOR.GREY[["dark"]], ns = COLOR.GREY[["light"]]),
@@ -694,23 +694,23 @@ dev.off()
 # frequency-vs-size comparison and carries no structural artifact.
 pdf(file.path(FIGURE.DIR, "extra/S_class_heatmaps.pdf"), width = 13, height = 13, useDingbats = FALSE)
 par(mfrow = c(3, 3))
-class_heatmap(clean_reg(REG.MEAN.CLASS),  clean_reg(REG.BFREQ.CLASS), fdr = OVERLAP.FDR,
+class_overlap_heatmap(clean_reg(REG.MEAN.CLASS),  clean_reg(REG.BFREQ.CLASS), fdr = OVERLAP.FDR,
              ylab = "mean regulatory class", xlab = "burst frequency regulatory class")
-class_heatmap(clean_reg(REG.MEAN.CLASS),  clean_reg(REG.BSIZE.CLASS), fdr = OVERLAP.FDR,
+class_overlap_heatmap(clean_reg(REG.MEAN.CLASS),  clean_reg(REG.BSIZE.CLASS), fdr = OVERLAP.FDR,
              ylab = "mean regulatory class", xlab = "burst size regulatory class")
-class_heatmap(clean_reg(REG.MEAN.CLASS),  clean_reg(REG.KBAL.CLASS),  fdr = OVERLAP.FDR,
+class_overlap_heatmap(clean_reg(REG.MEAN.CLASS),  clean_reg(REG.KBAL.CLASS),  fdr = OVERLAP.FDR,
              ylab = "mean regulatory class", xlab = "frequency-size balance regulatory class")
-class_heatmap(DOM.MEAN.CLASS,  DOM.BFREQ.CLASS, fdr = OVERLAP.FDR,
+class_overlap_heatmap(DOM.MEAN.CLASS,  DOM.BFREQ.CLASS, fdr = OVERLAP.FDR,
              ylab = "mean dominance class", xlab = "burst frequency dominance class")
-class_heatmap(DOM.MEAN.CLASS,  DOM.BSIZE.CLASS, fdr = OVERLAP.FDR,
+class_overlap_heatmap(DOM.MEAN.CLASS,  DOM.BSIZE.CLASS, fdr = OVERLAP.FDR,
              ylab = "mean dominance class", xlab = "burst size dominance class")
-class_heatmap(DOM.MEAN.CLASS,  DOM.KBAL.CLASS,  fdr = OVERLAP.FDR,
+class_overlap_heatmap(DOM.MEAN.CLASS,  DOM.KBAL.CLASS,  fdr = OVERLAP.FDR,
              ylab = "mean dominance class", xlab = "frequency-size balance dominance class")
-class_heatmap(clean_reg(REG.MEAN.CLASS),  DOM.MEAN.CLASS,  fdr = OVERLAP.FDR,
+class_overlap_heatmap(clean_reg(REG.MEAN.CLASS),  DOM.MEAN.CLASS,  fdr = OVERLAP.FDR,
              ylab = "mean regulatory class", xlab = "mean dominance class")
-class_heatmap(clean_reg(REG.BFREQ.CLASS), DOM.BFREQ.CLASS, fdr = OVERLAP.FDR,
+class_overlap_heatmap(clean_reg(REG.BFREQ.CLASS), DOM.BFREQ.CLASS, fdr = OVERLAP.FDR,
              ylab = "burst frequency regulatory class", xlab = "burst frequency dominance class")
-class_heatmap(clean_reg(REG.KBAL.CLASS),  DOM.KBAL.CLASS,  fdr = OVERLAP.FDR,
+class_overlap_heatmap(clean_reg(REG.KBAL.CLASS),  DOM.KBAL.CLASS,  fdr = OVERLAP.FDR,
              ylab = "frequency-size balance regulatory class", xlab = "frequency-size balance dominance class")
 dev.off()
 
@@ -893,7 +893,7 @@ CB.DOM.CLASS <- coexpr_dom_class_table(CB)
 
 pdf(file.path(FIGURE.DIR, "extra/S_coexpr_dom_class.pdf"), width = 6, height = 11, useDingbats = FALSE)
 par(mfrow = c(2, 1), mar = c(5, 4.5, 2, 1))
-plot_coexpr_dom_class(CB.DOM.CLASS)
+plot_coexpr_scatter(CB.DOM.CLASS, "dominance")
 barplot(table(factor(CB.DOM.CLASS$class, levels = DOM.CLASS)), las = 2, col = COLOR.LIST.2, ylab = "# of pairs", border = NA, main = "Co-expression pair dominance class")
 dev.off()
 
@@ -926,7 +926,7 @@ save(RESID, N.SC, N.SE, N.KEEP, DRAWS.PERM.COEXPR, file = file.path(INPUT.DIR, "
 ## Figure 11: cis vs trans scatter above class counts
 pdf(file.path(FIGURE.DIR, "main/11_coexpr_cis_trans.pdf"), width = 6, height = 11, useDingbats = FALSE)
 par(mfrow = c(2, 1), mar = c(5, 4.5, 2, 1))
-plot_coexpr_cis_trans(CB.CLASS)
+plot_coexpr_scatter(CB.CLASS, "cis_trans")
 barplot(table(factor(CB.CLASS$class, levels = REG.CLASS)), col = COLOR.LIST.1, las = 2, ylab = "# of pairs", border = NA, main = "co-expression pair regulatory class")
 dev.off()
 
@@ -1136,9 +1136,9 @@ cat(sprintf("Mean vs frequency-size balance class concordance: genome-wide = %.3
 
 pdf(file.path(FIGURE.DIR, "extra/S_coexpr_burst_mechanism_heatmap.pdf"), width = 10, height = 5, useDingbats = FALSE)
 par(mfrow = c(1, 2))
-class_heatmap(clean_reg(CO.BFREQ.CLASS), clean_reg(CO.BSIZE.CLASS), fdr = OVERLAP.FDR,
+class_overlap_heatmap(clean_reg(CO.BFREQ.CLASS), clean_reg(CO.BSIZE.CLASS), fdr = OVERLAP.FDR,
              ylab = "burst frequency class (CO.GENES)", xlab = "burst size class (CO.GENES)")
-class_heatmap(clean_reg(CO.MEAN.CLASS),  clean_reg(CO.KBAL.CLASS),  fdr = OVERLAP.FDR,
+class_overlap_heatmap(clean_reg(CO.MEAN.CLASS),  clean_reg(CO.KBAL.CLASS),  fdr = OVERLAP.FDR,
              ylab = "mean class (CO.GENES)", xlab = "frequency-size balance class (CO.GENES)")
 dev.off()
 
