@@ -11,7 +11,7 @@
 ###           ROWS.PART (the GRID rows this task computed) and POWER.PART
 ###           (those rows x length(SIZE.RATIO) columns). Rows are dealt out
 ###           round-robin, so every task gets a similar mix of cheap and
-###           costly rows, and analysis.R Section 10.2 reassembles GRID order.
+###           costly rows, and power_analysis.R Section 10.2 reassembles GRID order.
 ###
 ### Progress is printed by the master after each chunk of rows,
 ### so it lands in the job log even though the workers are forked.
@@ -20,6 +20,7 @@
 library('parallel')
 
 source("functions.R")
+source("functions_power.R")
 
 load("power_inputs.rda")
 ## GRID, MEAN.READS, N.CELLS, SIZE, SIZE.RATIO, EXPOSURE.CV, CELL.RATIO, ALPHA, NJ, NI, PI1, N.MIX, SEED.BASE

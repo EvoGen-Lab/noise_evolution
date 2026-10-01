@@ -6,6 +6,11 @@
 ### coexpr_boot.R, coexpr_perm.R, nupop_occupancy.R,
 ### cluster_stability.R, go_enrich.R, power_grid.R)
 ###
+### Two analyses keep their functions in their own files: the power analysis (functions_power.R, used by
+### power_analysis.R and power_grid.R) and the comparison with published data (functions_external.R, used by
+### external_validation.R). Both rely on the helpers here (.fit_one, .fit_split, perm_pval, fit_counts_offset,
+### fig_pdf, ckpt_path, console_start).
+###
 ### A function lives here when its code runs more than once: it is called from two or more places, or it is
 ### applied across many items (Section 13b for analysis.R, Section 13c for the cluster scripts). Code that
 ### runs once is written inline where it runs. analysis.R and the cluster scripts define no functions.
@@ -32,15 +37,11 @@
 ###   4. DISATTENUATED MEAN-DISP COUPLING (population summary)
 ###     eiv_components() - Errors-in-variables mean-bfreq coupling for one mode: attenuation-corrected variances, covariance and correlation, plus the raw correlation.
 ###   5. PLOTTING HELPERS AND GENE-LEVEL PLOTS
-###     open_grid_pdf() - Opens a PDF sized to the panel grid it is about to hold, with tight margins throughout.
 ###     umap_plot() - UMAP with the shared cluster palette and on-plot labels.
 ###     fig_pdf() - Opens a PDF under FIGURE.DIR with the pipeline's figure settings.
 ###     class_count_barplot() - Gene (or pair) counts per class, bars colored by class.
 ###     class_overlap_triptych() - Figure of three class-overlap heatmaps: mean class against burst frequency, burst size and frequency-size balance class, on one shared color range.
 ###     class_heatmap_grid() - Figure of class-overlap heatmaps for a table of class-vector pairs (regulatory vectors cleaned with clean_reg()).
-###     plot_lines() - Plots one line per column of a matrix against a shared x vector, with reference lines at power 0.05 and 0.9.
-###     legend_page() - One legend page mapping each line color to the value it represents.
-###     power_line_figure() - Multi-panel PDF of power curves from the POWER array: one panel per (outer, inner) pair, one line per series value, with a legend page.
 ###     .se_scatter() - Shared SE-bar scatter body of the three gene-level scatters below.
 ###     plot_contrast_scatter() - Gene-level contrast scatter with SE bars: cis vs trans for one quantity, mean vs burst frequency or rotated burst kinetics for one mode.
 ###     sig_hist_panel() - Histogram of one contrast (quantity, mode) with the genes significant at q < sig shaded by direction.
@@ -128,16 +129,6 @@
 ###     plot_within_between_hist() - Genome-wide distribution of within_between_decomp()'s ratio, one dataset, with the within = between line marked.
 ###     plot_within_between_vs_quantity() - Scatter of within_between_decomp()'s ratio against one burst kinetics quantity (mean, burst frequency, or burst size), with Spearman rho reported.
 ###     report_within_between_by_class() - Plots the within/between ratio by class (with class_anova()'s omnibus test and Tukey comparisons) for two datasets side by side against one classification axis; writes the combined figure and prints both datasets' test statistics.
-###   13. EXTERNAL NOISE VALIDATION
-###     cor_row() - Spearman rank correlation between two vectors, with pairwise-complete filtering; returns one row (n, rho, p).
-###     add_burst_terms() - Implied Fano factor, burst size, and burst frequency algebraically recovered from a reported mean and CV^2.
-###     read_header_line() - Header line of a delimited file as a character vector, with quotes stripped.
-###     get_data_header() - Sample/gene names of a file's header with the row-id field removed, whichever header convention the file uses.
-###     fread_matrix() - Fast row-named numeric matrix reader (fread based) with column selection.
-###     to_numeric_matrix() - Coerces a table to a numeric matrix, reporting and dropping non-numeric columns.
-###     map_to_orf() - Resolves gene identifiers to systematic ORF names (NA when unresolved).
-###     fit_scrna_source() - One published scRNA-seq source: ORF collapse, cell/gene QC and offset NB fit, returned on the NB.SC layout (ORF, Mean, CV2, Fano, BFREQ, BSIZE).
-###     mean_adjusted_noise() - Loess residual of log CV^2 on log mean: noise relative to genes of similar abundance.
 ###   13b. FUNCTIONS APPLIED ACROSS ITEMS BY analysis.R
 ###     qc_cell_cutoff() - library-size cell filter for one dataset s (a list with lib, the per-cell library.
 ###     fstar_from_r() - closed-form split fraction f* = [(2+r) - sqrt(r^2+4)] / (2r) for r = B*Nh/A.
@@ -158,10 +149,6 @@
 ###     boot_resample_matrix() - draws every bootstrap resample of dataset d up front, one column per replicate,.
 ###     metric_clusters() - clusters of a Seurat object at one resolution using the annoy distance metric m on the.
 ###     consistent_pair_row() - keeps Sc-hybrid cluster sc as a pair only when its best Se-hybrid partner picks it.
-###     noise_corr_rows() - Spearman correlation of mean, CV2, burst frequency and burst size between a source and MIX.SC or between two sources.
-###     raw_source_table() - the ORF, Mean, CV2, BFREQ and BSIZE columns of one fitted source, in the layout shared.
-###     add_cv2_adj() - adds CV2_ADJ, the loess residual of log CV2 on log mean (mean_adjusted_noise()), to one.
-###     adj_corr_row() - agreement of source src's mean-adjusted noise (CV2_ADJ) with MIX.SC's (nb_sc) over the.
 ###     diet_for_markers() - strips a Seurat object to the counts and data layers FindMarkers needs, keeping the cluster job's input small.
 ###   13c. FUNCTIONS THE CLUSTER SCRIPTS RUN
 ###     pilot_split_se_one() - one gene's bootstrap SE of log(mu) and log(size) for the four datasets needed to compute A and B, plus the bootstrap.
@@ -172,7 +159,6 @@
 ###     coexpr_perm_one() - one permutation draw of the five null spectra, for rank-matched testing of every candidate axis.
 ###     nupop_occupancy_cluster() - Scores every chromosome in one species' inputs and returns each gene's.
 ###     report_regions() - Summarizes the regions that needed fallback flanks or stayed unscored,.
-###     power_grid_row() - power of one grid row i (mean reads x cell count x burst-frequency size) over the SIZE.RATIO sweep.
 ###     bootstrap_ari_job() - one bootstrap replicate (job j of the tasks x replicates table).
 ###     dataset_marker_enrichment() - for each cluster of dataset d at its final resolution, marker genes against the rest of the SAME dataset's.
 ###     go_enrich_job() - one enrichment job k.
@@ -586,44 +572,9 @@ eiv_components <- function(BURST.CONTRASTS, mode = .OUT_MODES) {
 ## 5. PLOTTING HELPERS AND GENE-LEVEL PLOTS
 ## ============================================================
 
-## ---- Shared plotting helpers: panel layout, color ramps, line panels, UMAP ----
-## The helpers below serve the power-analysis figures (open_grid_pdf, plot_lines,
-## legend_page) and the clustering figures (umap_plot). open_grid_pdf() gives every
-## multi-panel figure the same compact layout.
-
-## Opens a PDF sized to the nr x nc panel grid it is about to hold.
-## Margins and label spacing (mgp) are set tight throughout, so every
-## power-analysis figure shares the same compact panel layout.
-open_grid_pdf <- function(file, nr, nc, panel_w = 2.3, panel_h = 2.3, mar = c(3, 3, 2, 1), mgp = c(1.6, 0.5, 0)) {
-  pdf(file, width = nc * panel_w, height = nr * panel_h, useDingbats = FALSE)
-  par(mfrow = c(nr, nc), mar = mar, mgp = mgp)
-}
-
-## Plots one line per column of `mat` against `xv`, using a color ramp
-## sized to ncol(mat). Reference lines at power 0.05 (nominal false
-## positive rate) and 0.9 (a common target) give every panel the same
-## visual anchor regardless of which quantity is on the x-axis.
-plot_lines <- function(xv, mat, xlab = "", ylab = "Power", main = "", show_axes = TRUE, lwd = 1.4, x_at = NULL, x_labels = NULL) {
-  cols <- colorRampPalette(POWER.COLOR)(ncol(mat))
-  plot(xv, mat[, 1], type = "l", lwd = lwd, col = cols[1], ylim = c(0, 1), xlab = if (show_axes && is.null(x_at)) xlab else "", ylab = if (show_axes) ylab else "", xaxt = if (!is.null(x_at) || !show_axes) "n" else "s", yaxt = if (show_axes) "s" else "n", main = main, cex.main = 0.8)
-  abline(h = 0.05, col = COLOR.ACCENT, lty = 2); abline(h = 0.9, col = COLOR.ACCENT, lty = 3)
-  if (ncol(mat) > 1) for (k in 2:ncol(mat)) lines(xv, mat[,k], lwd = lwd, col = cols[k])
-  #x_at/x_labels give exact tick positions and real-valued labels for a
-  #log-scaled axis (e.g. log2(SIZE.RATIO) with SIZE.RATIO as labels)
-  if (!is.null(x_at)) {
-    axis(1, at = x_at, labels = x_labels, cex.axis = 0.55, las = 2)
-    title(xlab = xlab, mgp = c(2.6,1,0), cex.lab = 0.75)
-  }
-  invisible(cols)
-}
-
-## One legend page appended after a grid of panels, mapping each line
-## color to the value it represents.
-legend_page <- function(labels, title) {
-  cols <- colorRampPalette(POWER.COLOR)(length(labels))
-  plot.new()
-  legend("center", legend = labels, col = cols, lwd = 2, title = title, ncol = ceiling(length(labels)/15), bty = "n", cex = 0.9)
-}
+## ---- Shared plotting helpers: color ramps and UMAP ----
+## The multi-panel layout and power-curve helpers (open_grid_pdf, plot_lines, legend_page) live in
+## functions_power.R with the rest of the power analysis.
 
 ## UMAP with the shared cluster palette and on-plot labels as a second cue,
 ## so identity never depends on color alone. group.by = NULL uses Idents(obj).
@@ -685,44 +636,6 @@ class_heatmap_grid <- function(path, panels, classes, fdr, width, height, mfrow,
     }
     class_overlap_heatmap(side$y$vec, side$x$vec, fdr = fdr, ylab = side$y$lab, xlab = side$x$lab)
   }
-  dev.off()
-}
-
-## power_line_figure: one multi-panel PDF of power curves from the POWER array (dimensions M mean reads, N cell
-## count, P burst-frequency SIZE, Q SIZE.RATIO; grid holds the value of each dimension). Panels run over the
-## outer and inner dimension; every panel draws one line per value of the series dimension against the x
-## dimension, with the remaining two dimensions fixed at the panel's values. main_fmt is a sprintf format whose
-## %1$s is the outer and %2$s the inner value. The figure ends with a legend page (legend_labels, legend_title).
-## Plain style (styled = NULL) lets plot_lines() draw the axes (xlab; ticks = TRUE puts exact tick labels on the
-## log-scaled axis). Styled panels draw percent labels on the y axis and a custom x axis described by
-## styled = list(at, labels, cex_axis, mgp, xlab, xlab_mgp, xlab_cex[, las, tcl]). The PDF has one row per outer
-## value and one column per inner value.
-power_line_figure <- function(file, power, grid, outer, inner, x, series, main_fmt, legend_labels, legend_title,
-                              log_x = TRUE, xlab = "", ticks = FALSE, styled = NULL, mar = c(3, 3, 2, 1)) {
-  dim_ix <- c(M = 1, N = 2, P = 3, Q = 4)
-  open_grid_pdf(file.path(FIGURE.DIR, "extended", file), nr = length(grid[[outer]]), nc = length(grid[[inner]]), mar = mar)
-  xv <- if (log_x) log2(grid[[x]]) else grid[[x]]
-  for (o in seq_along(grid[[outer]])) {
-    for (i in seq_along(grid[[inner]])) {
-      idx <- list(M = TRUE, N = TRUE, P = TRUE, Q = TRUE)
-      idx[[outer]] <- o; idx[[inner]] <- i
-      sl  <- do.call(`[`, c(list(power), unname(idx)))
-      mat <- if (dim_ix[[x]] > dim_ix[[series]]) t(sl) else sl
-      main <- sprintf(main_fmt, grid[[outer]][o], grid[[inner]][i])
-      if (is.null(styled)) {
-        if (ticks) plot_lines(xv, mat, xlab = xlab, ylab = "Power", main = main, x_at = xv, x_labels = grid[[x]])
-        else plot_lines(xv, mat, xlab = xlab, ylab = "Power", main = main)
-      } else {
-        plot_lines(xv, mat, show_axes = FALSE)
-        axis(2, at = c(0, 0.2, 0.4, 0.6, 0.8, 1.0), las = 1, labels = c("0%", "20%", "40%", "60%", "80%", "100%"), cex.axis = 0.6, mgp = c(3, 0.6, 0))
-        title(ylab = "Power", mgp = c(2, 1, 0))
-        do.call(axis, c(list(1, at = styled$at, labels = styled$labels, cex.axis = styled$cex_axis, mgp = styled$mgp), styled[intersect(c("las", "tcl"), names(styled))]))
-        title(xlab = styled$xlab, mgp = styled$xlab_mgp, cex.lab = styled$xlab_cex)
-        title(main = main, cex.main = 0.8, line = 0.2)
-      }
-    }
-  }
-  legend_page(legend_labels, legend_title)
   dev.off()
 }
 
@@ -2975,125 +2888,6 @@ report_within_between_by_class <- function(wb_a, wb_b, class, gene_ref, class_le
   invisible(setNames(list(res_a, res_b), c(lab_a, lab_b)))
 }
 
-## ============================================================
-## 13. EXTERNAL NOISE VALIDATION
-## ============================================================
-## Validation of the MIX.SC NB fit (mean, CV^2, burst frequency, burst size)
-## against published yeast noise data. Summary-statistic sources (Newman, Keren,
-## Stewart-Ornstein) enter through add_burst_terms(); count-matrix sources
-## (Gasch, Nadal-Ribelles, Jackson, Jariani) are read, QC'd, mapped to ORFs and
-## fitted with the same offset NB model. All sources then share one
-## (ORF, Mean, CV2, Fano, BFREQ, BSIZE) layout, so cor_row() compares any pair.
-## The calling code is Section 9 of analysis.R.
-
-## Spearman rank correlation between two vectors on their pairwise-finite
-## observations; returns a one-row data.frame (n, rho, p). Rank correlation
-## suits the external validation because both the NB-fitted and the external
-## abundance and noise statistics are heavy-tailed, and it makes no
-## assumption about the shape of that tail. Needs at least 3 finite pairs.
-cor_row <- function(x, y) {
-  keep <- is.finite(x) & is.finite(y)
-  # exact = FALSE selects the asymptotic t approximation for the Spearman
-  # p-value, which remains valid when the ranks contain ties.
-  ct <- suppressWarnings(cor.test(x[keep], y[keep], method = "spearman", exact = FALSE))
-  data.frame(n = sum(keep), rho = unname(ct$estimate), p = ct$p.value)
-}
-
-## Implied Fano factor, burst size, and burst frequency recovered from a
-## reported mean and CV^2, for a data frame with columns Mean and CV2. The NB
-## identity used for MIX.SC runs in reverse: Fano = mean * CV^2, burst size =
-## Fano - 1, burst frequency = mean / (Fano - 1). This is an algebraic
-## transform of the reported summary statistics, not a re-fit. Fano <= 1
-## (sub-Poissonian) is read as measurement noise and gives NA burst terms.
-## Interpretive caveats: burst size and frequency are mRNA-level kinetic
-## constructs while the protein-level sources add translational and
-## degradation noise; and for arbitrary-unit fluorescence the product
-## mean * CV^2 carries the instrument's units, so the Fano > 1 gate and the
-## burst values are relative quantities. The Fano column is overwritten with
-## mean * CV^2 so every source uses one definition.
-add_burst_terms <- function(d) {
-  fano <- d$Mean * d$CV2
-  ok <- fano > 1
-  d$Fano  <- fano
-  d$BSIZE <- ifelse(ok, fano - 1, NA_real_)
-  d$BFREQ <- ifelse(ok, d$Mean / (fano - 1), NA_real_)
-  d
-}
-
-## read_header_line() parses only the header line of a delimited file, so the
-## header's own field count is known independently of fread()'s header
-## detection. The scRNA-seq sources write the header one field short of the
-## data rows (the row-id column is unnamed), a layout fread() cannot
-## reconcile on its own. Surrounding quotes are stripped from each field.
-read_header_line <- function(path, sep = "\t", skip = 0) {
-  lines  <- readLines(path, n = skip + 1)
-  fields <- strsplit(lines[skip + 1], sep, fixed = TRUE)[[1]]
-  gsub('^"|"$', "", fields)
-}
-
-## get_data_header() returns the sample/gene names of a file's header with the
-## row-id field removed. Two header conventions occur in the scRNA-seq
-## sources: the header omits the row-id field (Jackson), so it is one field
-## shorter than a data row; or it labels the field, explicitly (Gasch) or with
-## a blank (Jariani), so header and data rows have equal length. Comparing the
-## header's field count with the first data row's tells them apart, so
-## fread_matrix() always receives names for the data columns only.
-get_data_header <- function(path, sep = "\t", skip = 0) {
-  header.raw <- read_header_line(path, sep = sep, skip = skip)
-  data.line  <- readLines(path, n = skip + 2)[skip + 2]
-  n.data     <- length(strsplit(data.line, sep, fixed = TRUE)[[1]])
-  if (length(header.raw) == n.data - 1) {
-    header.raw            # header already omits the row-id field
-  } else if (length(header.raw) == n.data) {
-    header.raw[-1]         # header carries a label (or blank) for the row-id field; drop it
-  } else {
-    stop("get_data_header(): header has ", length(header.raw),
-         " field(s) but the first data row has ", n.data,
-         " field(s) in ", path, "; this file matches neither the ",
-         "'header omits row-id' nor the 'header labels row-id' convention")
-  }
-}
-
-## fread_matrix() is a fast equivalent of as.matrix(read.delim(path, row.names
-## = 1)) built on data.table::fread(). keep is a logical vector over
-## get_data_header()'s columns selecting which to parse (NULL keeps all), so
-## only the columns a source needs are read. Data rows are read with header =
-## FALSE; each row's first field becomes the row name and column names come
-## from get_data_header(), which makes the +1 column shift below correct for
-## every source.
-fread_matrix <- function(path, keep = NULL, sep = "\t", skip = 0, ...) {
-  header <- get_data_header(path, sep = sep, skip = skip)
-  if (is.null(keep)) keep <- rep(TRUE, length(header))
-  col.idx <- c(1L, which(keep) + 1L)   # +1 shifts past the row-id field, which the header never names
-  dt  <- fread(file = path, sep = sep, skip = skip + 1, header = FALSE, select = col.idx, ...)
-  mat <- as.matrix(dt[, -1, with = FALSE])
-  colnames(mat) <- header[keep]
-  rownames(mat) <- dt[[1]]
-  mat
-}
-
-## to_numeric_matrix() coerces a table to a numeric matrix. One non-numeric
-## column (a metadata field, a stray total-count column, a blank trailing
-## column) would otherwise turn the whole as.matrix() result into character.
-## Columns that do not convert cleanly are reported by name and dropped, so
-## rowsum() and the NB fit receive numeric input.
-to_numeric_matrix <- function(df, label) {
-  mat <- as.matrix(df)
-  if (is.character(mat)) {
-    num <- suppressWarnings(apply(mat, 2, as.numeric))
-    # a column is genuinely non-numeric if it produced an NA somewhere
-    # that was not already a blank entry in the original character data
-    bad <- colSums(is.na(num) & mat != "", na.rm = TRUE) > 0
-    if (any(bad))
-      message(label, ": dropping ", sum(bad), " non-numeric column(s): ",
-              paste(head(colnames(mat)[bad], 10), collapse = ", "))
-    mat <- num[, !bad, drop = FALSE]
-    rownames(mat) <- rownames(df)
-  }
-  storage.mode(mat) <- "numeric"
-  mat
-}
-
 ## map_to_orf() returns the systematic ORF name for each identifier in ids.
 ## Identifiers that match ORF.PATTERN are returned as given; the pattern
 ## accepts '-' or '.' before the dubious-ORF suffix (YAL047C-A / YAL047C.A),
@@ -3103,90 +2897,6 @@ to_numeric_matrix <- function(df, label) {
 ## are dropped by the caller. When no identifier at all matches as a common
 ## name, a message with a sample of them is printed and all are returned as NA.
 ORF.PATTERN <- "^Y[A-P][LR][0-9]{3}[CW]([.-][A-Z])?$"
-map_to_orf <- function(ids, label = "") {
-  is.orf <- grepl(ORF.PATTERN, ids)
-  out <- ids
-  need <- unique(ids[!is.orf])
-  if (length(need) > 0) {
-    # mapIds() throws when NONE of the supplied keys exist under that
-    # keytype, rather than just returning all-NA the way it does for a
-    # partial mismatch. That total-mismatch case almost always means the
-    # identifiers in "need" are not actually common names at all (most
-    # often because the systematic-name regex above failed to match the
-    # real format this source uses), so it is reported rather than left
-    # to crash the whole script, with a sample of the unmatched strings
-    # printed so the real format can be diagnosed directly.
-    looked.up <- tryCatch(
-      suppressMessages(mapIds(org.Sc.sgd.db, keys = need, keytype = "GENENAME",
-                               column = "ORF", multiVals = "first")),
-      error = function(e) {
-        message(label, ": ", length(need), " identifier(s) did not match the systematic-ORF ",
-                "pattern and also failed as GENENAME lookups. Sample: ",
-                paste(head(need, 10), collapse = ", "))
-        setNames(rep(NA_character_, length(need)), need)
-      })
-    out[!is.orf] <- unname(looked.up[match(ids[!is.orf], need)])
-  }
-  n.unresolved <- sum(is.na(out))
-  if (n.unresolved > 0)
-    message(label, ": ", n.unresolved, " of ", length(out), " row(s) did not resolve to an ORF and will be dropped")
-  out
-}
-
-## fit_scrna_source: takes the raw genes-by-cells count matrix of one published single-cell source to a
-## data.frame keyed by ORF, with the Mean/CV2/Fano/BFREQ/BSIZE content NB.SC carries, so every source
-## merges against NB.SC the same way.
-##   1. Row names raw_ids resolve to systematic ORFs (map_to_orf); rows that never map are dropped and rows
-##      sharing an ORF are summed (TSS- or isoform-level rows collapse to one gene-level row).
-##   2. QC drops cells whose library size is below min_cell_count, then genes detected in fewer than
-##      min_cells_expr of the remaining cells. The thresholds are arguments because the sources differ
-##      widely in depth and cell number.
-##   3. Exposure is each cell's library size divided by the source's mean library size, so MU is in
-##      counts per typical cell (the unit MIX.SC uses) and CV2 = 1/MU + 1/DISP is at this dataset's own
-##      depth. BFREQ = DISP and BSIZE = MU/DISP, the definitions documented for NB.SC.
-## cl is optional and passed to fit_counts_offset(): NULL fits on one core; a PSOCK cluster from
-## parallel::makeCluster() splits genes across workers (the driver reuses one cluster for all sources).
-fit_scrna_source <- function(mat, raw_ids, label, min_cell_count, min_cells_expr, cl = NULL) {
-  stopifnot(is.numeric(min_cell_count), length(min_cell_count) == 1, min_cell_count >= 0,
-            is.numeric(min_cells_expr), length(min_cells_expr) == 1, min_cells_expr >= 0)
-  orf <- map_to_orf(raw_ids, label)
-  mat <- mat[!is.na(orf), , drop = FALSE]
-  orf <- orf[!is.na(orf)]
-  mat <- rowsum(mat, group = orf)
-
-  mat <- mat[, colSums(mat) >= min_cell_count, drop = FALSE]
-  mat <- mat[rowSums(mat > 0) >= min_cells_expr, , drop = FALSE]
-
-  exposure <- colSums(mat) / mean(colSums(mat))
-  fit <- fit_counts_offset(mat, exposure, cl = cl)
-  data.frame(
-    ORF   = rownames(fit),
-    Mean  = fit$MU,
-    CV2   = fit$CV^2,
-    Fano  = fit$FANO,
-    BFREQ = fit$BFREQ,
-    BSIZE = fit$BSIZE,
-    stringsAsFactors = FALSE
-  )
-}
-
-## mean_adjusted_noise() expresses each gene's noise relative to genes of
-## similar abundance in the same dataset, the idea behind Newman et al.'s DM
-## statistic: the residual of log CV^2 from a loess trend on log mean. The
-## trend is fitted within each source, so each dataset keeps its own capture
-## efficiency and units and the residual isolates gene-specific noise that can
-## be compared across datasets. Genes with non-positive or non-finite mean or
-## CV^2 return NA.
-mean_adjusted_noise <- function(mean, cv2, span = 0.3) {
-  lm_ <- log(mean)
-  lc  <- log(cv2)
-  ok  <- is.finite(lm_) & is.finite(lc)
-  res <- rep(NA_real_, length(mean))
-  fit <- loess(lc[ok] ~ lm_[ok], span = span)   # smooth abundance trend, as in Newman's DM
-  res[ok] <- lc[ok] - predict(fit)              # residual = noise beyond the expected level at that abundance
-  res
-}
-
 ## ============================================================
 ## 13b. FUNCTIONS APPLIED ACROSS ITEMS BY analysis.R
 ## ============================================================
@@ -3391,29 +3101,6 @@ consistent_pair_row <- function(sc, sc_best_se, se_best_sc) {
     data.frame(sc = sc_id, se = se_id) else NULL
 }
 
-## raw_source_table: the ORF, Mean, CV2, BFREQ and BSIZE columns of one fitted source, in the layout shared
-## by all published sources.
-raw_source_table <- function(d) {
-  data.frame(ORF = d$ORF, Mean = d$Mean, CV2 = d$CV2, BFREQ = d$BFREQ, BSIZE = d$BSIZE,
-             stringsAsFactors = FALSE)
-}
-
-## add_cv2_adj: adds CV2_ADJ, the loess residual of log CV2 on log mean (mean_adjusted_noise()), to one
-## source table d.
-add_cv2_adj <- function(d) {
-  d$CV2_ADJ <- mean_adjusted_noise(d$Mean, d$CV2)
-  d
-}
-
-## adj_corr_row: agreement of source src's mean-adjusted noise (CV2_ADJ) with MIX.SC's (nb_sc) over the
-## genes both report. The adjusted values are residuals on the log scale already, so no further transform.
-adj_corr_row <- function(src, all_raw, nb_sc) {
-  d <- merge(nb_sc[, c("ORF", "CV2_ADJ")], all_raw[[src]][, c("ORF", "CV2_ADJ")], by = "ORF")
-  out <- cor_row(d$CV2_ADJ.x, d$CV2_ADJ.y)
-  out$source <- src
-  out
-}
-
 ## diet_for_markers: strips a Seurat object to the counts and data layers FindMarkers needs, keeping the cluster job's input small.
 diet_for_markers <- function(obj) {
   if (packageVersion("Seurat") >= "5.0.0") DietSeurat(obj, layers = c("counts", "data")) else DietSeurat(obj)
@@ -3431,27 +3118,6 @@ seed_check_rows <- function(m, checks, count_label) {
     out
   }
   if ("cor" %in% names(x)) one(x) else do.call(rbind, unname(Map(one, x, quantity = names(x))))
-}
-
-## noise_corr_rows: Spearman correlation of the mean, CV2, burst frequency and burst size between two noise
-## tables, one row per statistic. kind "vs_mix": key is a source name and tables[[key]] is that source merged
-## with NB.SC on ORF (columns MU/Mean, CV2.x/CV2.y, ...), compared against MIX.SC. kind "pairwise": key is a
-## pair of source names and the two tables in tables are merged on ORF. The first column names the source
-## or the comparison.
-noise_corr_rows <- function(key, tables, kind = c("vs_mix", "pairwise")) {
-  kind <- match.arg(kind)
-  stats <- c("mean", "CV2", "burst_frequency", "burst_size")
-  if (kind == "vs_mix") {
-    d <- tables[[key]]
-    x <- c("MU", "CV2.x", "BFREQ.x", "BSIZE.x"); y <- c("Mean", "CV2.y", "BFREQ.y", "BSIZE.y")
-  } else {
-    d <- merge(tables[[key[1]]], tables[[key[2]]], by = "ORF")
-    x <- paste0(c("Mean", "CV2", "BFREQ", "BSIZE"), ".x"); y <- paste0(c("Mean", "CV2", "BFREQ", "BSIZE"), ".y")
-  }
-  out <- do.call(rbind, unname(Map(cor_row, lapply(d[x], log), lapply(d[y], log))))
-  if (kind == "vs_mix") out$source <- key else out$comparison <- paste(key[1], "vs", key[2])
-  out$statistic <- stats
-  out
 }
 
 ## ============================================================
@@ -3886,67 +3552,6 @@ report_regions <- function(occ, label) {
               if (is.null(bad)) 0L else nrow(bad),
               if (is.null(bad)) 0L else sum(bad$end - bad$start + 1)))
   if (!is.null(bad)) print(bad, row.names = FALSE)
-}
-
-## power_grid_row: power of one grid row i (mean reads x cell count x burst-frequency size) over the SIZE.RATIO sweep. The reference group's
-## counts and fit are drawn once per replicate and reused across the sweep, so the sweep isolates the effect of SIZE.RATIO.
-power_grid_row <- function(i, ALPHA, CELL.RATIO, EXPOSURE.CV, GRID, MEAN.READS, N.CELLS, N.MIX, NI, NJ, PI1, SEED.BASE, SIZE, SIZE.RATIO) {
-  ## size_log2_ratio: log2 ratio of the NB size (disp, the burst-frequency axis) between two
-  ## .fit_one() results, NA if either side is non-positive or non-finite.
-  size_log2_ratio <- function(fit_a, fit_b) {
-    a <- fit_a[["disp"]]; b <- fit_b[["disp"]]
-    if (is.finite(a) && a > 0 && is.finite(b) && b > 0) log2(a) - log2(b) else NA_real_
-  }
-
-  row <- GRID[i, ]
-  MEAN.READS.X <- MEAN.READS[row$m]
-  N.SC.X       <- N.CELLS[row$n]
-  N.SE.X       <- round(N.SC.X * CELL.RATIO)
-  SIZE.1.X     <- SIZE[row$p]
-
-  set.seed(SEED.BASE + 1e6 + row$n)  #shared draws, keyed only by cell count
-  sdlog <- sqrt(log(1 + EXPOSURE.CV^2))
-  EXPO.X.LIST <- replicate(NJ, rlnorm(N.SC.X, meanlog = -0.5*sdlog^2, sdlog = sdlog), simplify = FALSE)
-  EXPO.Y.LIST <- replicate(NJ, rlnorm(N.SE.X, meanlog = -0.5*sdlog^2, sdlog = sdlog), simplify = FALSE)
-  PERM.LIST   <- replicate(NI, sample.int(N.SC.X + N.SE.X), simplify = FALSE)
-
-  set.seed(SEED.BASE + i)  #row-specific draws (X depends on m, p, n)
-  X.LIST  <- vector("list", NJ)
-  FA.LIST <- vector("list", NJ)
-  for (j in seq_len(NJ)) {
-    X.LIST[[j]]  <- rnbinom(n = N.SC.X, size = SIZE.1.X, mu = MEAN.READS.X*EXPO.X.LIST[[j]])
-    FA.LIST[[j]] <- .fit_one(X.LIST[[j]], EXPO.X.LIST[[j]])  #shared across SIZE.RATIO below
-  }
-
-  P.ALL <- matrix(NA_real_, NJ, length(SIZE.RATIO))
-  for (qi in seq_along(SIZE.RATIO)) {
-    SIZE.2.X <- SIZE.1.X / SIZE.RATIO[qi]
-    for (j in seq_len(NJ)) {
-      EXPO.Y <- EXPO.Y.LIST[[j]]
-      Y  <- rnbinom(n = N.SE.X, size = SIZE.2.X, mu = MEAN.READS.X*EXPO.Y)
-      fb <- .fit_one(Y, EXPO.Y)   #same estimator as the null below
-      OBS <- size_log2_ratio(FA.LIST[[j]], fb)
-
-      XY <- c(X.LIST[[j]], Y); EXPO.XY <- c(EXPO.X.LIST[[j]], EXPO.Y)
-      NULL.DIST <- numeric(NI)
-      for (k in seq_len(NI)) {
-        sp <- .fit_split(XY, EXPO.XY, PERM.LIST[[k]], N.SC.X)  #same estimator as the observed contrast
-        NULL.DIST[k] <- size_log2_ratio(sp$a, sp$b)
-      }
-      P.ALL[j, qi] <- perm_pval(OBS, NULL.DIST)
-    }
-  }
-
-  i0     <- which(SIZE.RATIO == 1)
-  P.NULL <- P.ALL[, i0]
-  n_alt  <- min(NJ, round(NJ * PI1 / (1 - PI1)))
-  vapply(seq_along(SIZE.RATIO), function(qi) {
-    if (qi == i0) return(mean(P.NULL < ALPHA, na.rm = TRUE))
-    mean(replicate(N.MIX, {
-      q <- p.adjust(c(P.NULL, P.ALL[sample.int(NJ, n_alt), qi]), method = "BH")
-      mean(q[NJ + seq_len(n_alt)] < ALPHA, na.rm = TRUE)
-    }), na.rm = TRUE)
-  }, numeric(1))
 }
 
 ## bootstrap_ari_job: one bootstrap replicate (job j of the tasks x replicates table). It resamples the cells of the dataset by the job's
