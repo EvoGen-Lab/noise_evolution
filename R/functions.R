@@ -23,17 +23,12 @@
 ###     split_indices_by_depth() - Depth-matched split of depth-ordered hybrid cells at an arbitrary fraction.
 ###     fit_counts_offset_row() - One gene's NB fit and derived columns (DISP, MU, VAR, FANO, CV, BFREQ, BSIZE), the single place those are built; the unit parLapply distributes across genes.
 ###     fit_counts_offset_parallel() - Runs fit_counts_offset_row() across all genes on an already-open cluster.
-###     raw_gene_prefilter() - Fit-free preliminary gene filter with depth-scaled abundance and an absolute detection floor, ahead of the real NB fit.
 ###     .fstar_from_r() - Closed-form optimal split fraction f* from the parent/hybrid noise ratio r.
 ###   2. GENE FILTER (marginal information only; never on a contrast)
 ###     mad_lower() - Lower outlier cutoff (median minus k MAD) on the log10 scale, adapting to any sequencing depth.
 ###     qc_cell_keep() - Per-dataset cell QC: lower-tail library-size cutoff from mad_lower() plus a minimum-read floor.
-###     qc_gene_keep() - Cross-dataset gene QC with one relative abundance floor anchored to the shallowest dataset and an absolute detection floor.
-###     gene_pass_group() - Per-group pass/fail test (depth-scaled mean count and absolute detected-cell floor), used by build_gene_sets().
-###     build_gene_sets() - Builds per-contrast and full gene sets from per-dataset fits, scaling the mean floor by dataset depth and applying one detected-cell floor.
-###     refine_by_boundary() - Bootstrap-checks candidate genes near the Poisson/NB boundary and reclassifies borderline DISP = Inf calls.
-###     chk() - Calibration helper: flags a fit as usable based on convergence and finite, non-degenerate dispersion.
-###     chk_prec() - Precision companion to chk(): flags fits whose SE is too imprecise to trust.
+###     qc_gene_keep() - Cross-dataset gene QC with one relative abundance floor anchored to the shallowest dataset and an absolute detection floor, and sets the pilot gene pool.
+###     fit_gene_filter() - Genes whose fit passes in every dataset: finite non-degenerate dispersion, a depth-scaled mean-count floor and an absolute detected-cell floor.
 ###   3. PAIRED PER-GENE BOOTSTRAP OF CONTRASTS
 ###     make_draws() - Builds the resampling index draws used by the paired per-gene bootstrap.
 ###     boot_contrasts_one() - One gene's bootstrap contrasts across all modes; the unit of work parLapply distributes in gene_boot.R.
@@ -483,24 +478,6 @@ fit_counts_offset_parallel <- function(mat, exposure, cl) {
   do.call(rbind, rows)
 }
 
-## Fit-free preliminary gene filter from raw count summaries only (depth-scaled mean
-## count per cell and number of cells with nonzero counts), with no NB fit. It sets the
-## gene pool for the internal-pilot bootstrap (section 2.1) before any fits exist;
-## build_gene_sets() applies the final filter to the real fits.
-raw_gene_prefilter <- function(mats, min_mean = 0.001, min_expr_frac = 0.10) {
-  # Depth of each dataset (mean reads per cell). Scaling the mean floor by
-  # relative depth gives every dataset the same abundance criterion.
-  depth <- vapply(mats, function(m) sum(m) / ncol(m), numeric(1))
-  floor_mean <- min_mean * depth / min(depth)
-  # Detection floor in cells, anchored to the smallest dataset so the
-  # number of informative cells is identical across datasets.
-  n_min <- ceiling(min_expr_frac * min(vapply(mats, ncol, integer(1))))
-  ok <- Reduce(`&`, Map(function(m, fm) {
-    (rowSums(m) / ncol(m)) >= fm & rowSums(m > 0) >= n_min
-  }, mats, floor_mean))
-  rownames(mats[[1]])[ok]
-}
-
 ## ============================================================
 ## 2. GENE FILTER (marginal information only; never on a contrast)
 ## ============================================================
@@ -544,22 +521,14 @@ qc_gene_keep <- function(mats, lambda0 = 0.20, cell_frac = 0.10) {
        depth = depth, exp_mean = p_min * depth)
 }
 
-## Per-gene pass/fail for one dataset's fit table: finite DISP below 1e6 (a detectable,
-## non-degenerate dispersion), raw mean count >= min_mean (this dataset's depth-scaled
-## floor) and detection in >= min_expr_cells cells (absolute floor shared by all
-## datasets). Returns a logical vector over genes.
-gene_pass_group <- function(fit, min_mean = 0.001, min_expr_cells = 1) {
-  is.finite(fit$DISP) & fit$DISP < 1e6 &
-    fit$MEAN_CT >= min_mean & fit$N_EXPR >= min_expr_cells
-}
-
-## depth is a named vector of mean reads per cell for each group in fits.
-## The mean floor min_mean applies at the shallowest group and scales up
-## in proportion to depth. The detected-cell floor is min_expr_frac of the
-## smallest group, so every group faces the same information requirement.
-## Returns list(pass = genes x datasets logical, sets = genes passing in every dataset
-## of each contrast ('full' = all datasets), n = set sizes, contrasts = dataset lists).
-build_gene_sets <- function(fits, ncells, depth, min_mean = 0.001, min_expr_frac = 0.10) {
+## Genes whose fit passes in every dataset of `fits`: a finite DISP below 1e6 (a detectable,
+## non-degenerate dispersion), a raw mean count above the dataset's depth-scaled floor, and
+## detection in at least min_expr_frac of the smallest dataset's cells. depth is a named vector of
+## mean reads per cell for each dataset. The mean floor min_mean applies at the shallowest dataset
+## and scales up in proportion to depth; the detected-cell floor is one absolute number of cells,
+## so every dataset faces the same information requirement. The fit tables must be gene-aligned.
+## Returns the passing gene names.
+fit_gene_filter <- function(fits, ncells, depth, min_mean = 0.001, min_expr_frac = 0.10) {
   groups <- names(fits)
   stopifnot(all(groups %in% names(ncells)), all(groups %in% names(depth)))
   genes <- rownames(fits[[1]])
@@ -568,16 +537,11 @@ build_gene_sets <- function(fits, ncells, depth, min_mean = 0.001, min_expr_frac
       stop("fit frames are not gene-aligned; reorder to a common gene set first")
   floor_mean <- min_mean * depth[groups] / min(depth[groups])
   n_min <- ceiling(min_expr_frac * min(ncells[groups]))
-  pass <- vapply(groups, function(g) gene_pass_group(fits[[g]], floor_mean[[g]], n_min), logical(length(genes)))
-  rownames(pass) <- genes
-  contrasts <- list(total = c("MIX.SC","MIX.SE"), cis = c("HYC.SC","HYC.SE"),
-                    trans = c("MIX.SC","MIX.SE","HYT.SC","HYT.SE"),
-                    dom = c("MIX.SC","MIX.SE","HYB.COMB"),
-                    dpar_sc = c("HYB.COMB","MIX.SC"), dpar_se = c("HYB.COMB","MIX.SE"),
-                    inh_sc = c("HYB.SC","MIX.SC"), inh_se = c("HYB.SE","MIX.SE"),
-                    full = groups)
-  sets <- lapply(contrasts, function(gr) genes[rowSums(pass[, gr, drop = FALSE]) == length(gr)])
-  list(pass = pass, sets = sets, n = vapply(sets, length, integer(1)), contrasts = contrasts)
+  pass <- Reduce(`&`, lapply(groups, function(g) {
+    fit <- fits[[g]]
+    is.finite(fit$DISP) & fit$DISP < 1e6 & fit$MEAN_CT >= floor_mean[[g]] & fit$N_EXPR >= n_min
+  }))
+  genes[which(pass)]
 }
 
 ## ============================================================
@@ -3371,6 +3335,17 @@ promoter_divergence <- function(sc_scores, se_scores) {
   m
 }
 
+## Regulatory classes with a cis component. Cis, Cis + Trans and Compensatory all require a
+## significant cis permutation p-value by construction (classify_reg()).
+.CIS_CLASSES <- c("Cis", "Cis + Trans", "Compensatory")
+
+## Genes eligible for the promoter concordance tests: in a class with a cis component, with the
+## promoter shift (delta) and the cis estimate both defined, and neither exactly 0 (a zero has no
+## sign to match). Shared by promoter_direction_test() and concordance_by_magnitude().
+.concordance_eligible <- function(delta, est, reg_class, cis_classes = .CIS_CLASSES) {
+  reg_class %in% cis_classes & !is.na(delta) & !is.na(est) & sign(delta) != 0 & sign(est) != 0
+}
+
 ## Tests whether the direction of each promoter feature's between-species
 ## shift matches the direction predicted from the per-species relationship
 ## in NOISE.VALIDATE (Section 6.2): a higher TATA score or longer
@@ -3391,13 +3366,11 @@ promoter_divergence <- function(sc_scores, se_scores) {
 ## discordant genes are equally likely. Genes with delta or estimate equal
 ## to 0 are dropped. A non-significant result means the candidate tables
 ## in Section 6.5 should be read with caution.
-promoter_direction_test <- function(BURST.CONTRASTS, PR, ARCH, reg_class, quantity = c("bfreq", "bsize", "kbal"), cis_classes = c("Cis", "Cis + Trans", "Compensatory")) {
+promoter_direction_test <- function(BURST.CONTRASTS, PR, ARCH, reg_class, quantity = c("bfreq", "bsize", "kbal"), cis_classes = .CIS_CLASSES) {
   quantity <- match.arg(quantity)
   est <- BURST.CONTRASTS[[paste0(quantity, "_cis_est")]]
-  cis_flag <- reg_class %in% cis_classes
   one_feature <- function(delta) {
-    ok <- cis_flag & !is.na(delta) & !is.na(est) &
-          sign(delta) != 0 & sign(est) != 0
+    ok <- .concordance_eligible(delta, est, reg_class, cis_classes)
     n          <- sum(ok)
     concordant <- sign(delta[ok]) == sign(est[ok])
     n_conc     <- sum(concordant)
@@ -3427,10 +3400,8 @@ promoter_direction_test <- function(BURST.CONTRASTS, PR, ARCH, reg_class, quanti
 ## one bin) come from a logistic regression of concordance on
 ## log(|delta|), the formal version of "is the rate rising toward the
 ## extremes" that the binned table and its plot show informally.
-concordance_by_magnitude <- function(delta, bfreq_cis_est, reg_class, cis_classes = c("Cis", "Cis + Trans", "Compensatory"), n_bins = 10) {
-  cis_flag <- reg_class %in% cis_classes
-  ok <- cis_flag & !is.na(delta) & !is.na(bfreq_cis_est) &
-        sign(delta) != 0 & sign(bfreq_cis_est) != 0
+concordance_by_magnitude <- function(delta, bfreq_cis_est, reg_class, cis_classes = .CIS_CLASSES, n_bins = 10) {
+  ok <- .concordance_eligible(delta, bfreq_cis_est, reg_class, cis_classes)
 
   d    <- abs(delta[ok])
   conc <- sign(delta[ok]) == sign(bfreq_cis_est[ok])
@@ -3511,7 +3482,7 @@ plot_concordance_by_magnitude <- function(cb, main = NULL) {
 ## both species (score or length, position, matched sequence) precede each
 ## feature's deltas, so an indel can be told apart from a substitution by
 ## reading the sequences in the table.
-promoter_noise_candidates <- function(BURST.CONTRASTS, PR, ARCH, reg_class, quantity = c("bfreq", "bsize", "kbal"), cis_classes = c("Cis", "Cis + Trans", "Compensatory"), arch_frac = 0.90) {
+promoter_noise_candidates <- function(BURST.CONTRASTS, PR, ARCH, reg_class, quantity = c("bfreq", "bsize", "kbal"), cis_classes = .CIS_CLASSES, arch_frac = 0.90) {
   quantity <- match.arg(quantity)
   stopifnot(nrow(BURST.CONTRASTS) == nrow(ARCH), nrow(BURST.CONTRASTS) == length(reg_class))
 
@@ -3537,17 +3508,6 @@ promoter_noise_candidates <- function(BURST.CONTRASTS, PR, ARCH, reg_class, quan
 
   cis_flag <- reg_class %in% cis_classes
 
-  tata_cut    <- quantile(abs(ARCH$tata_delta),        arch_frac, na.rm = TRUE)
-  polyat_cut  <- quantile(abs(ARCH$polyat_delta),      arch_frac, na.rm = TRUE)
-  occ_cut     <- quantile(abs(ARCH$occ_access_delta),  arch_frac, na.rm = TRUE)
-  tata_flag   <- !is.na(ARCH$tata_delta)         & abs(ARCH$tata_delta)        >= tata_cut
-  polyat_flag <- !is.na(ARCH$polyat_delta)       & abs(ARCH$polyat_delta)      >= polyat_cut
-  occ_flag    <- !is.na(ARCH$occ_access_delta)   & abs(ARCH$occ_access_delta)  >= occ_cut
-
-  keep_tata   <- cis_flag & tata_flag;   keep_tata[is.na(keep_tata)]     <- FALSE
-  keep_polyat <- cis_flag & polyat_flag; keep_polyat[is.na(keep_polyat)] <- FALSE
-  keep_occ    <- cis_flag & occ_flag;    keep_occ[is.na(keep_occ)]       <- FALSE
-
 ## Columns shared by all three tables: gene, regulatory class and the
 ## cis, trans and total estimates, p-values and q-values. Names carry the
 ## quantity prefix (bfreq_, bsize_ or kbal_) so a table states which axis
@@ -3566,44 +3526,34 @@ promoter_noise_candidates <- function(BURST.CONTRASTS, PR, ARCH, reg_class, quan
   }
   est_col <- paste0(quantity, "_cis_est")
 
-  tata_out <- cbind(context_cols(keep_tata), data.frame(
-    tata_score_sc  = ARCH$tata_score_sc[keep_tata], tata_score_se  = ARCH$tata_score_se[keep_tata],
-    tata_pos_sc    = ARCH$tata_pos_sc[keep_tata],   tata_pos_se    = ARCH$tata_pos_se[keep_tata],
-    tata_motif_sc  = ARCH$tata_motif_sc[keep_tata], tata_motif_se  = ARCH$tata_motif_se[keep_tata],
-    tata_delta     = ARCH$tata_delta[keep_tata],    tata_pos_delta = ARCH$tata_pos_delta[keep_tata],
-    concordant     = sign(ARCH$tata_delta[keep_tata]) == sign(est_cis[keep_tata]),
-    prom_len_sc    = ARCH$prom_len_sc[keep_tata],   prom_len_se    = ARCH$prom_len_se[keep_tata],
-    prom_extended_sc = ARCH$prom_extended_sc[keep_tata], prom_extended_se = ARCH$prom_extended_se[keep_tata],
-    row.names = NULL, stringsAsFactors = FALSE))
-  tata_out <- tata_out[order(-abs(tata_out[[est_col]])), ]
+  ## One table per promoter feature. delta names the shift that gates membership (at or above
+  ## the arch_frac quantile of |delta| over all genes, computed on that feature's own values) and
+  ## sets `concordant`; cols are the raw species values and deltas that precede it. occ_score_sc/_se
+  ## are NuPoP's own occupancy scale (a 0-1 probability that a base is nucleosome-covered), kept
+  ## beside occ_access_delta so a candidate can be checked against the occupancy track; concordant
+  ## uses occ_access_delta, matching the sign convention used everywhere else in this section.
+  feature_spec <- list(
+    tata   = list(delta = "tata_delta",
+                  cols = c("tata_score_sc", "tata_score_se", "tata_pos_sc", "tata_pos_se",
+                           "tata_motif_sc", "tata_motif_se", "tata_delta", "tata_pos_delta")),
+    polyat = list(delta = "polyat_delta",
+                  cols = c("polyat_len_sc", "polyat_len_se", "polyat_pos_sc", "polyat_pos_se",
+                           "polyat_tract_sc", "polyat_tract_se", "polyat_delta", "polyat_pos_delta")),
+    occ    = list(delta = "occ_access_delta",
+                  cols = c("occ_score_sc", "occ_score_se", "occ_delta", "occ_access_delta")))
+  prom_cols <- c("prom_len_sc", "prom_len_se", "prom_extended_sc", "prom_extended_se")
+  pick <- function(cols, keep) as.data.frame(lapply(setNames(cols, cols), function(cn) ARCH[[cn]][keep]), stringsAsFactors = FALSE)
 
-  polyat_out <- cbind(context_cols(keep_polyat), data.frame(
-    polyat_len_sc    = ARCH$polyat_len_sc[keep_polyat],     polyat_len_se    = ARCH$polyat_len_se[keep_polyat],
-    polyat_pos_sc    = ARCH$polyat_pos_sc[keep_polyat],     polyat_pos_se    = ARCH$polyat_pos_se[keep_polyat],
-    polyat_tract_sc  = ARCH$polyat_tract_sc[keep_polyat],   polyat_tract_se  = ARCH$polyat_tract_se[keep_polyat],
-    polyat_delta     = ARCH$polyat_delta[keep_polyat],      polyat_pos_delta = ARCH$polyat_pos_delta[keep_polyat],
-    concordant       = sign(ARCH$polyat_delta[keep_polyat]) == sign(est_cis[keep_polyat]),
-    prom_len_sc      = ARCH$prom_len_sc[keep_polyat],       prom_len_se      = ARCH$prom_len_se[keep_polyat],
-    prom_extended_sc = ARCH$prom_extended_sc[keep_polyat],  prom_extended_se = ARCH$prom_extended_se[keep_polyat],
-    row.names = NULL, stringsAsFactors = FALSE))
-  polyat_out <- polyat_out[order(-abs(polyat_out[[est_col]])), ]
-
-  ## occ_score_sc/_se are raw predicted occupancy (NuPoP's own scale, a
-  ## probability between 0 and 1 that a base is nucleosome-covered),
-  ## kept alongside occ_access_delta so a candidate can be checked
-  ## against the actual occupancy track directly. concordant still uses
-  ## occ_access_delta rather than occ_delta, matching the sign
-  ## convention used everywhere else in this section.
-  occ_out <- cbind(context_cols(keep_occ), data.frame(
-    occ_score_sc      = ARCH$occ_score_sc[keep_occ],      occ_score_se     = ARCH$occ_score_se[keep_occ],
-    occ_delta          = ARCH$occ_delta[keep_occ],         occ_access_delta = ARCH$occ_access_delta[keep_occ],
-    concordant         = sign(ARCH$occ_access_delta[keep_occ]) == sign(est_cis[keep_occ]),
-    prom_len_sc        = ARCH$prom_len_sc[keep_occ],       prom_len_se      = ARCH$prom_len_se[keep_occ],
-    prom_extended_sc   = ARCH$prom_extended_sc[keep_occ],  prom_extended_se = ARCH$prom_extended_se[keep_occ],
-    row.names = NULL, stringsAsFactors = FALSE))
-  occ_out <- occ_out[order(-abs(occ_out[[est_col]])), ]
-
-  list(tata = tata_out, polyat = polyat_out, occ = occ_out)
+  lapply(feature_spec, function(spec) {
+    delta <- ARCH[[spec$delta]]
+    cut   <- quantile(abs(delta), arch_frac, na.rm = TRUE)
+    keep  <- cis_flag & !is.na(delta) & abs(delta) >= cut
+    keep[is.na(keep)] <- FALSE
+    out <- cbind(context_cols(keep), pick(spec$cols, keep),
+                 data.frame(concordant = sign(delta[keep]) == sign(est_cis[keep])),
+                 pick(prom_cols, keep))
+    out[order(-abs(out[[est_col]])), ]
+  })
 }
 
 ## Tests whether a promoter feature associates with a species' own

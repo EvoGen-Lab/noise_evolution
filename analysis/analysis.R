@@ -342,7 +342,7 @@ N.COEXPR <- 5000; SEED.COEXPR <- 1        # Coexpression
 # have similar power to detect significant noise differences
 PILOT.MATS  <- list(MIX.SC = MIX.SC, MIX.SE = MIX.SE, HYB.SC = HYB.SC, HYB.SE = HYB.SE)
 PILOT.EXPOS <- list(MIX.SC = EXPO.MIX.SC, MIX.SE = EXPO.MIX.SE, HYB = EXPO.HYB)
-PILOT.GENES <- raw_gene_prefilter(PILOT.MATS, min_mean = 0.001, min_expr_frac = 0.10)
+PILOT.GENES <- qc_gene_keep(PILOT.MATS, lambda0 = 0.001, cell_frac = 0.10)$genes
 
 ## ---- Cluster round trip: Rscript gene_pilot.R ----
 ## Reads gene_pilot_inputs.rda (saved below), writes gene_pilot_output.rda (PILOT.SE)
@@ -411,8 +411,7 @@ NCELLS <- c(MIX.SC = ncol(MIX.SC), MIX.SE = ncol(MIX.SE), HYC.SC = ncol(HYC.SC),
 # depth, and detection in an absolute number of cells set from the smallest
 # dataset, in every one of the 13 datasets
 SPLIT.DEPTH <- vapply(SPLIT.FIT.MATS, function(m) sum(m) / ncol(m), numeric(1))
-GS    <- build_gene_sets(SPLIT.FITS, NCELLS, depth = SPLIT.DEPTH, min_mean = 0.001, min_expr_frac = 0.10)
-GENES <- GS$sets$full
+GENES <- fit_gene_filter(SPLIT.FITS, NCELLS, depth = SPLIT.DEPTH, min_mean = 0.001, min_expr_frac = 0.10)
 
 # Create bootstrap and permutation input files  
 CONTRAST.MATS <- list(
