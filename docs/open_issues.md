@@ -6,7 +6,7 @@ Source: `docs/function_review.md` (item numbers refer to its section 3), re-chec
 
 | Review # | Where | Issue | Rerun if fixed |
 |---|---|---|---|
-| 4 | `permute_contrasts_one` (13c), the `PERMS` block in analysis.R | The trans null shuffles the SC and SE sides independently and breaks the within-cell pairing that the cis null keeps. This bears on the trans versus cis power asymmetry (project_context.md). | 2.3 permutation (`gene_perm`) |
+| 4 | `permute_contrasts_one` (13c), `perm_label_draw`, the `PERMS` block in analysis.R | The trans null shuffles the SC and SE allele pools independently, which breaks the within-cell pairing of HYT.SC and HYT.SE that the cis null keeps. This bears on the trans versus cis power asymmetry (project_context.md). The mean-split and noise-split draws of cis and trans are now coupled (shared swap flags, shared pool ordering); only the SC/SE pairing remains. | 2.3 permutation (`gene_perm`) |
 | 5 | `coexpr_perm_one` (functions.R 13c) | dpar nulls pool raw hybrid cells while the observed dpar matrices carry the ploidy rescale. Bias direction not quantified. | Section 4 (`coexpr_perm`) |
 | 7 | `power_grid_row` (functions_power.R) | The grid simulates one two-group contrast. It has no paired-allele (cis) or difference-of-ratios (trans) contrast, so it cannot show the asymmetry (open work item 4). | Section 10, additive |
 | 8 | `pilot_split_se_one` (13c) | Per-gene seed `seed + sum(utf8ToInt(gene))` yields about 37 distinct seeds for 8000 genes. Marginal SEs unaffected. | Same cascade as the pilot; fix with any pilot rerun |

@@ -55,7 +55,8 @@ for (k in seq_along(chunks)) {
   ## One gene's permutation null: refits the relabeled groups for every mode and permutation, compares
   ## the observed contrasts (mean, bfreq, CV2, bsize, kbal) with the null by a two-sided permutation p, and
   ## adds ploidy-adjusted p-values for the dpar contrasts. bsize and kbal nulls recombine the mean and
-  ## bfreq null draws of the same permutation.
+  ## bfreq null draws of the same permutation; for cis and trans those draws come from relabelings of the
+  ## same cells (perm_label_draw()).
   results[[k]] <- mclapply(chunks[[k]], permute_contrasts_one, mc.cores = NUM.CORES, mc.preschedule = FALSE, expos = CONTRAST.EXPOS, fits = CONTRAST.FITS, mats = CONTRAST.MATS, perms = PERMS, ploidy_shift = PLOIDY.SHIFT)
   bad <- vapply(results[[k]], function(x) inherits(x, "try-error") || is.null(x), logical(1))
   if (any(bad)) stop(sprintf("%d gene(s) failed in chunk %d, first: %s", sum(bad), k, chunks[[k]][which(bad)[1]]))

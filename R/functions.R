@@ -2961,24 +2961,51 @@ gene_pass_group <- function(g, fits, floor_mean, n_min) {
   is.finite(fit$DISP) & fit$DISP < THETA.CAP & fit$MEAN_CT >= floor_mean[[g]] & fit$N_EXPR >= n_min
 }
 
-## perm_label_draw: one permutation's relabelings for every mode. total, trans, dpar and inh shuffle
-## pooled cell labels, cis swaps alleles within each hybrid cell, and dom pairs random parent cells.
-## The cell counts (nSC, nSE parents; nHYC, nHYT hybrid cis and trans splits, .N for the noise split;
-## nHYB combined hybrid) set the size of each draw; b is the permutation index and is not used.
-perm_label_draw <- function(b, nHYB, nHYC, nHYC.N, nHYT, nHYT.N, nSC, nSE) list(
-  total     = sample.int(nSC + nSE),
-  cis       = runif(nHYC) < 0.5,
-  cis_n     = runif(nHYC.N) < 0.5,
-  transSC   = sample.int(nSC + nHYT),
-  transSE   = sample.int(nSE + nHYT),
-  transSC_n = sample.int(nSC + nHYT.N),
-  transSE_n = sample.int(nSE + nHYT.N),
-  dom_i   = sample.int(nSC, nHYB, replace = TRUE),
-  dom_j   = sample.int(nSE, nHYB, replace = TRUE),
-  dparSC  = sample.int(nHYB + nSC),
-  dparSE  = sample.int(nHYB + nSE),
-  inhSC   = sample.int(nHYB + nSC),
-  inhSE   = sample.int(nHYB + nSE))
+## perm_label_draw: one permutation's relabelings for every mode. total, dpar and inh shuffle pooled
+## cell labels, dom pairs random parent cells, and cis and trans are drawn so that the mean-split and
+## noise-split versions of a contrast (cis and cis_n, trans and trans_n) are relabeled from the same
+## cells. Each version keeps its exact marginal null, so only the coupling between them is new.
+## - cis swaps the alleles of a hybrid cell with probability 0.5. One swap flag is drawn per hybrid
+##   cell, and the cis and cis_n groups read the flags of their own cells (hyc, hyc_n: positions of the
+##   HYC and HYC.N cells among the nHYB hybrid cells), so a cell in both groups swaps in both.
+## - trans pools the nP parent cells of one allele with the hybrid cells of the trans group. One random
+##   ordering of the parent cells plus every hybrid cell of either trans group (hyt, hyt_n: positions
+##   of the HYT and HYT.N cells) serves both versions; each version keeps the members of its own pool
+##   in that order. Restricting a uniform ordering to a subset leaves a uniform ordering, so each
+##   pooled shuffle is exact, and the parent cells sent to the hybrid-sized group follow the same
+##   ordering in both versions. The hybrid positions are in column order of their datasets (ascending),
+##   as split_indices_by_depth() returns them. The SC and SE allele pools are ordered separately.
+## nSC, nSE are the parent cell counts and b the permutation index (not used).
+perm_label_draw <- function(b, hyc, hyc_n, hyt, hyt_n, nHYB, nSC, nSE) {
+  stopifnot(is.numeric(nHYB), length(nHYB) == 1, nHYB >= 1,
+            all(vapply(list(hyc, hyc_n, hyt, hyt_n), function(x) !is.unsorted(x, strictly = TRUE) && all(x >= 1 & x <= nHYB), logical(1))))
+  ## Hybrid cells of either trans group, each listed once
+  u <- sort(union(hyt, hyt_n))
+  ## One coupled pair of pooled permutations for a parent dataset of nP cells: pooled index 1..nP are
+  ## the parent cells and nP + j the j-th cell of the trans group; NA marks a cell outside the group
+  trans_pair <- function(nP) {
+    ord  <- sample.int(nP + length(u))
+    id_m <- c(seq_len(nP), nP + match(u, hyt))[ord]
+    id_n <- c(seq_len(nP), nP + match(u, hyt_n))[ord]
+    list(m = id_m[!is.na(id_m)], n = id_n[!is.na(id_n)])
+  }
+  sc <- trans_pair(nSC); se <- trans_pair(nSE)
+  flip <- runif(nHYB) < 0.5
+  list(
+    total     = sample.int(nSC + nSE),
+    cis       = flip[hyc],
+    cis_n     = flip[hyc_n],
+    transSC   = sc$m,
+    transSE   = se$m,
+    transSC_n = sc$n,
+    transSE_n = se$n,
+    dom_i   = sample.int(nSC, nHYB, replace = TRUE),
+    dom_j   = sample.int(nSE, nHYB, replace = TRUE),
+    dparSC  = sample.int(nHYB + nSC),
+    dparSE  = sample.int(nHYB + nSE),
+    inhSC   = sample.int(nHYB + nSC),
+    inhSE   = sample.int(nHYB + nSE))
+}
 
 ## eiv_mode_ci_row: errors-in-variables correlation for one mode m with a gene-resampling bootstrap CI
 ## (B resamples of the rows of contrasts). Draws with negative Vm or Vs give NaN; when more than half of
@@ -3355,7 +3382,8 @@ permute_contrasts_one <- function(g, expos, fits, mats, perms, ploidy_shift) {
 
     ## bsize null: mean null minus bfreq null, permutation by permutation. Where md == smd the two
     ## draws share one relabeling, so their correlation carries through. For cis and trans they come
-    ## from separate relabelings (mean split vs noise split) and are independent.
+    ## from the mean-split and noise-split relabelings of the same permutation, which perm_label_draw()
+    ## builds from the same cells (shared swap flags for cis, one shared pool ordering for trans).
     bs_null <- Nm[, md] - Ns[, smd]
     obs.bs  <- unname(obs.m[md]) - unname(obs.s[smd])
     out[[paste0("bsize_", md, "_obs")]] <- obs.bs

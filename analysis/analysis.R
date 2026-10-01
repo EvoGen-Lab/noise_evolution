@@ -442,18 +442,19 @@ CONTRAST.FITS <- lapply(SPLIT.FITS, function(fr) data.frame(MU = as.numeric(as.c
 PLOIDY.SHIFT <- ploidy_shift(CONTRAST.MATS, CONTRAST.EXPOS)[GENES]
 
 ## Pre-draws every permutation label vector (one list entry per permutation, all modes) from one
-## seeded stream, so each gene is tested against the same relabelings. total/trans/dpar/inh shuffle
-## pooled cell labels, cis swaps alleles within each hybrid cell, dom pairs random parent cells.
+## seeded stream, so each gene is tested against the same relabelings. total/dpar/inh shuffle pooled
+## cell labels and dom pairs random parent cells. cis and trans are drawn once per permutation for the
+## mean split and the noise split together: the two splits share the alleles' swap flags (cis) and one
+## pool ordering of the parent and hybrid cells (trans), so the bsize and kbal nulls, which combine a
+## mean-split draw with a noise-split draw of the same permutation, keep their dependence.
 PERMS <- local({
   ncells <- NCELLS
   NPERM <- N.PERM
   seed <- SEED.PERM
   set.seed(seed)
-  nSC <- ncells[["MIX.SC"]]; nSE <- ncells[["MIX.SE"]]
-  nHYC <- ncells[["HYC.SC"]]; nHYT <- ncells[["HYT.SC"]]
-  nHYC.N <- ncells[["HYC.SC.N"]]; nHYT.N <- ncells[["HYT.SC.N"]]
-  nHYB <- ncells[["HYB.COMB"]]
-  lapply(seq_len(NPERM), perm_label_draw, nHYB = nHYB, nHYC = nHYC, nHYC.N = nHYC.N, nHYT = nHYT, nHYT.N = nHYT.N, nSC = nSC, nSE = nSE)
+  lapply(seq_len(NPERM), perm_label_draw, hyc = SPLIT.IDX.MEAN$c, hyc_n = SPLIT.IDX.DISP$c,
+         hyt = SPLIT.IDX.MEAN$t, hyt_n = SPLIT.IDX.DISP$t,
+         nHYB = ncells[["HYB.COMB"]], nSC = ncells[["MIX.SC"]], nSE = ncells[["MIX.SE"]])
 })
 
 ## ---- Cluster round trip: Rscript gene_boot.R (job array, one task per replicate) / gene_perm.R ----
