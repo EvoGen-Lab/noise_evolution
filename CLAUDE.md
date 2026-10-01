@@ -3,8 +3,8 @@
 Reproducible R pipeline for genome-wide noise evolution in S. cerevisiae (YPS1000), S. eubayanus, and their F1 hybrid (10x scRNA-seq, allele-specific). Scientific context and settled decisions live in @docs/project_context.md. Read it before changing any analysis logic.
 
 ## Files
-- `analysis.R` main analysis, organized in numbered sections (1, 2.1, 2.3, 4, 6.1, 10 ...).
-- `functions.R` helper functions sourced by the main script.
+- `analysis/analysis.R` main analysis, organized in numbered sections (1, 2.1, 2.3, 4, 6.1, 10 ...).
+- `R/functions.R` helper functions sourced by the main script.
 - Cluster scripts, each a standalone R script plus a `.sub` SLURM file
 
 ## Environment
@@ -22,7 +22,7 @@ Reproducible R pipeline for genome-wide noise evolution in S. cerevisiae (YPS100
 
 ## Rerun protocol (required in every change summary)
 Cluster-dependent sections are 2.1 (pilot), 2.3 (bootstrap and permutation), 4 (coexpression), 6.1 (NuPoP), and 10 (power analysis).
-Every summary of a change to `analysis.R` or `functions.R` must list
+Every summary of a change to `analysis/analysis.R` or `R/functions.R` must list
 1. which sections and subsections need a rerun,
 2. which cluster jobs need resubmission.
 Prefer fixes that avoid cluster reruns. Offer a local recompute path (for example by editing checkpoints) whenever one exists.
@@ -47,8 +47,8 @@ Prefer fixes that avoid cluster reruns. Offer a local recompute path (for exampl
 - Keep comments short and accurate. Update them whenever the code changes.
 
 ## Verification before finishing a task
-- Run `Rscript -e "parse('functions.R'); parse('analysis.R')"` to confirm both files parse.
-- Source `functions.R` and run any unit checks that exist for the functions you touched.
+- Run `Rscript -e "parse('R/functions.R'); parse('analysis/analysis.R')"` to confirm both files parse.
+- Source `R/functions.R` and run any unit checks that exist for the functions you touched.
 - Do not claim a result is unchanged unless a check confirms it. Expected result changes after the R and Seurat upgrade include `FindMarkers` fold changes, newer GO and KEGG annotations, and Monte Carlo seed behavior.
 
 ## Open work
