@@ -743,14 +743,21 @@ power_line_figure <- function(file, power, grid, outer, inner, x, series, main_f
 ## Symmetric axis limits about zero that cover value +/- error.
 .sym <- function(v, e) { m <- max(abs(c(v + e, v - e)), na.rm = TRUE); c(-m, m) }
 
-## .se_scatter(): scatter of one contrast against another with SE bars, the shared body of
-## plot_cis_trans(), plot_mean_bfreq() and plot_burst_kinetics(). With diagonals = TRUE both axes share
-## one symmetric range (unless lim is given) and the dotted +/-45 degree lines are drawn, so
+## .se_scatter(): square scatter of y against x, the shared body of plot_contrast_scatter(), plot_cis_trans_class(),
+## plot_dom_class() and plot_coexpr_scatter(). sx, sy are SEs drawn as bars behind the points (NULL draws none).
+## bar_col is one colour or a function of the SE vector that returns one colour per bar; pt_col is one colour
+## or one per point. legend_labels with legend_cols adds a top-left legend. With diagonals = TRUE both axes
+## share one symmetric range (unless lim is given) and the dotted +/-45 degree lines are drawn, so
 ## same-direction and opposite-direction changes are readable. With diagonals = FALSE each axis gets its
-## own symmetric range. Only genes with a finite estimate and SE on both axes are drawn.
-.se_scatter <- function(x, sx, y, sy, xlab, ylab, main, lim = NULL, diagonals = TRUE, bar_col, pt_col) {
-  ok <- is.finite(x) & is.finite(y) & is.finite(sx) & is.finite(sy)
-  x <- x[ok]; y <- y[ok]; sx <- sx[ok]; sy <- sy[ok]
+## own symmetric range. Only points with a finite x, y and (when given) SEs are drawn.
+.se_scatter <- function(x, sx = NULL, y, sy = NULL, xlab, ylab, main, lim = NULL, diagonals = TRUE, bar_col = NULL, pt_col,
+                        pt_cex = 0.5, legend_labels = NULL, legend_cols = NULL) {
+  ok <- is.finite(x) & is.finite(y)
+  if (!is.null(sx)) ok <- ok & is.finite(sx) & is.finite(sy)
+  x <- x[ok]; y <- y[ok]
+  if (length(pt_col) == length(ok)) pt_col <- pt_col[ok]
+  bars <- !is.null(sx)
+  if (bars) { sx <- sx[ok]; sy <- sy[ok] } else sx <- sy <- numeric(length(x))
   if (diagonals) {
     if (is.null(lim)) { m <- max(abs(c(x + sx, x - sx, y + sy, y - sy)), na.rm = TRUE); lim <- c(-m, m) }
     xlim <- ylim <- lim
@@ -761,9 +768,12 @@ power_line_figure <- function(file, power, grid, outer, inner, x, series, main_f
   plot(NA, xlim = xlim, ylim = ylim, xlab = xlab, ylab = ylab, main = main)
   if (diagonals) { abline(0, 1, lty = 3, col = COLOR.GREY[["mid"]]); abline(0, -1, lty = 3, col = COLOR.GREY[["mid"]]) }
   abline(h = 0, v = 0, col = COLOR.GREY[["dark"]])
-  segments(x - sx, y, x + sx, y, col = bar_col)
-  segments(x, y - sy, x, y + sy, col = bar_col)
-  points(x, y, pch = 16, cex = 0.5, col = pt_col)
+  if (bars) {
+    segments(x - sx, y, x + sx, y, col = if (is.function(bar_col)) bar_col(sx) else bar_col)
+    segments(x, y - sy, x, y + sy, col = if (is.function(bar_col)) bar_col(sy) else bar_col)
+  }
+  points(x, y, pch = 16, cex = pt_cex, col = pt_col)
+  if (!is.null(legend_labels)) legend("topleft", legend = legend_labels, col = legend_cols, pch = 16, bty = "n", cex = 0.8)
 }
 
 ## plot_contrast_scatter: one gene-level contrast scatter with SE bars, drawn by .se_scatter(). type picks
@@ -1066,16 +1076,9 @@ plot_coexpr_scatter <- function(CT, type = c("cis_trans", "dominance"), main = N
                      main = "co-expression: dominance"))
   x <- CT[[spec$x]]; y <- CT[[spec$y]]; cls <- CT$class
   ok <- is.finite(x) & is.finite(y) & !is.na(cls)
-  x <- x[ok]; y <- y[ok]; cls <- cls[ok]
-  col <- spec$cols[match(cls, spec$levels)]
-  if (is.null(lim)) { m <- max(abs(c(x, y)), na.rm = TRUE); lim <- c(-m, m) }
   if (is.null(main)) main <- spec$main
-  op <- par(pty = "s"); on.exit(par(op))
-  plot(NA, xlim = lim, ylim = lim, xlab = spec$xlab, ylab = spec$ylab, main = main)
-  abline(0, 1, lty = 3, col = COLOR.GREY[["mid"]]); abline(0, -1, lty = 3, col = COLOR.GREY[["mid"]])
-  abline(h = 0, v = 0, col = COLOR.GREY[["dark"]])
-  points(x, y, pch = 16, cex = 0.4, col = col)
-  legend("topleft", legend = spec$levels, col = spec$cols, pch = 16, bty = "n", cex = 0.8)
+  .se_scatter(x[ok], y = y[ok], xlab = spec$xlab, ylab = spec$ylab, main = main, lim = lim, pt_col = spec$cols[match(cls[ok], spec$levels)],
+              pt_cex = 0.4, legend_labels = spec$levels, legend_cols = spec$cols)
 }
 
 ## Shared core for the two-seed bootstrap SE adequacy checks below.
@@ -1400,6 +1403,19 @@ summarize_class_overlap <- function(ov, label = NULL) {
             as.list(ov$jaccard), check.names = FALSE, stringsAsFactors = FALSE)
 }
 
+## se_alpha_col: maps a vector of SEs to per-point bar colors. Precise (small-SE) estimates get
+## a more opaque bar and imprecise (large-SE) ones fade toward the background. lo/hi are the
+## SE quantiles anchoring the high- and low-opacity ends of the ramp.
+se_alpha_col <- function(se, base_col = COLOR.GREY[["dark"]], lo = 0.05, hi = 0.9, alpha_range = c(0.08, 0.4)) {
+  rng <- quantile(se, c(lo, hi), na.rm = TRUE)
+  w   <- 1 - pmin(pmax((se - rng[1]) / (rng[2] - rng[1]), 0), 1)   # w = 1 for precise, 0 for noisy
+  a   <- alpha_range[1] + diff(alpha_range) * w
+  # col2rgb()/rgb() are vectorized, so building the RGBA color directly gives every point
+  # its own opacity (adjustcolor() accepts a single alpha value).
+  rgb_base <- grDevices::col2rgb(base_col) / 255
+  grDevices::rgb(rgb_base[1], rgb_base[2], rgb_base[3], alpha = a)
+}
+
 ## ============================================================
 ## Figure 1 : cis vs trans, coloured by regulatory class
 ## ============================================================
@@ -1408,43 +1424,30 @@ summarize_class_overlap <- function(ov, label = NULL) {
 ## opacity follows se_alpha_col() so imprecise bars recede. Points are solid, matching the
 ## Figure 5 dominance panels.
 plot_cis_trans_class <- function(BURST.CONTRASTS, PR, quantity = c("mean", "bfreq", "bsize", "kbal", "cv2"), sig = 0.05, main = NULL, lim = NULL, bar_col = COLOR.GREY[["dark"]], colors = setNames(COLOR.LIST.1[seq_along(REG.CLASS)], REG.CLASS)) {
-  ## se_alpha_col: maps a vector of SEs to per-point bar colors. Precise (small-SE) estimates get
-  ## a more opaque bar and imprecise (large-SE) ones fade toward the background. lo/hi are the
-  ## SE quantiles anchoring the high- and low-opacity ends of the ramp.
-  se_alpha_col <- function(se, base_col = COLOR.GREY[["dark"]], lo = 0.05, hi = 0.9, alpha_range = c(0.08, 0.4)) {
-    rng <- quantile(se, c(lo, hi), na.rm = TRUE)
-    w   <- 1 - pmin(pmax((se - rng[1]) / (rng[2] - rng[1]), 0), 1)   # w = 1 for precise, 0 for noisy
-    a   <- alpha_range[1] + diff(alpha_range) * w
-    # col2rgb()/rgb() are vectorized, so building the RGBA color directly gives every point
-    # its own opacity (adjustcolor() accepts a single alpha value).
-    rgb_base <- grDevices::col2rgb(base_col) / 255
-    grDevices::rgb(rgb_base[1], rgb_base[2], rgb_base[3], alpha = a)
-  }
-
   quantity <- match.arg(quantity)
-  lab <- c(mean = "mean", bfreq = "burst frequency", bsize = "burst size", kbal = "frequency-size balance", cv2 = "CV2")[quantity]
+  lab <- QUANTITY.LABEL[[quantity]]
   cx <- BURST.CONTRASTS[[paste0(quantity,"_cis_est")]];  sx <- BURST.CONTRASTS[[paste0(quantity,"_cis_se")]]
   cy <- BURST.CONTRASTS[[paste0(quantity,"_trans_est")]]; sy <- BURST.CONTRASTS[[paste0(quantity,"_trans_se")]]
   cls <- reg_class_vec(BURST.CONTRASTS, PR, quantity, sig)
   ok  <- is.finite(cx)&is.finite(cy)&is.finite(sx)&is.finite(sy)&cls %in% REG.CLASS
-  cx<-cx[ok]; cy<-cy[ok]; sx<-sx[ok]; sy<-sy[ok]; cls<-cls[ok]
-  col <- colors[match(cls, REG.CLASS)]
-  if (is.null(lim)) { m <- max(abs(c(cx+sx,cx-sx,cy+sy,cy-sy)),na.rm=TRUE); lim<-c(-m,m) }
   if (is.null(main)) main <- paste0(lab,": cis vs trans")
-  op <- par(pty="s"); on.exit(par(op))
-  plot(NA, xlim=lim, ylim=lim, xlab="log2(Sc/Se) in hybrid", ylab="parents - hybrid (log2)", main=main)
-  abline(0,1,lty=3,col=COLOR.GREY[["mid"]]); abline(0,-1,lty=3,col=COLOR.GREY[["mid"]])
-  abline(h=0,v=0,col=COLOR.GREY[["dark"]])
-  bar_cols_x <- se_alpha_col(sx, bar_col); bar_cols_y <- se_alpha_col(sy, bar_col)
-  segments(cx-sx, cy, cx+sx, cy, col=bar_cols_x)   # all bars first, precision-scaled opacity
-  segments(cx, cy-sy, cx, cy+sy, col=bar_cols_y)
-  points(cx, cy, pch=16, cex=0.5, col=col)   # solid points, matches Figure 5's style
-  legend("topleft", legend=REG.CLASS, col=colors, pch=16, bty="n", cex=0.8)
-  invisible(cls)
+  .se_scatter(cx[ok], sx[ok], cy[ok], sy[ok], xlab = "log2(Sc/Se) in hybrid", ylab = "parents - hybrid (log2)", main = main, lim = lim,
+              bar_col = function(se) se_alpha_col(se, bar_col), pt_col = colors[match(cls[ok], REG.CLASS)],
+              legend_labels = REG.CLASS, legend_cols = colors)
+  invisible(cls[ok])
 }
 
 ## ============================================================
 ## Figure 3 (supplement) : mean vs noise per gene, per-class slopes
+## class_slope_lines: one least-squares line of y on x per class level (levels with more than two genes), drawn
+## across the whole panel in that level's colour.
+class_slope_lines <- function(x, y, cls, levels, cols, lty) {
+  for (k in levels) {
+    sel <- !is.na(cls) & cls == k
+    if (sum(sel) > 2) abline(lm(y[sel] ~ x[sel]), col = cols[match(k, levels)], lwd = 2, lty = lty)
+  }
+}
+
 ## ============================================================
 ## plot_mean_bfreq_class: mean divergence (x) vs a burst-parameter divergence (y) at one mode,
 ## with per-class regression lines. Points are neutral grey; regulatory slopes are solid and
@@ -1463,14 +1466,8 @@ plot_mean_bfreq_class <- function(BURST.CONTRASTS, PR, mode = "total", reg_class
   px <- diff(range(x))*0.04; py <- diff(range(y))*0.04
   plot(x, y, pch=16, cex=0.4, col=COLOR.GREY[["light"]], xlim=range(x)+c(-px, px), ylim=range(y)+c(-py, py), xlab="mean divergence (log2)", ylab=paste0(y_lab, " divergence (log2)"), main=main)
   abline(h=0,v=0,col=COLOR.GREY[["mid"]])
-  for (k in REG.CLASS) {
-    sel <- !is.na(rc) & rc==k
-    if (sum(sel)>2) abline(lm(y[sel]~x[sel]), col=reg_colors[match(k,REG.CLASS)], lwd=2, lty=1)
-  }
-  for (k in DOM.CLASS) {
-    sel <- !is.na(dc) & dc==k
-    if (sum(sel)>2) abline(lm(y[sel]~x[sel]), col=dom_colors[match(k,DOM.CLASS)], lwd=2, lty=2)
-  }
+  class_slope_lines(x, y, rc, REG.CLASS, reg_colors, lty = 1)
+  class_slope_lines(x, y, dc, DOM.CLASS, dom_colors, lty = 2)
   legend("topleft", legend = c(paste0("Reg — ", REG.CLASS), paste0("Dom – ", DOM.CLASS)), col    = c(reg_colors, dom_colors), lty    = c(rep(1, length(REG.CLASS)), rep(2, length(DOM.CLASS))), lwd=2, bty="n", cex=0.65)
 }
 
@@ -1907,16 +1904,9 @@ plot_dom_class <- function(BURST.CONTRASTS, PR, quantity = c("mean", "bfreq", "b
     sy <- sqrt(pmax(0, ssc^2+sse^2+2*rdp*ssc*sse))/2
     xl<-"additive  (Sc - Se)/2  (log2)"; yl<-"dominance  hybrid - midparent  (log2)"
   }
-  col <- COLOR.LIST.2[match(cls,DOM.CLASS)]
-  if (is.null(lim)) { m<-max(abs(c(x+sx,x-sx,y+sy,y-sy)),na.rm=TRUE); lim<-c(-m,m) }
   if (is.null(main)) main<-paste0("dominance (",quantity,", ",frame,")")
-  op<-par(pty="s"); on.exit(par(op))
-  plot(NA,xlim=lim,ylim=lim,xlab=xl,ylab=yl,main=main)
-  abline(0,1,lty=3,col=COLOR.GREY[["mid"]]); abline(0,-1,lty=3,col=COLOR.GREY[["mid"]])
-  abline(h=0,v=0,col=COLOR.GREY[["dark"]])
-  segments(x-sx,y,x+sx,y,col=bar_col); segments(x,y-sy,x,y+sy,col=bar_col)
-  points(x,y,pch=16,cex=0.5,col=col)
-  legend("topleft",legend=DOM.CLASS,col=COLOR.LIST.2,pch=16,bty="n",cex=0.8)
+  .se_scatter(x, sx, y, sy, xlab = xl, ylab = yl, main = main, lim = lim, bar_col = bar_col, pt_col = COLOR.LIST.2[match(cls,DOM.CLASS)],
+              legend_labels = DOM.CLASS, legend_cols = COLOR.LIST.2)
   invisible(cls)
 }
 
