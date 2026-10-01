@@ -12,14 +12,14 @@
 ###     ckpt_path() - Path of a section's checkpoint file (section{N}_checkpoint.rda).
 ###     console_start() / console_stop() - Per-section console transcript (section{N}_console.txt).
 ###   1. OFFSET NEGATIVE-BINOMIAL FIT
-###     neg_binom_fit_offset() - Offset NB fit for one gene via glm.nb: returns NB size (disp), rate (mu) and their log-scale SEs; disp = Inf when a Poisson-vs-NB pre-check finds no overdispersion.
+###     neg_binom_fit_offset() - Offset NB fit for one gene: rate (mu) and NB size (disp) from .fit_one(), with glm.nb asymptotic log-scale SEs; disp = Inf when a Poisson-vs-NB pre-check finds no overdispersion.
 ###     fit_counts_offset() - Matrix version of neg_binom_fit_offset(): fits every gene (row) against its exposure vector.
-###     .fit_one() - Offset NB fit for one gene by direct likelihood optimization (mu = sum(y)/sum(exposure)); the fit run inside every bootstrap and permutation replicate.
+###     .fit_one() - The pipeline's single NB estimator (mu = sum(y)/sum(exposure), disp by 1-D likelihood given mu): observed fits, every bootstrap and permutation replicate, and the power grid.
 ###     .fit_split() - Splits a pooled sample by a pre-drawn permutation and fits each half with .fit_one().
 ###   1b. INTERNAL-PILOT SPLIT FRACTION (f*)
-###     pilot_split_se_one() - One gene's bootstrap SE of log(mu) and log(size), for the four split-independent pilot datasets.
+###     pilot_split_se_one() - One gene's bootstrap SE of log(mu) and log(size) for the four split-independent pilot datasets, plus the covariance of the two hybrid alleles' estimates from shared resampled cells.
 ###     pilot_split_se() - Serial wrapper running pilot_split_se_one() across a gene set, for a quick local check.
-###     estimate_f_star() - Pooled optimal split fraction (f*) for the mean and noise axes, from the pilot SE curve.
+###     estimate_f_star() - Pooled optimal split fraction (f*) for the mean and noise axes, from the pilot SEs and the full hybrid allele-contrast variance.
 ###     split_indices_by_depth() - Depth-matched split of depth-ordered hybrid cells at an arbitrary fraction.
 ###     fit_counts_offset_row() - Single-gene row version of fit_counts_offset(), for parLapply distribution across genes.
 ###     fit_counts_offset_parallel() - Runs fit_counts_offset_row() across all genes on an already-open cluster.
@@ -79,7 +79,7 @@
 ###     check_intrinsic_reliability() - Tests whether the intrinsic/extrinsic decomposition's disattenuation behaves as the NB model predicts.
 ###     partial_cor_depth() - Correlation between two residual vectors with per-cell depth partialled out.
 ###     class_mean_var() - Mean and variance of a continuous score within each level of a class vector.
-###     frac_group_sets() - Splits genes into low/average/high groups by a continuous score, for downstream GO enrichment by group.
+###     frac_group_sets() - Splits scored genes into low/average/high groups by a continuous score, for downstream GO enrichment by group.
 ###     class_anova() - One-way ANOVA testing whether a continuous score differs across class levels.
 ###     coexpr_class_table() - Pair-level regulatory classification (five-way) built from cis and trans p-values, BH-adjusted.
 ###     coexpr_dom_class_table() - Pair-level dominance classification, the co-expression analog of classify_dom().
@@ -142,7 +142,7 @@
 ###     read_gff_genes() - Reads a GFF3 annotation into a per-gene coordinate table.
 ###     extract_promoters() - Extracts each gene's promoter sequence, bounded by its upstream neighbor.
 ###     tata_box_score() - Scores a promoter sequence's best TATA-box PWM match in the canonical location window.
-###     poly_at_tract() - Finds the longest poly(dA:dT) run in a promoter sequence.
+###     poly_at_tract() - Finds the longest poly(dA) or poly(dT) homopolymer run in a promoter sequence.
 ###     score_promoters() - Applies both the TATA PWM score and poly(dA:dT) tract length to every promoter in a set.
 ###     nupop_cluster_inputs() - Packages one species' chromosomes and promoter coordinates for the NuPoP cluster job.
 ###     nupop_predict_window() - Predicts NuPoP occupancy for one sequence window in its own temporary folder.
@@ -182,9 +182,8 @@
 ###     plot_within_between_by_class() - Boxplot of within_between_decomp()'s ratio split by regulatory or dominance class, with class_anova()'s omnibus test and Tukey pairwise comparisons.
 ###     report_within_between_by_class() - Runs plot_within_between_by_class() for two datasets side by side against one classification axis; writes the combined figure and prints both datasets' test statistics.
 ###   13. POWER ANALYSIS (simulation and fit, shared with the SLURM job power_grid.R)
-###     fit_offset_nb() - Offset NB fit for one simulated gene: exposure-weighted mean plus MLE dispersion via direct log-likelihood optimization.
-###     fit_offset_nb_mm() - Closed-form method-of-moments dispersion estimate, used for permutation-null replicates.
-###     fit_split_nb_mm() - Splits a pooled sample by a pre-drawn permutation and fits each half with the method-of-moments estimator.
+###     fit_offset_nb() - .fit_one() for one simulated gene, with the result named c(mu, size): the power grid fits observed contrasts and permutation nulls with the analysis's own estimator.
+###     fit_split_nb() - Splits a pooled simulated sample by a pre-drawn permutation and fits each half with fit_offset_nb().
 ###     perm_pval() - Two-sided permutation p-value with add-one continuity correction.
 ###     size_log2_ratio() - Log2 ratio of SIZE (burst frequency) between two fits, NA if either side is non-positive or non-finite.
 ###     power_grid_row() - Power for one (MEAN.READS, N.CELLS, SIZE) row, across every SIZE.RATIO value at once.
@@ -213,7 +212,9 @@
 ###     15b. Gene-fit calibration helpers
 ###       refine_by_boundary(), boot_disp_logse(), chk(), chk_prec() - Poisson/NB boundary reclassification and per-bin convergence/precision summaries.
 ###     15c. Diagnostics and plots for interactive use
-###       coexpr_raw_cor(), coexpr_gene_degree(), plot_coexpr_pair(), .cohen_kappa(), report_cluster_marker_enrichment(), plot_geneset_direction_stack(), fit_split_nb(), plot_palette_swatches().
+###       coexpr_raw_cor(), coexpr_gene_degree(), plot_coexpr_pair(), .cohen_kappa(), report_cluster_marker_enrichment(), plot_geneset_direction_stack(), plot_palette_swatches().
+###     15d. Method-of-moments alternative to the power-grid estimator
+###       fit_offset_nb_mm(), fit_split_nb_mm() - closed-form NB size estimate and its permutation split; roughly 20x faster than the likelihood fit, not used by the power grid.
 ###############################################################
 
 library(MASS)   # glm.nb, ships with base R
@@ -246,11 +247,13 @@ console_stop <- function() {
 ## ============================================================
 # Offset NB fit for one gene. Counts follow y ~ NB(mean = exposure * mu, size = disp),
 # so mu is a per-unit-exposure rate and disp is the NB size theta (larger = less noise).
-# A Poisson-vs-NB pre-check (Pearson chi-square / df <= 1) returns disp = Inf for genes
-# with no detectable overdispersion; glm.nb estimates mu and disp for the rest.
-# Returns c(disp, mu, disp_logse, mu_logse); init.theta optionally seeds glm.nb.
-
-neg_binom_fit_offset <- function(y, exposure, init.theta = NULL) {
+# The point estimates come from .fit_one(): mu = sum(y)/sum(exposure), and disp is the
+# NB likelihood maximizer given that mu (Inf when Pearson chi-square / df <= 1, i.e. no
+# detectable overdispersion). Every bootstrap, permutation and power-grid replicate fits
+# with this same estimator, so an observed value and the distribution it is compared
+# against are measured identically. glm.nb supplies only the asymptotic log-scale SEs.
+# Returns c(disp, mu, disp_logse, mu_logse).
+neg_binom_fit_offset <- function(y, exposure) {
   if (!is.null(dim(y)))
     stop("neg_binom_fit_offset() takes one gene's counts; use fit_counts_offset() for a matrix")
   na_out <- c(disp = NA_real_, mu = NA_real_, disp_logse = NA_real_, mu_logse = NA_real_)
@@ -259,38 +262,27 @@ neg_binom_fit_offset <- function(y, exposure, init.theta = NULL) {
   y <- y[keep]; exposure <- exposure[keep]
   if (length(y) < 2) return(na_out)
 
-  rate0 <- sum(y) / sum(exposure)
-  if (sum(y) == 0) return(c(disp = NA_real_, mu = 0, disp_logse = NA_real_, mu_logse = NA_real_))
-
-  mu_pois <- exposure * rate0
-  pearson <- sum((y - mu_pois)^2 / mu_pois) / (length(y) - 1)
-  if (pearson <= 1)
-    return(c(disp = Inf, mu = rate0, disp_logse = NA_real_, mu_logse = NA_real_))
+  core <- .fit_one(y, exposure)
+  out  <- c(disp = unname(core["disp"]), mu = unname(core["mu"]), disp_logse = NA_real_, mu_logse = NA_real_)
+  if (!is.finite(out[["disp"]])) return(out)
 
   logexp <- log(exposure)
-  use_init <- !is.null(init.theta) && is.finite(init.theta) && 
-              init.theta > 0 && init.theta < 1e6
-  fit <- suppressWarnings(tryCatch(
-    if (use_init) glm.nb(y ~ 1 + offset(logexp), init.theta = init.theta)
-    else          glm.nb(y ~ 1 + offset(logexp)),
-    error = function(e) NULL))
-  if (is.null(fit) || isFALSE(fit$converged))
-    return(c(disp = NA_real_, mu = rate0, disp_logse = NA_real_, mu_logse = NA_real_))
-
-  theta  <- fit$theta
-  lambda <- unname(exp(coef(fit)[1]))
-  if (!is.finite(theta) || theta > 1e6)
-    return(c(disp = Inf, mu = lambda, disp_logse = NA_real_, mu_logse = NA_real_))
-
-  mu_logse   <- tryCatch(sqrt(vcov(fit)[1, 1]), error = function(e) NA_real_)
-  disp_logse <- if (is.finite(fit$SE.theta)) fit$SE.theta / theta else NA_real_
-  c(disp = theta, mu = lambda, disp_logse = disp_logse, mu_logse = mu_logse)
+  fit <- suppressWarnings(tryCatch(glm.nb(y ~ 1 + offset(logexp), init.theta = out[["disp"]]),
+                                   error = function(e) NULL))
+  if (!is.null(fit) && !isFALSE(fit$converged)) {
+    out["mu_logse"] <- tryCatch(sqrt(vcov(fit)[1, 1]), error = function(e) NA_real_)
+    if (is.finite(fit$SE.theta) && is.finite(fit$theta) && fit$theta > 0)
+      out["disp_logse"] <- fit$SE.theta / fit$theta
+  }
+  out
 }
 
-# Offset NB fit for one gene, run once per resample inside boot_contrasts_one and
-# permute_contrasts_one: mu = sum(y)/sum(exposure), disp = NB size from a 1-D likelihood
-# maximization over log(theta) given that mu, after the same Poisson-vs-NB pre-check as
-# neg_binom_fit_offset(). Returns c(mu, disp); base R only and RNG-free, so fork-safe.
+# The pipeline's single NB estimator: mu = sum(y)/sum(exposure), and disp = the NB size
+# from a 1-D likelihood maximization over log(theta) given that mu, after a Poisson-vs-NB
+# pre-check (Pearson chi-square / df <= 1 gives disp = Inf). neg_binom_fit_offset() uses it
+# for the observed fits, boot_contrasts_one() and permute_contrasts_one() for every resample,
+# and fit_offset_nb() for the power grid. Returns c(mu, disp); base R only and RNG-free,
+# so fork-safe.
 .fit_one <- function(counts, expo) {
   keep <- is.finite(counts) & is.finite(expo) & expo > 0
   y <- counts[keep]; e <- expo[keep]
@@ -362,10 +354,12 @@ fit_counts_offset <- function(mat, exposure) {
 ## design, where nuisance-parameter information (not the effect being
 ## tested) sets the design before the real analysis runs
 
-## One gene's bootstrap SE of log(mu) and log(size) for the four datasets
-## needed to compute A and B. HYB.SC and HYB.SE are refit on the SAME
-## resampled cell indices in each replicate because the two alleles are
-## measured in the same cells.
+## One gene's bootstrap SE of log(mu) and log(size) for the four datasets needed to compute
+## A and B, plus the bootstrap covariance between the two hybrid alleles. HYB.SC and HYB.SE
+## are refit on the SAME resampled cell indices in each replicate because the two alleles
+## are measured in the same cells; their log estimates therefore co-vary across replicates
+## (HYB_logmu_cov, HYB_logdisp_cov), and the variance of the allele contrast is
+## var(SC) + var(SE) - 2 cov(SC, SE), which estimate_f_star() uses for A.
 ##
 ## The RNG is seeded from a hash of the gene's own name and the resamples are
 ## drawn inside this function. Each gene's draws therefore depend only on its
@@ -393,6 +387,10 @@ pilot_split_se_one <- function(g, mats, expos, B = 200, seed = 1) {
     if (is.finite(f.hc["disp"]) && f.hc["disp"] > 0) logsz[b, "HYB.SC"] <- log(f.hc["disp"])
     if (is.finite(f.he["disp"]) && f.he["disp"] > 0) logsz[b, "HYB.SE"] <- log(f.he["disp"])
   }
+  allele_cov <- function(m) {
+    ok <- is.finite(m[, "HYB.SC"]) & is.finite(m[, "HYB.SE"])
+    if (sum(ok) > 2) cov(m[ok, "HYB.SC"], m[ok, "HYB.SE"]) else NA_real_
+  }
   data.frame(
     gene = g,
     MIX.SC_logmu_se   = sd(logmu[, "MIX.SC"], na.rm = TRUE),
@@ -403,6 +401,8 @@ pilot_split_se_one <- function(g, mats, expos, B = 200, seed = 1) {
     MIX.SE_logdisp_se = sd(logsz[, "MIX.SE"], na.rm = TRUE),
     HYB.SC_logdisp_se = sd(logsz[, "HYB.SC"], na.rm = TRUE),
     HYB.SE_logdisp_se = sd(logsz[, "HYB.SE"], na.rm = TRUE),
+    HYB_logmu_cov     = allele_cov(logmu),
+    HYB_logdisp_cov   = allele_cov(logsz),
     row.names = NULL, check.names = FALSE)
 }
 
@@ -431,13 +431,24 @@ pilot_split_se_one <- function(g, mats, expos, B = 200, seed = 1) {
 ## drop a gene, since both just mean less information for that gene's
 ## Sc/Se contrast, the same way a small true effect size makes
 ## detection harder without indicating a problem with the gene.
+##
+## A is the per-cell variance of the hybrid allele contrast, n_h times
+## var(SC) + var(SE) - 2 cov(SC, SE): the two alleles are measured in the same
+## cells, so their estimates co-vary and the contrast variance is smaller than
+## the sum of the two marginal variances. B is the parental term; the parents
+## are different cells, so its two variances add.
 ## pilot: PILOT.SE table from pilot_split_se_one(); n_h: number of hybrid cells.
-## Returns f_mean / f_disp (split fractions), r_mean / r_disp (B * Nh / A) and the
-## number of genes pooled on each axis.
+## Returns f_mean / f_disp (split fractions), r_mean / r_disp (B * Nh / A), the
+## number of genes pooled on each axis, and the median allele correlation
+## (cor_mean / cor_disp) that the covariance term removes.
 estimate_f_star <- function(pilot, n_h) {
-  A_mean <- n_h * (pilot$HYB.SC_logmu_se^2   + pilot$HYB.SE_logmu_se^2)
+  cov_cols <- c("HYB_logmu_cov", "HYB_logdisp_cov")
+  if (!all(cov_cols %in% names(pilot)))
+    stop("PILOT.SE has no hybrid-allele covariance columns (", paste(cov_cols, collapse = ", "),
+         "); rerun gene_pilot.R so pilot_split_se_one() records them.")
+  A_mean <- n_h * (pilot$HYB.SC_logmu_se^2   + pilot$HYB.SE_logmu_se^2   - 2 * pilot$HYB_logmu_cov)
   B_mean <-        pilot$MIX.SC_logmu_se^2   + pilot$MIX.SE_logmu_se^2
-  A_disp <- n_h * (pilot$HYB.SC_logdisp_se^2 + pilot$HYB.SE_logdisp_se^2)
+  A_disp <- n_h * (pilot$HYB.SC_logdisp_se^2 + pilot$HYB.SE_logdisp_se^2 - 2 * pilot$HYB_logdisp_cov)
   B_disp <-        pilot$MIX.SC_logdisp_se^2 + pilot$MIX.SE_logdisp_se^2
 
   ok_mean <- is.finite(A_mean) & is.finite(B_mean) & A_mean > 0
@@ -448,7 +459,9 @@ estimate_f_star <- function(pilot, n_h) {
 
   list(f_mean = .fstar_from_r(r_mean), f_disp = .fstar_from_r(r_disp),
        r_mean = r_mean, r_disp = r_disp,
-       n_genes_mean = sum(ok_mean), n_genes_disp = sum(ok_disp))
+       n_genes_mean = sum(ok_mean), n_genes_disp = sum(ok_disp),
+       cor_mean = median((pilot$HYB_logmu_cov   / (pilot$HYB.SC_logmu_se   * pilot$HYB.SE_logmu_se))[ok_mean],   na.rm = TRUE),
+       cor_disp = median((pilot$HYB_logdisp_cov / (pilot$HYB.SC_logdisp_se * pilot$HYB.SE_logdisp_se))[ok_disp], na.rm = TRUE))
 }
 
 ## Depth-matched split of depth-ordered hybrid cells at fraction f (0 < f <= 0.5).
@@ -1577,9 +1590,12 @@ class_mean_var <- function(x, class) {
 }
 
 ## Splits genes into low, average and high groups by a continuous score, using the outer quantiles
-## (probs) as cutoffs. Returns three gene vectors for enrichment against a shared background.
+## (probs) as cutoffs. Genes with a missing score or a missing ID belong to no group, so the three
+## gene vectors hold only valid IDs for enrichment against a shared background.
 frac_group_sets <- function(genes, score, probs = c(0.25, 0.75)) {
-  cuts <- quantile(score, probs, na.rm = TRUE)
+  scored <- !is.na(genes) & !is.na(score)
+  genes <- genes[scored]; score <- score[scored]
+  cuts <- quantile(score, probs)
   list(Low     = genes[score <= cuts[1]],
        Average = genes[score >  cuts[1] & score < cuts[2]],
        High    = genes[score >= cuts[2]])
@@ -1839,7 +1855,7 @@ coexpr_axis_validate <- function(rank_check, axis_var, null_ranks, extra_axes, n
 
   list(table = data.frame(axis = candidate_axes, raw = candidate_raw, p_value = candidate_p, q_value = candidate_q),
        validated_axes = validated_axes,
-       extra_axes = extra_axes[paste0("axis", validated_axes)])
+       extra_axes = extra_axes[intersect(paste0("axis", validated_axes), names(extra_axes))])
 }
 
 ## ============================================================
@@ -2245,7 +2261,9 @@ build_component_go_sets <- function(BURST.CONTRASTS, PR, universe, component = c
 ## exploratory; the direction-split class sets (e.g. Compensatory_Se) are the most likely to
 ## be that small, and n_genes in the summary table flags it.
 run_enrichment <- function(genes, universe, orgdb = org.Sc.sgd.db, keytype = "ORF", kegg_org = "sce", qval = 0.2, kegg_data = NULL) {
-  genes <- intersect(genes, universe)
+  genes    <- unique(genes[!is.na(genes)])
+  universe <- unique(universe[!is.na(universe)])
+  genes    <- intersect(genes, universe)
   if (length(genes) < 2) return(list(BP = NULL, CC = NULL, MF = NULL, KEGG = NULL))
   go_one <- function(ont) {
     tryCatch(simplify(enrichGO(gene = genes, universe = universe, OrgDb = orgdb, keyType = keytype, ont = ont, qvalueCutoff = qval)), error = function(e) NULL)
@@ -2354,7 +2372,8 @@ cluster_marker_enrichment <- function(obj, label, kegg_data = NULL, apply_fun = 
   up_list   <- lapply(markers_list, function(m) m[abs(m$avg_log2FC) > log2(1.25) & -log10(m$p_val_adj) > 20 & m$avg_log2FC > 0, ])
   down_list <- lapply(markers_list, function(m) m[abs(m$avg_log2FC) > log2(1.25) & -log10(m$p_val_adj) > 20 & m$avg_log2FC < 0, ])
 
-  gene_vec <- function(m) { v <- m[, 2]; names(v) <- row.names(m); v }
+  ## avg_log2FC is selected by name: FindMarkers column order differs across Seurat versions.
+  gene_vec <- function(m) { v <- m[["avg_log2FC"]]; names(v) <- row.names(m); v }
   background_list <- lapply(markers_list, gene_vec)
   up_genes_list    <- lapply(up_list,   gene_vec)
   down_genes_list  <- lapply(down_list, gene_vec)
@@ -3099,16 +3118,17 @@ tata_box_score <- function(seq, window = TATA.WINDOW, pwm = TATA.PWM, pseudocoun
   list(score = scores[best], position = starts[best], motif = substring(seq, starts[best], starts[best] + motif_len - 1))
 }
 
-## Finds the longest run of consecutive A/T bases (any mixture of A and T)
-## in the sequence, the feature used for poly(dA:dT)-mediated nucleosome
-## exclusion. The search is strand-symmetric, so it runs on the promoter as
-## extracted. An empty sequence gives NA (no promoter to measure), so a
-## missing promoter is not read as a measured length of 0 in polyat_delta.
-## position is the string index of the tract's first base and tract is its
-## sequence.
+## Finds the longest poly(dA) or poly(dT) run in the sequence: a run is one repeated base,
+## so A and T runs are measured separately and the longer wins, and a mixed stretch such as
+## ATATAT does not count as a tract. These homopolymer runs, the two strands of a
+## poly(dA:dT) tract, are the feature behind poly(dA:dT)-mediated nucleosome exclusion. The
+## search is strand-symmetric, so it runs on the promoter as extracted. An empty sequence
+## gives NA (no promoter to measure), so a missing promoter is not read as a measured length
+## of 0 in polyat_delta. position is the string index of the tract's first base and tract is
+## its sequence (its first base says whether it is a dA or a dT run).
 poly_at_tract <- function(seq) {
   if (nchar(seq) == 0) return(list(length = NA, position = NA, tract = NA))
-  runs <- gregexpr("[AT]+", seq)[[1]]
+  runs <- gregexpr("A+|T+", seq)[[1]]
   lens <- attr(runs, "match.length")
   if (runs[1] == -1) return(list(length = 0, position = NA, tract = NA))
   best <- which.max(lens)
@@ -4169,67 +4189,21 @@ report_within_between_by_class <- function(wb_a, wb_b, class, gene_ref, class_le
 ## ============================================================
 ## 13. POWER ANALYSIS (simulation and fit, shared with the SLURM job power_grid.R)
 ## ============================================================
-## fit_offset_nb: offset negative-binomial fit for one simulated gene.
-## mu is the exposure-weighted mean rate; size (the NB dispersion theta,
-## the burst-frequency axis of the power grid) is the MLE given mu, found
-## by one-dimensional optimization of the log-likelihood over log(theta).
-## It is the estimator of .fit_one() (Section 1) with the result named
-## "size"; direct optimization avoids glm.nb, which is too slow for the
-## many thousands of replicate fits in the power grid. Returns c(mu, size);
-## size is Inf for Poisson-like data and NA when mu is not estimable.
+## fit_offset_nb: the NB fit for one simulated gene. It is .fit_one() with the result
+## named c(mu, size): mu is the exposure-weighted mean rate and size (the NB theta, the
+## burst-frequency axis of the power grid) is the likelihood maximizer given mu. Using the
+## analysis's own estimator makes simulated power describe the test that runs on the data.
 fit_offset_nb <- function(y, expo) {
-  keep <- is.finite(y) & is.finite(expo) & expo > 0
-  y <- y[keep]; expo <- expo[keep]
-  if (length(y) < 2) return(c(mu = NA_real_, size = NA_real_))
-
-  mu_hat <- sum(y) / sum(expo)
-  if (sum(y) == 0) return(c(mu = 0, size = NA_real_))
-
-  mu_i <- mu_hat * expo
-  pearson <- sum((y - mu_i)^2 / mu_i) / (length(y) - 1)
-  if (pearson <= 1) return(c(mu = mu_hat, size = Inf))
-
-  ll <- function(ltheta) {
-    th <- exp(ltheta)
-    sum(lgamma(y + th) - lgamma(th) + th*log(th) - (th + y)*log(th + mu_i) + y*log(mu_i))
-  }
-
-  opt <- tryCatch(optimize(ll, c(-4, 15), maximum = TRUE), error = function(e) NULL)
-  if (is.null(opt)) return(c(mu = mu_hat, size = NA_real_))
-
-  theta <- exp(opt$maximum)
-  c(mu = mu_hat, size = if (theta > 1e6) Inf else theta)
+  f <- .fit_one(y, expo)
+  c(mu = unname(f["mu"]), size = unname(f["disp"]))
 }
 
-## Method-of-moments dispersion estimate, closed-form, used for
-## permutation-null replicates. Derivation: the Pearson statistic
-## sum((y-mu)^2/mu) has expectation (n-1) + sum(mu)/theta under the NB
-## model, so solving for theta gives a direct estimate with no
-## iteration. This is the fast estimator that makes the NI permutation
-## draws per simulated dataset affordable at the scale of the power grid.
-fit_offset_nb_mm <- function(y, expo) {
-  keep <- is.finite(y) & is.finite(expo) & expo > 0
-  y <- y[keep]; expo <- expo[keep]
-  n <- length(y)
-  if (n < 2) return(c(mu = NA_real_, size = NA_real_))
-
-  mu_hat <- sum(y) / sum(expo)
-  if (sum(y) == 0) return(c(mu = 0, size = NA_real_))
-
-  mu_i <- mu_hat * expo
-  pearson <- sum((y - mu_i)^2 / mu_i) / (n - 1)
-  if (pearson <= 1) return(c(mu = mu_hat, size = Inf))
-
-  theta_mm <- sum(mu_i) / ((n - 1) * (pearson - 1))
-  c(mu = mu_hat, size = theta_mm)
-}
-
-## fit_split_nb_mm: splits a pooled sample at position n1 using a pre-drawn
-## permutation of indices and fits each half with fit_offset_nb_mm(). Runs
-## inside the permutation loop, NI times per simulated dataset.
-fit_split_nb_mm <- function(y, expo, perm, n1) {
+## fit_split_nb: splits a pooled sample at position n1 using a pre-drawn permutation of
+## indices and fits each half with fit_offset_nb(). Runs inside the permutation loop, NI
+## times per simulated dataset, so the null is estimated exactly as the observed contrast is.
+fit_split_nb <- function(y, expo, perm, n1) {
   g1 <- perm[seq_len(n1)]; g0 <- perm[(n1 + 1):length(perm)]
-  list(a = fit_offset_nb_mm(y[g1], expo[g1]), b = fit_offset_nb_mm(y[g0], expo[g0]))
+  list(a = fit_offset_nb(y[g1], expo[g1]), b = fit_offset_nb(y[g0], expo[g0]))
 }
 
 ## perm_pval: two-sided permutation p-value on |statistic| with an add-one
@@ -4306,7 +4280,7 @@ power_grid_row <- function(i, GRID, MEAN.READS, N.CELLS, SIZE, SIZE.RATIO, EXPOS
       XY <- c(X.LIST[[j]], Y); EXPO.XY <- c(EXPO.X.LIST[[j]], EXPO.Y)
       NULL.DIST <- numeric(NI)
       for (k in seq_len(NI)) {
-        sp <- fit_split_nb_mm(XY, EXPO.XY, PERM.LIST[[k]], N.SC.X)  #MM estimate for the null
+        sp <- fit_split_nb(XY, EXPO.XY, PERM.LIST[[k]], N.SC.X)  #same MLE as the observed contrast
         NULL.DIST[k] <- size_log2_ratio(sp$a, sp$b)
       }
       P.ALL[j, qi] <- perm_pval(OBS, NULL.DIST)
@@ -4672,6 +4646,9 @@ mean_adjusted_noise <- function(mean, cv2, span = 0.3) {
 ## boot_disp_logse(), chk(), chk_prec().
 ##
 ## 15c. Diagnostics and plots for interactive use.
+##
+## 15d. Method-of-moments alternative to the power-grid estimator: fit_offset_nb_mm(),
+## fit_split_nb_mm().
 
 ## Serial form of pilot_split_se_one() over a gene vector (one row per gene),
 ## for a quick local check on a handful of genes. gene_pilot.R distributes the
@@ -5010,15 +4987,6 @@ plot_geneset_direction_stack <- function(BURST.CONTRASTS, PR, gene_set, universe
   invisible(RES[, c("level", "direction", "n_class", "n", "n_in_set", "frac_within_dir", "height", "p", "padj")])
 }
 
-## Splits a pooled sample at position n1 using a pre-drawn permutation of
-## indices and fits each half with fit_offset_nb() (MLE dispersion). Same
-## split logic as .fit_split() (.fit_one) and fit_split_nb_mm() (method of
-## moments); the three differ only in the fit function.
-fit_split_nb <- function(y, expo, perm, n1) {
-  g1 <- perm[seq_len(n1)]; g0 <- perm[(n1 + 1):length(perm)]
-  list(a = fit_offset_nb(y[g1], expo[g1]), b = fit_offset_nb(y[g0], expo[g0]))
-}
-
 ## Draws every palette as a swatch row, in normal vision and (when the colorspace
 ## package is installed) simulated deuteranopia and protanopia. file = NULL draws
 ## on the open device.
@@ -5046,4 +5014,38 @@ plot_palette_swatches <- function(file = NULL) {
     if (v == 1) mtext(names(pals)[i], side = 2, las = 1, cex = 0.6, line = 0.3)
     if (i == 1) mtext(names(views)[v], side = 3, cex = 0.65, line = 0.2)
   }
+}
+
+## ---- 15d: method-of-moments alternative to the power-grid estimator ----
+## Closed-form NB size estimate that avoids the likelihood optimization. The power grid
+## fits observed contrasts and permutation nulls with fit_offset_nb() so both sides share
+## one estimator; these two functions are the faster, less exact alternative.
+
+## Method-of-moments NB size estimate, closed form. The Pearson statistic
+## sum((y-mu)^2/mu) has expectation (n-1) + sum(mu)/theta under the NB model, so solving
+## for theta gives a direct estimate with no iteration. It is far cheaper than the
+## likelihood fit but less efficient, so the power grid uses fit_offset_nb() on both the
+## observed contrast and the permutation null.
+fit_offset_nb_mm <- function(y, expo) {
+  keep <- is.finite(y) & is.finite(expo) & expo > 0
+  y <- y[keep]; expo <- expo[keep]
+  n <- length(y)
+  if (n < 2) return(c(mu = NA_real_, size = NA_real_))
+
+  mu_hat <- sum(y) / sum(expo)
+  if (sum(y) == 0) return(c(mu = 0, size = NA_real_))
+
+  mu_i <- mu_hat * expo
+  pearson <- sum((y - mu_i)^2 / mu_i) / (n - 1)
+  if (pearson <= 1) return(c(mu = mu_hat, size = Inf))
+
+  theta_mm <- sum(mu_i) / ((n - 1) * (pearson - 1))
+  c(mu = mu_hat, size = theta_mm)
+}
+
+## fit_split_nb_mm: splits a pooled sample at position n1 using a pre-drawn permutation of
+## indices and fits each half with fit_offset_nb_mm().
+fit_split_nb_mm <- function(y, expo, perm, n1) {
+  g1 <- perm[seq_len(n1)]; g0 <- perm[(n1 + 1):length(perm)]
+  list(a = fit_offset_nb_mm(y[g1], expo[g1]), b = fit_offset_nb_mm(y[g0], expo[g0]))
 }

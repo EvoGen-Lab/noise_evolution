@@ -37,7 +37,7 @@
 ###     5.5 Burst kinetics relationship (mean, burst frequency, burst size, and frequency-size balance vs extrinsic fraction)
 ###   6. PROMOTER ARCHITECTURE
 ###     6.1 Genomes, annotations, and per-species promoter scores
-###     6.2 Validation: does each feature associate with burst frequency or burst size?
+###     6.2 Validation: does each feature associate with burst frequency?
 ###     6.3 Between-species divergence in architecture
 ###     6.4 Directional concordance: does the promoter shift point the right way? (burst frequency, burst size, frequency-size balance)
 ###     6.5 Candidate genes (burst frequency, burst size, frequency-size balance)
@@ -406,7 +406,7 @@ SPLIT.FITS <- SPLIT.FIT.RESULTS[c("MIX.SC", "MIX.SE", "HYC.SC", "HYC.SE", "HYT.S
 NCELLS <- c(MIX.SC = ncol(MIX.SC), MIX.SE = ncol(MIX.SE), HYC.SC = ncol(HYC.SC), HYC.SE = ncol(HYC.SE), HYT.SC = ncol(HYT.SC), HYT.SE = ncol(HYT.SE), HYC.SC.N = ncol(HYC.SC.N), HYC.SE.N = ncol(HYC.SE.N), HYT.SC.N = ncol(HYT.SC.N), HYT.SE.N = ncol(HYT.SE.N), HYB.SC = ncol(HYB.SC), HYB.SE = ncol(HYB.SE), HYB.COMB = ncol(HYB.COMB))
 
 ## 2.3 Per-gene contrasts, bootstrap SEs, and permutation null
-# Gene filter: requires a converged NB fit with a finite, non-degenerate
+# Gene filter: requires an NB fit with a finite, non-degenerate
 # dispersion estimate, a mean count above a floor that scales with dataset
 # depth, and detection in an absolute number of cells set from the smallest
 # dataset, in every one of the 13 datasets
@@ -1417,10 +1417,12 @@ attr(OCC.SC, "failed_regions"); attr(OCC.SE, "failed_regions")
 SCORE.SC <- merge(SCORE.SC, OCC.SC, by = "gene")
 SCORE.SE <- merge(SCORE.SE, OCC.SE, by = "gene")
 
-## 6.2 Validation: does each feature associate with burst frequency or burst size?
+## 6.2 Validation: does each feature associate with burst frequency?
 # Uses each species' own allele within the hybrid (SPLIT.FITS$HYC.SC.N/
-# HYC.SE.N, Section 2.2). Tested against both burst frequency (DISP) and burst size
-# (BSIZE)
+# HYC.SE.N, Section 2.2). Each feature is tested against burst frequency (DISP) with
+# mean expression (MU) as the covariate. Burst size is not tested separately: with MU as
+# the covariate, log BSIZE = log MU - log DISP makes the BSIZE test the DISP test with the
+# sign of the slope reversed.
 TATA.SC      <- setNames(SCORE.SC$tata_score, SCORE.SC$gene)
 TATA.SE      <- setNames(SCORE.SE$tata_score, SCORE.SE$gene)
 POLYAT.SC    <- setNames(SCORE.SC$polyat_len, SCORE.SC$gene)
@@ -1434,13 +1436,7 @@ NOISE.VALIDATE <- rbind(
   cbind(species = "Sc", parameter = "bfreq", architecture_noise_check(SPLIT.FITS$HYC.SC.N, OCC.SC.SCORE, "nucleosome occupancy (NuPoP)", response = "DISP")),
   cbind(species = "Se", parameter = "bfreq", architecture_noise_check(SPLIT.FITS$HYC.SE.N, TATA.SE,      "TATA score",                   response = "DISP")),
   cbind(species = "Se", parameter = "bfreq", architecture_noise_check(SPLIT.FITS$HYC.SE.N, POLYAT.SE,    "poly(dA:dT) length",           response = "DISP")),
-  cbind(species = "Se", parameter = "bfreq", architecture_noise_check(SPLIT.FITS$HYC.SE.N, OCC.SE.SCORE, "nucleosome occupancy (NuPoP)", response = "DISP")),
-  cbind(species = "Sc", parameter = "bsize", architecture_noise_check(SPLIT.FITS$HYC.SC.N, TATA.SC,      "TATA score",                   response = "BSIZE")),
-  cbind(species = "Sc", parameter = "bsize", architecture_noise_check(SPLIT.FITS$HYC.SC.N, POLYAT.SC,    "poly(dA:dT) length",           response = "BSIZE")),
-  cbind(species = "Sc", parameter = "bsize", architecture_noise_check(SPLIT.FITS$HYC.SC.N, OCC.SC.SCORE, "nucleosome occupancy (NuPoP)", response = "BSIZE")),
-  cbind(species = "Se", parameter = "bsize", architecture_noise_check(SPLIT.FITS$HYC.SE.N, TATA.SE,      "TATA score",                   response = "BSIZE")),
-  cbind(species = "Se", parameter = "bsize", architecture_noise_check(SPLIT.FITS$HYC.SE.N, POLYAT.SE,    "poly(dA:dT) length",           response = "BSIZE")),
-  cbind(species = "Se", parameter = "bsize", architecture_noise_check(SPLIT.FITS$HYC.SE.N, OCC.SE.SCORE, "nucleosome occupancy (NuPoP)", response = "BSIZE")))
+  cbind(species = "Se", parameter = "bfreq", architecture_noise_check(SPLIT.FITS$HYC.SE.N, OCC.SE.SCORE, "nucleosome occupancy (NuPoP)", response = "DISP")))
 print(NOISE.VALIDATE)
 
 ## 6.3 Between-species divergence in architecture

@@ -10,7 +10,9 @@
 ###
 ### Inputs  : gene_pilot_inputs.rda  (PILOT.MATS, PILOT.EXPOS,
 ###           PILOT.GENES, N.BOOT, SEED.BOOT)
-### Output  : gene_pilot_output.rda  (PILOT.SE, one row per gene)
+### Output  : gene_pilot_output.rda  (PILOT.SE, one row per gene: bootstrap SEs of
+###           log mu and log disp for the four datasets, plus the bootstrap covariance of
+###           the two hybrid alleles' estimates, which share their resampled cells)
 ###############################################################
 
 library('parallel')

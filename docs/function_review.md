@@ -7,6 +7,15 @@ Eight reviewers each read one slice of `functions.R` against its call sites in
 **Line numbers.** The appendices cite line numbers in `functions.R` at commit `8c4f6d8`,
 before the comment pass shortened the file. Use the function names to locate code.
 
+**Status after the follow-up pass.** Resolved in the working tree (item numbers are those in section 3):
+- Item 1 (MU estimator): the observed fit now takes mu and disp from `.fit_one()`, the same estimator every bootstrap and permutation replicate uses; `glm.nb` supplies only the asymptotic SEs.
+- Item 2 (f\*): `pilot_split_se_one()` records the hybrid-allele covariance from a paired cell bootstrap, and `estimate_f_star()` uses the full contrast variance.
+- Item 6 (power grid estimators): the observed contrast and the permutation null both use `fit_offset_nb()`. The method-of-moments pair moved to section 15d.
+- Item 10 (redundant bsize rows), item 11 (`poly_at_tract` now measures poly(dA) and poly(dT) runs separately), item 14 (`frac_group_sets` and `run_enrichment` drop NA IDs), item 15 (`coexpr_axis_validate`), and the by-name column selection in item 27.
+- Section 3.4: all `.sub` files load `r/4.5.2`, and `CLAUDE.md` lists `cluster_stability.R` and `go_enrich.R`.
+
+Still open: items 3 to 5, 7 to 9, 12, 13, 16 to 26, 28 to 31 and the remaining section 3.4 items, including the `gene_split.R` wiring question.
+
 **What I verified myself.**
 - The call graph (every function checked for a caller in `analysis.R`, a cluster script, or a reachable function).
 - Every call to a library function in `analysis.R`, `functions.R` and the cluster scripts against the function's signature: no mismatches. Calls through `FUN=` or `...` are not covered.
