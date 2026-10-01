@@ -22,6 +22,7 @@ Reproducible R pipeline for genome-wide noise evolution in S. cerevisiae (YPS100
 
 ## Rerun protocol (required in every change summary)
 Cluster-dependent sections are 2.1 (pilot), 2.3 (bootstrap and permutation), 4 (coexpression), 6.1 (NuPoP), and 10 (power analysis).
+Two further cluster jobs source `R/functions.R` and are resubmitted when the functions they call change: `cluster_stability.R` (7.3 resolution stability and the marker enrichment used in 7.4) and `go_enrich.R` (8.4 GO and KEGG enrichment).
 Every summary of a change to `analysis/analysis.R` or `R/functions.R` must list
 1. which sections and subsections need a rerun,
 2. which cluster jobs need resubmission.
