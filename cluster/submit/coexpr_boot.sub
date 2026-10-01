@@ -1,0 +1,26 @@
+#!/bin/sh -l
+# FILENAME:  coexpr_boot.sbatch
+#
+# Bootstrap replicates as a job array: task k bootstraps replicate k (seed offset k - 1) and writes
+# coexpr_boot_output_<k>of<K>.rda. Resubmitting the array recomputes only the replicates whose output file is
+# missing. coexpr_boot.R checks that --array matches the number of replicates in its inputs.
+
+#SBATCH --account=bphm
+#SBATCH --nodes=1
+#SBATCH --ntasks=1
+#SBATCH --partition=cpu
+#SBATCH --cpus-per-task=24
+#SBATCH --qos=normal
+#SBATCH --time=6:00:00
+#SBATCH --job-name coexpr_boot
+#SBATCH --array=1-2
+#SBATCH --output=coexpr_boot_%A_%a.out
+
+module load r/4.5.2
+
+export OMP_NUM_THREADS=1
+export MKL_NUM_THREADS=1
+export OPENBLAS_NUM_THREADS=1
+export VECLIB_MAXIMUM_THREADS=1
+
+Rscript coexpr_boot.R

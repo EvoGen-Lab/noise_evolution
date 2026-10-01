@@ -22,16 +22,13 @@ suppressPackageStartupMessages({
 register(SerialParam())   # one process per job, parallelism comes from mclapply
 
 source("functions.R")
+
 load("go_enrich_inputs.rda")
 NUM.CORES <- as.integer(Sys.getenv("SLURM_CPUS_PER_TASK", unset = detectCores()))
 
 ## ---- Job list: rank-based runs first, since they take longest ----
-ora_jobs <- function(sets, universe, group)
-  lapply(setNames(names(sets), paste0(group, "::", names(sets))),
-         function(s) list(kind = "ora", genes = sets[[s]], universe = universe))
-gse_jobs <- unlist(lapply(names(GO.INPUTS$GSE.LISTS), function(q)
-  lapply(setNames(c("BP", "MF", "CC"), sprintf("GSE::GO.GSE.%s.%s", q, c("BP", "MF", "CC"))),
-         function(ont) list(kind = "gse", ranks = GO.INPUTS$GSE.LISTS[[q]], ont = ont))), recursive = FALSE)
+
+gse_jobs <- unlist(lapply(names(GO.INPUTS$GSE.LISTS), gse_job_set, ranks_lists = GO.INPUTS$GSE.LISTS), recursive = FALSE)
 JOBS <- c(gse_jobs,
           ora_jobs(GO.INPUTS$GO.SETS,         GO.INPUTS$GO.UNIVERSE,         "GO"),
           ora_jobs(GO.INPUTS$INTR.SETS,       GO.INPUTS$INTR.UNIVERSE,       "INTR"),
@@ -39,19 +36,19 @@ JOBS <- c(gse_jobs,
 
 cat(sprintf("enrichment start: %d jobs (%d rank-based), %d cores\n", length(JOBS), length(gse_jobs), NUM.CORES)); flush.console()
 t0 <- Sys.time()
-RES <- mclapply(seq_along(JOBS), function(k)
-  tryCatch(go_enrich_one(JOBS[[k]], KEGG.DATA, GO.INPUTS$GO.QVAL, GO.INPUTS$SEED.GO + k),
-           error = function(e) { message(sprintf("%s: %s", names(JOBS)[k], conditionMessage(e))); NULL }),
-  mc.cores = NUM.CORES, mc.preschedule = FALSE)
+RES <- mclapply(seq_along(JOBS), go_enrich_job,
+  mc.cores = NUM.CORES, mc.preschedule = FALSE, go_inputs = GO.INPUTS, jobs = JOBS, kegg_data = KEGG.DATA)
 names(RES) <- names(JOBS)
 cat(sprintf("enrichment done in %.1f min\n", as.numeric(difftime(Sys.time(), t0, units = "mins"))))
 
 ## ---- Unpack into the objects Section 8 reads ----
-pick <- function(group) { r <- RES[startsWith(names(RES), paste0(group, "::"))]; setNames(r, sub("^[^:]+::", "", names(r))) }
-GO.ENRICH     <- pick("GO")[names(GO.INPUTS$GO.SETS)]
-INTR.GO       <- pick("INTR")[names(GO.INPUTS$INTR.SETS)]
-INTR.GO.CLEAN <- pick("INTR.CLEAN")[names(GO.INPUTS$INTR.SETS.CLEAN)]
-GO.GSE        <- pick("GSE")
+
+## Results grouped by the job-name prefix (group::name), with the prefix removed from the names.
+RES.GROUPS    <- lapply(split(RES, sub("::.*$", "", names(RES))), function(r) setNames(r, sub("^[^:]+::", "", names(r))))
+GO.ENRICH     <- RES.GROUPS$GO[names(GO.INPUTS$GO.SETS)]
+INTR.GO       <- RES.GROUPS$INTR[names(GO.INPUTS$INTR.SETS)]
+INTR.GO.CLEAN <- RES.GROUPS$INTR.CLEAN[names(GO.INPUTS$INTR.SETS.CLEAN)]
+GO.GSE        <- RES.GROUPS$GSE
 GO.KEY        <- GO.INPUTS
 
 save(GO.ENRICH, INTR.GO, INTR.GO.CLEAN, GO.GSE, GO.KEY, file = "go_enrich_output.rda")

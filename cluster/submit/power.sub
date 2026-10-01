@@ -1,5 +1,18 @@
 #!/bin/sh -l
 # FILENAME:  power.sbatch
+#
+# Power-analysis grid: 400 (MEAN.READS, N.CELLS, SIZE) rows dealt round-robin across the array
+# tasks. Each task requests the per-job limits: 1 node, 24 cores, 10 days.
+#
+# Sizing. The permutation-null fits cost about 24,000 core-hours in total (timed on a
+# development machine; allow a factor of 2 either way on the cluster nodes). With 16 tasks of
+# 24 cores the average task needs about 62 hours and the busiest about 74 hours, roughly
+# 3 days of the 10-day limit. power_grid.R reads the task count from SLURM_ARRAY_TASK_COUNT,
+# so changing --array needs no other edit.
+#
+# Restarts. A task writes its output file only when it finishes. Resubmitting the array
+# recomputes only the tasks whose power_output_<k>of<K>.rda is missing; a task stopped at the
+# time limit starts over.
 
 #SBATCH --account=bphm
 #SBATCH --nodes=1
@@ -7,12 +20,12 @@
 #SBATCH --partition=cpu
 #SBATCH --cpus-per-task=24
 #SBATCH --qos=normal
-#SBATCH --time=48:00:00
+#SBATCH --time=10-00:00:00
 #SBATCH --job-name power
 #SBATCH --array=1-16
 #SBATCH --output=power_%A_%a.out
 
-module load r/4.2.2
+module load r/4.5.2
 
 export OMP_NUM_THREADS=1
 export MKL_NUM_THREADS=1

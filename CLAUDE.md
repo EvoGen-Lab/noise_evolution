@@ -22,6 +22,7 @@ Reproducible R pipeline for genome-wide noise evolution in S. cerevisiae (YPS100
 
 ## Rerun protocol (required in every change summary)
 Cluster-dependent sections are 2.1 (pilot), 2.3 (bootstrap and permutation), 4 (coexpression), 6.1 (NuPoP), and 10 (power analysis).
+Two further cluster jobs source `R/functions.R` and are resubmitted when the functions they call change: `cluster_stability.R` (7.3 resolution stability and the marker enrichment used in 7.4) and `go_enrich.R` (8.4 GO and KEGG enrichment).
 Every summary of a change to `analysis/analysis.R` or `R/functions.R` must list
 1. which sections and subsections need a rerun,
 2. which cluster jobs need resubmission.
@@ -37,6 +38,11 @@ Prefer fixes that avoid cluster reruns. Offer a local recompute path (for exampl
 ## Conventions
 - R files use Windows CRLF line endings. `.sub` SLURM files use Unix LF line endings. `.gitattributes` enforces both. Keep it intact.
 - Check scalar conditions. Use `&&` and `||` only with length-one logical values. A scan of the full codebase for violations is still unfinished.
+- Write a function only when its code runs more than once: it is called from two or more places, or it is applied across many items (`lapply`, `sapply`, `vapply`, `Map`, `mapply`, `apply`, `parLapply`, `mclapply`). Code that runs once is written inline where it runs, so a reader follows the steps in order.
+  - `analysis/analysis.R` and the cluster scripts define no named functions. A function that is applied across items, or called from two or more places, lives in `R/functions.R`, and is passed to the apply call with its other inputs as named arguments (`lapply(X, name, arg = value)`). A short one-line anonymous function in an apply call (`sapply(x, function(g) cor(a[g], b[g]))`) is fine inline and should not become a separate function. A multi-line body belongs in a named function in `R/functions.R`. Use `[[` for plain accessors.
+  - A once-used step in `analysis.R` or a cluster script is written inline (a `local({ ... })` block when it needs private variables), with its concept comment above it.
+  - A function that PSOCK workers need by name must be a top-level function in `R/functions.R` (`neg_binom_fit_offset`, `.fit_one`); `fit_counts_offset()` finds such dependencies from the code.
+  - Before adding a function, check that it will run more than once; inline it if not.
 - Select Seurat columns by name, never by position (Seurat v5 changes `FindMarkers` output order).
 - Validate numeric inputs at function entry (for example `BSIZE` in `SPLIT.FITS`).
 - Do not commit data, `.rda` checkpoints, or cluster output. Keep them in `.gitignore`.

@@ -55,8 +55,14 @@ RESULTS <- vector("list", B)
 
 t0 <- Sys.time(); done <- 0
 for (k in seq_along(chunks)) {
-  chunk.results <- parLapply(cl, DRAWS.PERM.COEXPR[chunks[[k]]], coexpr_perm_one,
-                             resid = RESID, nSC = N.SC, nSE = N.SE, n_keep = N.KEEP)
+  ## One permutation draw of the five null spectra, for rank-matched testing of every candidate axis
+  ## (observed rank k is compared with the null's own rank k). draw: one element of
+  ## make_coexpr_perm_draws(). resid: the RESID list (including HYB.COMB). nSC, nSE: parent cell counts,
+  ## used to split each pooled, reshuffled pool back into groups of the original sizes. n_keep: ranks
+  ## retained per decomposition (15, the top-15 candidate window). Returns the top n_keep squared
+  ## eigenvalues by magnitude, descending, for all five decompositions; this is the unit of work a
+  ## cluster worker does.
+  chunk.results <- parLapply(cl, DRAWS.PERM.COEXPR[chunks[[k]]], coexpr_perm_one, n_keep = N.KEEP, nSC = N.SC, nSE = N.SE, resid = RESID)
   RESULTS[chunks[[k]]] <- chunk.results
   rm(chunk.results); gc(FALSE)
 

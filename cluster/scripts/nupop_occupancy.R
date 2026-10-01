@@ -25,18 +25,6 @@ load("nupop_inputs.rda")     # NUPOP.INPUTS.SC, NUPOP.INPUTS.SE
 
 NUM.CORES <- as.integer(Sys.getenv("SLURM_CPUS_PER_TASK", unset = detectCores()))
 
-## Summarizes the regions that needed fallback flanks or stayed unscored,
-## so the job log records them next to the progress lines
-report_regions <- function(occ, label) {
-  red <- attr(occ, "reduced_flank_regions")
-  bad <- attr(occ, "failed_regions")
-  cat(sprintf("%s: %d promoters, %d region(s) scored with fallback flanks, %d region(s) unscored (%d bp)\n",
-              label, length(occ), if (is.null(red)) 0L else nrow(red),
-              if (is.null(bad)) 0L else nrow(bad),
-              if (is.null(bad)) 0L else sum(bad$end - bad$start + 1)))
-  if (!is.null(bad)) print(bad, row.names = FALSE)
-}
-
 t0 <- Sys.time()
 cat(sprintf("NuPoP start: %d cores\n", NUM.CORES))
 
