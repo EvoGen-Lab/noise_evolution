@@ -24,6 +24,28 @@ suppressPackageStartupMessages({
 })
 
 source("functions.R")
+
+## boot_ari_one: one bootstrap replicate. Resamples the columns of counts
+## by idx, applies the same preparation as to_seurat_counts() in analysis.R
+## (underscore to dash in gene names, CsparseMatrix) once per replicate,
+## reruns the Normalize/HVG/Scale/PCA/Neighbors/Clusters pipeline at the
+## original settings, and returns the adjusted Rand index against
+## ref_clusters on the same resampled cells. Self-contained, so it runs
+## equally well serially or on a forked worker (cluster_stability.R).
+boot_ari_one <- function(counts, idx, ref_clusters, nfeatures, dims_n, resolution, metric = "manhattan") {
+  boot_counts <- counts[, idx]
+  rownames(boot_counts) <- gsub("_", "-", rownames(counts), fixed = TRUE)
+  colnames(boot_counts) <- make.unique(colnames(counts)[idx])
+  boot_counts <- as(boot_counts, "CsparseMatrix")
+  boot_obj <- CreateSeuratObject(counts = boot_counts)
+  boot_obj <- NormalizeData(boot_obj, normalization.method = "LogNormalize", scale.factor = 10000, verbose = FALSE)
+  boot_obj <- FindVariableFeatures(boot_obj, selection.method = "vst", nfeatures = nfeatures, verbose = FALSE)
+  boot_obj <- ScaleData(boot_obj, features = rownames(boot_obj), verbose = FALSE)
+  boot_obj <- RunPCA(boot_obj, features = VariableFeatures(boot_obj), verbose = FALSE)
+  boot_obj <- FindNeighbors(boot_obj, reduction = "pca", dims = 1:dims_n, annoy.metric = metric, verbose = FALSE)
+  boot_obj <- FindClusters(boot_obj, resolution = resolution, verbose = FALSE)
+  adjustedRandIndex(as.integer(ref_clusters[idx]), as.integer(Idents(boot_obj)))
+}
 load("cluster_stability_inputs.rda")
 
 NUM.CORES <- as.integer(Sys.getenv("SLURM_CPUS_PER_TASK", unset = detectCores()))

@@ -385,7 +385,7 @@ load(file.path(OUTPUT.DIR, "gene_pilot_output.rda"))
 ## cells, so their estimates co-vary and the contrast variance is smaller than
 ## the sum of the two marginal variances. B is the parental term; the parents
 ## are different cells, so its two variances add.
-## pilot: PILOT.SE table from pilot_split_se_one(); n_h: number of hybrid cells.
+## pilot: PILOT.SE table from gene_pilot.R; n_h: number of hybrid cells.
 ## Returns f_mean / f_disp (split fractions), r_mean / r_disp (B * Nh / A), the
 ## number of genes pooled on each axis, and the median allele correlation
 ## (cor_mean / cor_disp) that the covariance term removes.
@@ -409,7 +409,7 @@ SPLIT.FRAC <- local({
   cov_cols <- c("HYB_logmu_cov", "HYB_logdisp_cov")
   if (!all(cov_cols %in% names(pilot)))
     stop("PILOT.SE has no hybrid-allele covariance columns (", paste(cov_cols, collapse = ", "),
-         "); rerun gene_pilot.R so pilot_split_se_one() records them.")
+         "); rerun gene_pilot.R so it records them.")
   A_mean <- n_h * (pilot$HYB.SC_logmu_se^2   + pilot$HYB.SE_logmu_se^2   - 2 * pilot$HYB_logmu_cov)
   B_mean <-        pilot$MIX.SC_logmu_se^2   + pilot$MIX.SE_logmu_se^2
   A_disp <- n_h * (pilot$HYB.SC_logdisp_se^2 + pilot$HYB.SE_logdisp_se^2 - 2 * pilot$HYB_logdisp_cov)
@@ -1183,7 +1183,7 @@ do.call(rbind, lapply(names(SEED.CHECK), function(m) {
 ## classify_reg().
 ## Pair-level regulatory classification. total, cis and trans p-values are BH-adjusted across all tested
 ## pairs before classifying, which controls the false discovery rate over the quarter-million
-## simultaneous pair tests. CB: coexpr_bootstrap() output (or the cluster-assembled equivalent).
+## simultaneous pair tests. CB: the coexpr_boot.R output.
 ## One row per pair, with the five-class call from cis/trans carried alongside so downstream steps
 ## read the same BH-based class.
 # CB.CLASS gives the five-way regulatory class per pair

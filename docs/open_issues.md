@@ -48,7 +48,7 @@ Source: `docs/function_review.md` (item numbers refer to its section 3), re-chec
 
 ## E. Structure and housekeeping
 
-- Eight cluster-only functions remain in `functions.R` only because Section 15 serial wrappers also call them: `pilot_split_se_one`, `boot_contrasts_one`, `permute_contrasts_one`, `coexpr_bootstrap_one`, `coexpr_acc_init/update/finalize`, `boot_ari_one`. Deleting `pilot_split_se`, `boot_contrasts`, `permute_contrasts`, `coexpr_bootstrap`, `bootstrap_cluster_stability` and `bootstrap_compare_resolutions` would let them move into their cluster scripts (decision needed).
+- The Section 15 serial wrappers were deleted and the eight cluster-only functions now live in their cluster scripts (`gene_pilot.R`, `gene_boot.R`, `gene_perm.R`, `coexpr_boot.R`, `cluster_stability.R`). `functions.R` Section 15 now holds only the unused calibration helpers, diagnostics and plots, and `fit_offset_nb_mm`.
 - Remaining merge candidates: plot bodies shared by `plot_cis_trans`, `plot_mean_bfreq`, `plot_burst_kinetics`; `seed_compare_core` wrappers; `.cohen_kappa` versus the inline kappa; the per-dataset blocks in `analysis.R` around the external-source correlations that could be a loop.
 - Single-use helpers nested in other functions (for example `mad_lower`, `.fstar_from_r`) could be inlined into their one caller.
 - Hoist repeated constants (theta cap `1e6`, `optimize` interval `c(-4, 15)`, axis count 15).
