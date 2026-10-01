@@ -1877,6 +1877,13 @@ console_start(7)
 # for joint clustering (PARENT, HYBRID, MERGE), with a per-sample
 # prefix on cell names so no two samples share a column name once
 # combined.
+# The seven datasets (single samples, then the combined sets) share one pipeline below; YSC, HVG, PCS,
+# RES.SWEEP and BOOT hold their Seurat object, variable-feature elbow, retained PCs, resolution sweep and
+# bootstrap-validated clustering, each as a list named by dataset.
+DS.NAMES   <- c("MIX.SC", "MIX.SE", "HYB.SC", "HYB.SE", "PARENT", "HYBRID", "MERGE")
+DS.LABELS  <- c(MIX.SC = "Sc parent", MIX.SE = "Se parent", HYB.SC = "Hybrid, Sc allele", HYB.SE = "Hybrid, Se allele",
+                PARENT = "Both parents combined", HYBRID = "Hybrid combined", MERGE = "All four merged")
+YSC <- list()
 MIX.SC.M <- MIX.SC; colnames(MIX.SC.M) <- paste0("MIXSC_", colnames(MIX.SC.M))
 MIX.SE.M <- MIX.SE; colnames(MIX.SE.M) <- paste0("MIXSE_", colnames(MIX.SE.M))
 HYB.SC.M <- HYB.SC; colnames(HYB.SC.M) <- paste0("HYBSC_", colnames(HYB.SC.M))
@@ -1887,24 +1894,24 @@ MERGE <- cbind(PARENT,HYBRID)
 
 # Convert a count matrix to a Seurat-ready sparse matrix with dash-
 # delimited feature names.
-YSC.MIX.SC <- CreateSeuratObject(counts = to_seurat_counts(MIX.SC))
-YSC.MIX.SE <- CreateSeuratObject(counts = to_seurat_counts(MIX.SE))
-YSC.HYB.SC <- CreateSeuratObject(counts = to_seurat_counts(HYB.SC))
-YSC.HYB.SE <- CreateSeuratObject(counts = to_seurat_counts(HYB.SE))
+YSC$MIX.SC <- CreateSeuratObject(counts = to_seurat_counts(MIX.SC))
+YSC$MIX.SE <- CreateSeuratObject(counts = to_seurat_counts(MIX.SE))
+YSC$HYB.SC <- CreateSeuratObject(counts = to_seurat_counts(HYB.SC))
+YSC$HYB.SE <- CreateSeuratObject(counts = to_seurat_counts(HYB.SE))
 
-YSC.PARENT <- CreateSeuratObject(counts = to_seurat_counts(PARENT)); YSC.cells <- Cells(YSC.PARENT)
-Idents(object = YSC.PARENT, cells = YSC.cells[1:ncol(MIX.SC)]) <- "Sc Parent"
-Idents(object = YSC.PARENT, cells = YSC.cells[(1+ncol(MIX.SC)):(ncol(MIX.SC)+ncol(MIX.SE))]) <- "Se Parent"
+YSC$PARENT <- CreateSeuratObject(counts = to_seurat_counts(PARENT)); YSC.cells <- Cells(YSC$PARENT)
+Idents(object = YSC$PARENT, cells = YSC.cells[1:ncol(MIX.SC)]) <- "Sc Parent"
+Idents(object = YSC$PARENT, cells = YSC.cells[(1+ncol(MIX.SC)):(ncol(MIX.SC)+ncol(MIX.SE))]) <- "Se Parent"
 
-YSC.HYBRID <- CreateSeuratObject(counts = to_seurat_counts(HYBRID)); YSC.cells <- Cells(YSC.HYBRID)
-Idents(object = YSC.HYBRID, cells = YSC.cells[1:ncol(HYB.SC)]) <- "Sc Hybrid"
-Idents(object = YSC.HYBRID, cells = YSC.cells[(1+ncol(HYB.SC)):(ncol(HYB.SC)+ncol(HYB.SE))]) <- "Se Hybrid"
+YSC$HYBRID <- CreateSeuratObject(counts = to_seurat_counts(HYBRID)); YSC.cells <- Cells(YSC$HYBRID)
+Idents(object = YSC$HYBRID, cells = YSC.cells[1:ncol(HYB.SC)]) <- "Sc Hybrid"
+Idents(object = YSC$HYBRID, cells = YSC.cells[(1+ncol(HYB.SC)):(ncol(HYB.SC)+ncol(HYB.SE))]) <- "Se Hybrid"
 
-YSC.MERGE <- CreateSeuratObject(counts = to_seurat_counts(MERGE)); YSC.cells <- Cells(YSC.MERGE)
-Idents(object = YSC.MERGE, cells = YSC.cells[1:ncol(MIX.SC)]) <- "Sc Parent"
-Idents(object = YSC.MERGE, cells = YSC.cells[(1+ncol(MIX.SC)):(ncol(MIX.SC)+ncol(MIX.SE))]) <- "Se Parent"
-Idents(object = YSC.MERGE, cells = YSC.cells[(1+ncol(MIX.SC)+ncol(MIX.SE)):(ncol(MIX.SC)+ncol(MIX.SE)+ncol(HYB.SC))]) <- "Sc Hybrid"
-Idents(object = YSC.MERGE, cells = YSC.cells[(1+ncol(MIX.SC)+ncol(MIX.SE)+ncol(HYB.SC)):(ncol(MIX.SC)+ncol(MIX.SE)+ncol(HYB.SC)+ncol(HYB.SE))]) <- "Se Hybrid"
+YSC$MERGE <- CreateSeuratObject(counts = to_seurat_counts(MERGE)); YSC.cells <- Cells(YSC$MERGE)
+Idents(object = YSC$MERGE, cells = YSC.cells[1:ncol(MIX.SC)]) <- "Sc Parent"
+Idents(object = YSC$MERGE, cells = YSC.cells[(1+ncol(MIX.SC)):(ncol(MIX.SC)+ncol(MIX.SE))]) <- "Se Parent"
+Idents(object = YSC$MERGE, cells = YSC.cells[(1+ncol(MIX.SC)+ncol(MIX.SE)):(ncol(MIX.SC)+ncol(MIX.SE)+ncol(HYB.SC))]) <- "Sc Hybrid"
+Idents(object = YSC$MERGE, cells = YSC.cells[(1+ncol(MIX.SC)+ncol(MIX.SE)+ncol(HYB.SC)):(ncol(MIX.SC)+ncol(MIX.SE)+ncol(HYB.SC)+ncol(HYB.SE))]) <- "Se Hybrid"
 
 ## 7.2 Normalize, select features, and reduce dimensionality
 # Log-normalize each dataset, select variable features by a
@@ -1913,96 +1920,13 @@ Idents(object = YSC.MERGE, cells = YSC.cells[(1+ncol(MIX.SC)+ncol(MIX.SE)+ncol(H
 # cluster may contain in the resolution sweep and bootstrap steps that follow.
 MIN.CLUSTER.CELLS <- 50
 
-all.genes <- rownames(YSC.MERGE)
-YSC.MIX.SC <- NormalizeData(YSC.MIX.SC, normalization.method = "LogNormalize", scale.factor = 10000, verbose = FALSE)
-HVG.MIX.SC <- hvg_elbow(YSC.MIX.SC)
-plot_hvg_elbow(HVG.MIX.SC, "MIX.SC", FIGURE.DIR)
-YSC.MIX.SC <- FindVariableFeatures(YSC.MIX.SC, selection.method = "vst", nfeatures = HVG.MIX.SC$n_features, verbose = FALSE)
-YSC.MIX.SC <- ScaleData(YSC.MIX.SC, features = all.genes, verbose = FALSE)
+PREP <- lapply(setNames(DS.NAMES, DS.NAMES), function(d) prepare_dataset(YSC[[d]], d, rownames(YSC$MERGE), FIGURE.DIR))
+YSC <- lapply(PREP, `[[`, "obj")
+HVG <- lapply(PREP, `[[`, "hvg")
 
-YSC.MIX.SE <- NormalizeData(YSC.MIX.SE, normalization.method = "LogNormalize", scale.factor = 10000, verbose = FALSE)
-HVG.MIX.SE <- hvg_elbow(YSC.MIX.SE)
-plot_hvg_elbow(HVG.MIX.SE, "MIX.SE", FIGURE.DIR)
-YSC.MIX.SE <- FindVariableFeatures(YSC.MIX.SE, selection.method = "vst", nfeatures = HVG.MIX.SE$n_features, verbose = FALSE)
-YSC.MIX.SE <- ScaleData(YSC.MIX.SE, features = all.genes, verbose = FALSE)
-
-YSC.HYB.SC <- NormalizeData(YSC.HYB.SC, normalization.method = "LogNormalize", scale.factor = 10000, verbose = FALSE)
-HVG.HYB.SC <- hvg_elbow(YSC.HYB.SC)
-plot_hvg_elbow(HVG.HYB.SC, "HYB.SC", FIGURE.DIR)
-YSC.HYB.SC <- FindVariableFeatures(YSC.HYB.SC, selection.method = "vst", nfeatures = HVG.HYB.SC$n_features, verbose = FALSE)
-YSC.HYB.SC <- ScaleData(YSC.HYB.SC, features = all.genes, verbose = FALSE)
-
-YSC.HYB.SE <- NormalizeData(YSC.HYB.SE, normalization.method = "LogNormalize", scale.factor = 10000, verbose = FALSE)
-HVG.HYB.SE <- hvg_elbow(YSC.HYB.SE)
-plot_hvg_elbow(HVG.HYB.SE, "HYB.SE", FIGURE.DIR)
-YSC.HYB.SE <- FindVariableFeatures(YSC.HYB.SE, selection.method = "vst", nfeatures = HVG.HYB.SE$n_features, verbose = FALSE)
-YSC.HYB.SE <- ScaleData(YSC.HYB.SE, features = all.genes, verbose = FALSE)
-
-YSC.PARENT <- NormalizeData(YSC.PARENT, normalization.method = "LogNormalize", scale.factor = 10000, verbose = FALSE)
-HVG.PARENT <- hvg_elbow(YSC.PARENT)
-plot_hvg_elbow(HVG.PARENT, "PARENT", FIGURE.DIR)
-YSC.PARENT <- FindVariableFeatures(YSC.PARENT, selection.method = "vst", nfeatures = HVG.PARENT$n_features, verbose = FALSE)
-YSC.PARENT <- ScaleData(YSC.PARENT, features = all.genes, verbose = FALSE)
-
-YSC.HYBRID <- NormalizeData(YSC.HYBRID, normalization.method = "LogNormalize", scale.factor = 10000, verbose = FALSE)
-HVG.HYBRID <- hvg_elbow(YSC.HYBRID)
-plot_hvg_elbow(HVG.HYBRID, "HYBRID", FIGURE.DIR)
-YSC.HYBRID <- FindVariableFeatures(YSC.HYBRID, selection.method = "vst", nfeatures = HVG.HYBRID$n_features, verbose = FALSE)
-YSC.HYBRID <- ScaleData(YSC.HYBRID, features = all.genes, verbose = FALSE)
-
-YSC.MERGE  <- NormalizeData(YSC.MERGE, normalization.method = "LogNormalize", scale.factor = 10000, verbose = FALSE)
-HVG.MERGE  <- hvg_elbow(YSC.MERGE)
-plot_hvg_elbow(HVG.MERGE, "MERGE", FIGURE.DIR)
-YSC.MERGE  <- FindVariableFeatures(YSC.MERGE, selection.method = "vst", nfeatures = HVG.MERGE$n_features, verbose = FALSE)
-YSC.MERGE  <- ScaleData(YSC.MERGE, features = all.genes, verbose = FALSE)
-
-YSC.MIX.SC <- RunPCA(YSC.MIX.SC, features = VariableFeatures(object = YSC.MIX.SC), verbose = FALSE)
-YSC.MIX.SE <- RunPCA(YSC.MIX.SE, features = VariableFeatures(object = YSC.MIX.SE), verbose = FALSE)
-YSC.HYB.SC <- RunPCA(YSC.HYB.SC, features = VariableFeatures(object = YSC.HYB.SC), verbose = FALSE)
-YSC.HYB.SE <- RunPCA(YSC.HYB.SE, features = VariableFeatures(object = YSC.HYB.SE), verbose = FALSE)
-YSC.PARENT <- RunPCA(YSC.PARENT, features = VariableFeatures(object = YSC.PARENT), verbose = FALSE)
-YSC.HYBRID <- RunPCA(YSC.HYBRID, features = VariableFeatures(object = YSC.HYBRID), verbose = FALSE)
-YSC.MERGE  <- RunPCA(YSC.MERGE , features = VariableFeatures(object = YSC.MERGE ), verbose = FALSE)
-
-# Number of PCs to retain per dataset: the elbow of the ranked percent-
-# variance curve, the latest PC among consecutive PCs whose percent-
-# variance drop exceeds 0.05 percentage points, plus one. 
-PCT.MIX.SC <- 100*YSC.MIX.SC[["pca"]]@stdev/sum(YSC.MIX.SC[["pca"]]@stdev)
-SUM.MIX.SC <- cumsum(PCT.MIX.SC)
-PCS.MIX.SC <- sort(which((PCT.MIX.SC[1:length(PCT.MIX.SC) - 1] - PCT.MIX.SC[2:length(PCT.MIX.SC)]) > 0.05), decreasing = TRUE)[1] + 1
-
-PCT.MIX.SE <- 100*YSC.MIX.SE[["pca"]]@stdev/sum(YSC.MIX.SE[["pca"]]@stdev)
-SUM.MIX.SE <- cumsum(PCT.MIX.SE)
-PCS.MIX.SE <- sort(which((PCT.MIX.SE[1:length(PCT.MIX.SE) - 1] - PCT.MIX.SE[2:length(PCT.MIX.SE)]) > 0.05), decreasing = TRUE)[1] + 1
-
-PCT.HYB.SC <- 100*YSC.HYB.SC[["pca"]]@stdev/sum(YSC.HYB.SC[["pca"]]@stdev)
-SUM.HYB.SC <- cumsum(PCT.HYB.SC)
-PCS.HYB.SC <- sort(which((PCT.HYB.SC[1:length(PCT.HYB.SC) - 1] - PCT.HYB.SC[2:length(PCT.HYB.SC)]) > 0.05), decreasing = TRUE)[1] + 1
-
-PCT.HYB.SE <- 100*YSC.HYB.SE[["pca"]]@stdev/sum(YSC.HYB.SE[["pca"]]@stdev)
-SUM.HYB.SE <- cumsum(PCT.HYB.SE)
-PCS.HYB.SE <- sort(which((PCT.HYB.SE[1:length(PCT.HYB.SE) - 1] - PCT.HYB.SE[2:length(PCT.HYB.SE)]) > 0.05), decreasing = TRUE)[1] + 1
-
-PCT.PARENT <- 100*YSC.PARENT[["pca"]]@stdev/sum(YSC.PARENT[["pca"]]@stdev)
-SUM.PARENT <- cumsum(PCT.PARENT)
-PCS.PARENT <- sort(which((PCT.PARENT[1:length(PCT.PARENT) - 1] - PCT.PARENT[2:length(PCT.PARENT)]) > 0.05), decreasing = TRUE)[1] + 1
-
-PCT.HYBRID <- 100*YSC.HYBRID[["pca"]]@stdev/sum(YSC.HYBRID[["pca"]]@stdev)
-SUM.HYBRID <- cumsum(PCT.HYBRID)
-PCS.HYBRID <- sort(which((PCT.HYBRID[1:length(PCT.HYBRID) - 1] - PCT.HYBRID[2:length(PCT.HYBRID)]) > 0.05), decreasing = TRUE)[1] + 1
-
-PCT.MERGE <- 100*YSC.MERGE[["pca"]]@stdev/sum(YSC.MERGE[["pca"]]@stdev)
-SUM.MERGE <- cumsum(PCT.MERGE)
-PCS.MERGE <- sort(which((PCT.MERGE[1:length(PCT.MERGE) - 1] - PCT.MERGE[2:length(PCT.MERGE)]) > 0.05), decreasing = TRUE)[1] + 1
-
-ELBOW.INPUTS <- list(
-  MIX.SC = list(pct = PCT.MIX.SC, cumu = SUM.MIX.SC, pcs = PCS.MIX.SC),
-  MIX.SE = list(pct = PCT.MIX.SE, cumu = SUM.MIX.SE, pcs = PCS.MIX.SE),
-  HYB.SC = list(pct = PCT.HYB.SC, cumu = SUM.HYB.SC, pcs = PCS.HYB.SC),
-  HYB.SE = list(pct = PCT.HYB.SE, cumu = SUM.HYB.SE, pcs = PCS.HYB.SE),
-  PARENT = list(pct = PCT.PARENT, cumu = SUM.PARENT, pcs = PCS.PARENT),
-  HYBRID = list(pct = PCT.HYBRID, cumu = SUM.HYBRID, pcs = PCS.HYBRID),
-  MERGE  = list(pct = PCT.MERGE,  cumu = SUM.MERGE,  pcs = PCS.MERGE))
+# Number of PCs to retain per dataset (elbow_pcs()): the elbow of the ranked percent-variance curve.
+ELBOW.INPUTS <- lapply(YSC, elbow_pcs)
+PCS <- sapply(ELBOW.INPUTS, `[[`, "pcs")
 
 fig_pdf("extra/S_pca_elbow.pdf", 6, 5)
 for (nm in names(ELBOW.INPUTS)) {
@@ -2025,47 +1949,9 @@ dev.off()
 # against the sweep's highest-silhouette plateau
 # (cluster_stability.R on the cluster), and keeps whichever candidate
 # has the higher bootstrap mean ARI as the final clustering.
-RES.SWEEP.MIX.SC <- sweep_cluster_resolution(YSC.MIX.SC, dims = 1:PCS.MIX.SC, min_cells = MIN.CLUSTER.CELLS)
-YSC.MIX.SC <- RES.SWEEP.MIX.SC$obj
-plot_resolution_sweep(RES.SWEEP.MIX.SC, "MIX.SC", FIGURE.DIR, MIN.CLUSTER.CELLS)
-cat(sprintf("Sc parent: chosen resolution = %.2f, %d clusters, mean silhouette = %.3f\n",
-            RES.SWEEP.MIX.SC$chosen_res, RES.SWEEP.MIX.SC$chosen_n_clusters, RES.SWEEP.MIX.SC$chosen_sil))
-
-RES.SWEEP.MIX.SE <- sweep_cluster_resolution(YSC.MIX.SE, dims = 1:PCS.MIX.SE, min_cells = MIN.CLUSTER.CELLS)
-YSC.MIX.SE <- RES.SWEEP.MIX.SE$obj
-plot_resolution_sweep(RES.SWEEP.MIX.SE, "MIX.SE", FIGURE.DIR, MIN.CLUSTER.CELLS)
-cat(sprintf("Se parent: chosen resolution = %.2f, %d clusters, mean silhouette = %.3f\n",
-            RES.SWEEP.MIX.SE$chosen_res, RES.SWEEP.MIX.SE$chosen_n_clusters, RES.SWEEP.MIX.SE$chosen_sil))
-
-RES.SWEEP.HYB.SC <- sweep_cluster_resolution(YSC.HYB.SC, dims = 1:PCS.HYB.SC, min_cells = MIN.CLUSTER.CELLS)
-YSC.HYB.SC <- RES.SWEEP.HYB.SC$obj
-plot_resolution_sweep(RES.SWEEP.HYB.SC, "HYB.SC", FIGURE.DIR, MIN.CLUSTER.CELLS)
-cat(sprintf("Hybrid, Sc allele: chosen resolution = %.2f, %d clusters, mean silhouette = %.3f\n",
-            RES.SWEEP.HYB.SC$chosen_res, RES.SWEEP.HYB.SC$chosen_n_clusters, RES.SWEEP.HYB.SC$chosen_sil))
-
-RES.SWEEP.HYB.SE <- sweep_cluster_resolution(YSC.HYB.SE, dims = 1:PCS.HYB.SE, min_cells = MIN.CLUSTER.CELLS)
-YSC.HYB.SE <- RES.SWEEP.HYB.SE$obj
-plot_resolution_sweep(RES.SWEEP.HYB.SE, "HYB.SE", FIGURE.DIR, MIN.CLUSTER.CELLS)
-cat(sprintf("Hybrid, Se allele: chosen resolution = %.2f, %d clusters, mean silhouette = %.3f\n",
-            RES.SWEEP.HYB.SE$chosen_res, RES.SWEEP.HYB.SE$chosen_n_clusters, RES.SWEEP.HYB.SE$chosen_sil))
-
-RES.SWEEP.PARENT <- sweep_cluster_resolution(YSC.PARENT, dims = 1:PCS.PARENT, min_cells = MIN.CLUSTER.CELLS)
-YSC.PARENT <- RES.SWEEP.PARENT$obj
-plot_resolution_sweep(RES.SWEEP.PARENT, "PARENT", FIGURE.DIR, MIN.CLUSTER.CELLS)
-cat(sprintf("Both parents combined: chosen resolution = %.2f, %d clusters, mean silhouette = %.3f\n",
-            RES.SWEEP.PARENT$chosen_res, RES.SWEEP.PARENT$chosen_n_clusters, RES.SWEEP.PARENT$chosen_sil))
-
-RES.SWEEP.HYBRID <- sweep_cluster_resolution(YSC.HYBRID, dims = 1:PCS.HYBRID, min_cells = MIN.CLUSTER.CELLS)
-YSC.HYBRID <- RES.SWEEP.HYBRID$obj
-plot_resolution_sweep(RES.SWEEP.HYBRID, "HYBRID", FIGURE.DIR, MIN.CLUSTER.CELLS)
-cat(sprintf("Hybrid combined: chosen resolution = %.2f, %d clusters, mean silhouette = %.3f\n",
-            RES.SWEEP.HYBRID$chosen_res, RES.SWEEP.HYBRID$chosen_n_clusters, RES.SWEEP.HYBRID$chosen_sil))
-
-RES.SWEEP.MERGE <- sweep_cluster_resolution(YSC.MERGE, dims = 1:PCS.MERGE, min_cells = MIN.CLUSTER.CELLS)
-YSC.MERGE <- RES.SWEEP.MERGE$obj
-plot_resolution_sweep(RES.SWEEP.MERGE, "MERGE", FIGURE.DIR, MIN.CLUSTER.CELLS)
-cat(sprintf("All four merged: chosen resolution = %.2f, %d clusters, mean silhouette = %.3f\n",
-            RES.SWEEP.MERGE$chosen_res, RES.SWEEP.MERGE$chosen_n_clusters, RES.SWEEP.MERGE$chosen_sil))
+RES.SWEEP <- lapply(setNames(DS.NAMES, DS.NAMES), cluster_dataset, ysc = YSC, pcs = PCS, labels = DS.LABELS,
+                    min_cells = MIN.CLUSTER.CELLS, figure_dir = FIGURE.DIR)
+YSC <- lapply(RES.SWEEP, `[[`, "obj")
 
 ## ---- Cluster execution of the stability bootstrap (Section 7.3) ----
 ## CSTAB.INPUTS packages everything cluster_stability.R needs. For each dataset it records the
@@ -2078,15 +1964,12 @@ cat(sprintf("All four merged: chosen resolution = %.2f, %d clusters, mean silhou
 # refits every replicate in parallel, picks each dataset's final
 # resolution by bootstrap mean ARI, and runs the Section 7.4 marker
 # enrichment on the four single datasets at that final resolution.
-DS.NAMES   <- c("MIX.SC", "MIX.SE", "HYB.SC", "HYB.SE", "PARENT", "HYBRID", "MERGE")
-DS.LABELS  <- c(MIX.SC = "Sc parent", MIX.SE = "Se parent", HYB.SC = "Hybrid, Sc allele", HYB.SE = "Hybrid, Se allele",
-                PARENT = "Both parents combined", HYBRID = "Hybrid combined", MERGE = "All four merged")
 N.CLUSTER.BOOT <- 500; SEED.CLUSTER.BOOT <- 1
 CSTAB.INPUTS <- local({
-  sweeps <- setNames(mget(paste0("RES.SWEEP.", DS.NAMES)), DS.NAMES)
+  sweeps <- RES.SWEEP
   counts <- setNames(mget(DS.NAMES), DS.NAMES)
-  nfeatures <- setNames(sapply(mget(paste0("HVG.", DS.NAMES)), `[[`, "n_features"), DS.NAMES)
-  dims_n <- setNames(unlist(mget(paste0("PCS.", DS.NAMES))), DS.NAMES)
+  nfeatures <- sapply(HVG, `[[`, "n_features")
+  dims_n <- PCS
   B <- N.CLUSTER.BOOT
   seed <- SEED.CLUSTER.BOOT
   metric <- "manhattan"
@@ -2117,7 +2000,7 @@ CSTAB.INPUTS <- local({
   list(tasks = tasks, ref = ref, data = data, idx = idx, key = key)
 })
 MARKER.DS <- c("MIX.SC", "MIX.SE", "HYB.SC", "HYB.SE")
-CSTAB.MARKER.OBJS <- lapply(setNames(mget(paste0("YSC.", MARKER.DS)), MARKER.DS), diet_for_markers)
+CSTAB.MARKER.OBJS <- lapply(YSC[MARKER.DS], diet_for_markers)
 KEGG.DATA <- kegg_local("sce")
 
 ## ---- Cluster round trip: Rscript cluster_stability.R ----
@@ -2133,8 +2016,9 @@ save(CSTAB.INPUTS, CSTAB.MARKER.OBJS, DS.LABELS, KEGG.DATA, file = file.path(INP
 load_cluster_output(file.path(OUTPUT.DIR, "cluster_stability_output.rda"), "cluster_stability.R")   # CSTAB.ARI, CSTAB.MARKERS, CSTAB.KEY
 check_cluster_key(CSTAB.KEY, CSTAB.INPUTS$key, "cluster_stability_output.rda", "cluster_stability.R")
 ## ---- end cluster round trip ----
+BOOT <- list()
 for (d in DS.NAMES) {
-  boot <- assemble_cluster_stability(CSTAB.INPUTS, CSTAB.ARI, d, get(paste0("RES.SWEEP.", d))$obj)
+  boot <- assemble_cluster_stability(CSTAB.INPUTS, CSTAB.ARI, d, RES.SWEEP[[d]]$obj)
   local({
     label <- DS.LABELS[[d]]
     cat(sprintf("%s: bootstrap comparison across candidate resolutions\n", label)); print(boot$table)
@@ -2145,8 +2029,8 @@ for (d in DS.NAMES) {
                   label, boot$final_res, final_ari, chosen_row$boot_mean_ari, chosen_row$res))
     }
   })
-  assign(paste0("BOOT.", d), boot)
-  assign(paste0("YSC.", d), boot$final_obj)
+  BOOT[[d]] <- boot
+  YSC[[d]] <- boot$final_obj
 }
 
 ## Robustness check on the annoy.metric choice. Clusters the same retained PCs under each of two metrics
@@ -2154,9 +2038,9 @@ for (d in DS.NAMES) {
 ## group together and either is defensible; a low ARI makes the metric a
 ## decision to state and justify in Methods.
 METRIC.CHECK.MIX.SC <- local({
-  obj <- YSC.MIX.SC
-  dims <- 1:PCS.MIX.SC
-  resolution <- BOOT.MIX.SC$final_res
+  obj <- YSC$MIX.SC
+  dims <- 1:PCS[["MIX.SC"]]
+  resolution <- BOOT$MIX.SC$final_res
   metrics <- c("manhattan", "euclidean")
   cl <- lapply(metrics, metric_clusters, dims = dims, obj = obj, resolution = resolution)
   names(cl) <- metrics
@@ -2165,26 +2049,10 @@ METRIC.CHECK.MIX.SC <- local({
 cat(sprintf("Sc parent: Manhattan vs Euclidean ARI = %.3f\n", METRIC.CHECK.MIX.SC$ari))
 
 fig_pdf("extra/S_umap_clustering_checks.pdf", 6, 5)
-YSC.MIX.SC <- suppressWarnings(RunUMAP(YSC.MIX.SC, dims = 1:PCS.MIX.SC, verbose = FALSE))
-umap_plot(YSC.MIX.SC, "Sc parent (mono-culture)", group.by = "seurat_clusters")
-
-YSC.MIX.SE <- suppressWarnings(RunUMAP(YSC.MIX.SE, dims = 1:PCS.MIX.SE, verbose = FALSE))
-umap_plot(YSC.MIX.SE, "Se parent (mono-culture)", group.by = "seurat_clusters")
-
-YSC.HYB.SC <- suppressWarnings(RunUMAP(YSC.HYB.SC, dims = 1:PCS.HYB.SC, verbose = FALSE))
-umap_plot(YSC.HYB.SC, "Hybrid, Sc allele counts", group.by = "seurat_clusters")
-
-YSC.HYB.SE <- suppressWarnings(RunUMAP(YSC.HYB.SE, dims = 1:PCS.HYB.SE, verbose = FALSE))
-umap_plot(YSC.HYB.SE, "Hybrid, Se allele counts", group.by = "seurat_clusters")
-
-YSC.PARENT <- suppressWarnings(RunUMAP(YSC.PARENT, dims = 1:PCS.PARENT, verbose = FALSE))
-umap_plot(YSC.PARENT, "Both parents combined (Sc + Se)", group.by = "seurat_clusters")
-
-YSC.HYBRID <- suppressWarnings(RunUMAP(YSC.HYBRID, dims = 1:PCS.HYBRID, verbose = FALSE))
-umap_plot(YSC.HYBRID, "Hybrid, both allele views combined", group.by = "seurat_clusters")
-
-YSC.MERGE <- suppressWarnings(RunUMAP(YSC.MERGE, dims = 1:PCS.MERGE, verbose = FALSE))
-umap_plot(YSC.MERGE, "All four samples merged, clusters", group.by = "seurat_clusters")
+UMAP.TITLES <- c(MIX.SC = "Sc parent (mono-culture)", MIX.SE = "Se parent (mono-culture)", HYB.SC = "Hybrid, Sc allele counts",
+                 HYB.SE = "Hybrid, Se allele counts", PARENT = "Both parents combined (Sc + Se)",
+                 HYBRID = "Hybrid, both allele views combined", MERGE = "All four samples merged, clusters")
+for (d in DS.NAMES) YSC[[d]] <- umap_dataset(YSC[[d]], PCS[[d]], UMAP.TITLES[[d]])
 dev.off()
 
 ## 7.4 Cluster composition: identity, marker enrichment, and consistency
@@ -2193,7 +2061,7 @@ dev.off()
 # dataset by marker gene GO/KEGG enrichment, and checks how consistent
 # clustering is between the hybrid allele views and their corresponding
 # parents.
-YSC.IDENTS <- as.numeric(Idents(YSC.MERGE)) - 1
+YSC.IDENTS <- as.numeric(Idents(YSC$MERGE)) - 1
 SC.PAR.ID  <- 1:(ncol(MIX.SC))
 SE.PAR.ID  <- (1+ncol(MIX.SC)):(ncol(MIX.SC)+ncol(MIX.SE))
 SC.HYB.ID  <- (1+ncol(MIX.SC)+ncol(MIX.SE)):(ncol(MIX.SC)+ncol(MIX.SE)+ncol(HYB.SC))
@@ -2281,7 +2149,7 @@ cat(sprintf("%d / %d hybrid cells (%.1f%%) fall in a consistent cluster pair\n",
 # components using each dataset's own final clustering, relates the
 # within/between ratio to burst kinetics, compares the ratio between
 # species, and relates it to the regulatory and dominance classification.
-CL.MIX.SC <- Idents(YSC.MIX.SC)[colnames(CONTRAST.MATS$MIX.SC)]
+CL.MIX.SC <- Idents(YSC$MIX.SC)[colnames(CONTRAST.MATS$MIX.SC)]
 WB.MIX.SC <- within_between_decomp(CONTRAST.MATS$MIX.SC, CONTRAST.EXPOS$MIX.SC, CL.MIX.SC)
 cat("Sc parent: cells per cluster\n"); print(WB.MIX.SC$cluster_n)
 
@@ -2307,7 +2175,7 @@ cat(sprintf("Sc parent: within/between vs mean,       n = %d, Spearman rho = %.3
 cat(sprintf("Sc parent: within/between vs burst freq, n = %d, Spearman rho = %.3f\n", WB.VS.BFREQ.MIX.SC$n, WB.VS.BFREQ.MIX.SC$rho))
 cat(sprintf("Sc parent: within/between vs burst size, n = %d, Spearman rho = %.3f\n", WB.VS.BSIZE.MIX.SC$n, WB.VS.BSIZE.MIX.SC$rho))
 
-CL.MIX.SE <- Idents(YSC.MIX.SE)[colnames(CONTRAST.MATS$MIX.SE)]
+CL.MIX.SE <- Idents(YSC$MIX.SE)[colnames(CONTRAST.MATS$MIX.SE)]
 WB.MIX.SE <- within_between_decomp(CONTRAST.MATS$MIX.SE, CONTRAST.EXPOS$MIX.SE, CL.MIX.SE)
 cat("Se parent: cells per cluster\n"); print(WB.MIX.SE$cluster_n)
 
@@ -2380,20 +2248,20 @@ S.GENES   <- c("YMR199W", "YPL256C", "YPR120C", "YGR109C", "YBR088C", "YKL113C",
 G2M.GENES <- c("YGR108W", "YPR119W", "YDL155W", "YMR001C", "YGL116W")                        # CLB1, CLB2, CLB3, CDC5, CDC20
 MG1.GENES <- c("YLR079W", "YDR146C", "YLR131C")                                              # SIC1, SWI5, ACE2
 
-YSC.MIX.SC <- score_cell_cycle_by_cluster(YSC.MIX.SC, "Sc parent", file.path(FIGURE.DIR, "extra/S_cell_cycle_scoring_MIX.SC.pdf"))
-YSC.MIX.SE <- score_cell_cycle_by_cluster(YSC.MIX.SE, "Se parent", file.path(FIGURE.DIR, "extra/S_cell_cycle_scoring_MIX.SE.pdf"))
-YSC.HYB.SC <- score_cell_cycle_by_cluster(YSC.HYB.SC, "Hybrid, Sc allele", file.path(FIGURE.DIR, "extra/S_cell_cycle_scoring_HYB.SC.pdf"))
-YSC.HYB.SE <- score_cell_cycle_by_cluster(YSC.HYB.SE, "Hybrid, Se allele", file.path(FIGURE.DIR, "extra/S_cell_cycle_scoring_HYB.SE.pdf"))
+YSC$MIX.SC <- score_cell_cycle_by_cluster(YSC$MIX.SC, "Sc parent", file.path(FIGURE.DIR, "extra/S_cell_cycle_scoring_MIX.SC.pdf"))
+YSC$MIX.SE <- score_cell_cycle_by_cluster(YSC$MIX.SE, "Se parent", file.path(FIGURE.DIR, "extra/S_cell_cycle_scoring_MIX.SE.pdf"))
+YSC$HYB.SC <- score_cell_cycle_by_cluster(YSC$HYB.SC, "Hybrid, Sc allele", file.path(FIGURE.DIR, "extra/S_cell_cycle_scoring_HYB.SC.pdf"))
+YSC$HYB.SE <- score_cell_cycle_by_cluster(YSC$HYB.SE, "Hybrid, Se allele", file.path(FIGURE.DIR, "extra/S_cell_cycle_scoring_HYB.SE.pdf"))
 
 METABOLIC.GENE.SETS <- list(
   Glycolysis = go_gene_set("GO:0006096"),  # glycolytic process
   OXPHOS     = go_gene_set("GO:0006119"),  # oxidative phosphorylation
   RiBi       = go_gene_set("GO:0042254"))  # ribosome biogenesis
 
-YSC.MIX.SC <- score_modules_by_cluster(YSC.MIX.SC, METABOLIC.GENE.SETS, "Sc parent", file.path(FIGURE.DIR, "extra/S_metabolic_scoring_MIX.SC.pdf"))
-YSC.MIX.SE <- score_modules_by_cluster(YSC.MIX.SE, METABOLIC.GENE.SETS, "Se parent", file.path(FIGURE.DIR, "extra/S_metabolic_scoring_MIX.SE.pdf"))
-YSC.HYB.SC <- score_modules_by_cluster(YSC.HYB.SC, METABOLIC.GENE.SETS, "Hybrid, Sc allele", file.path(FIGURE.DIR, "extra/S_metabolic_scoring_HYB.SC.pdf"))
-YSC.HYB.SE <- score_modules_by_cluster(YSC.HYB.SE, METABOLIC.GENE.SETS, "Hybrid, Se allele", file.path(FIGURE.DIR, "extra/S_metabolic_scoring_HYB.SE.pdf"))
+YSC$MIX.SC <- score_modules_by_cluster(YSC$MIX.SC, METABOLIC.GENE.SETS, "Sc parent", file.path(FIGURE.DIR, "extra/S_metabolic_scoring_MIX.SC.pdf"))
+YSC$MIX.SE <- score_modules_by_cluster(YSC$MIX.SE, METABOLIC.GENE.SETS, "Se parent", file.path(FIGURE.DIR, "extra/S_metabolic_scoring_MIX.SE.pdf"))
+YSC$HYB.SC <- score_modules_by_cluster(YSC$HYB.SC, METABOLIC.GENE.SETS, "Hybrid, Sc allele", file.path(FIGURE.DIR, "extra/S_metabolic_scoring_HYB.SC.pdf"))
+YSC$HYB.SE <- score_modules_by_cluster(YSC$HYB.SE, METABOLIC.GENE.SETS, "Hybrid, Se allele", file.path(FIGURE.DIR, "extra/S_metabolic_scoring_HYB.SE.pdf"))
 
 ## 7.7 Covariate-noise diagnostic
 # Tests whether per-cell NB Pearson residual noise, from the already-
@@ -2401,15 +2269,15 @@ YSC.HYB.SE <- score_modules_by_cluster(YSC.HYB.SE, METABOLIC.GENE.SETS, "Hybrid,
 # (single continuous axis, first PC of S.Score/G2M.Score) or metabolic
 # state (discrete, joint k-means on the three metabolic module scores).
 # Run on the four datasets that feed CONTRAST.MATS directly.
-CC.AXIS.MIX.SC <- cell_cycle_continuum(YSC.MIX.SC)
-CC.AXIS.MIX.SE <- cell_cycle_continuum(YSC.MIX.SE)
-CC.AXIS.HYB.SC <- cell_cycle_continuum(YSC.HYB.SC)
-CC.AXIS.HYB.SE <- cell_cycle_continuum(YSC.HYB.SE)
+CC.AXIS.MIX.SC <- cell_cycle_continuum(YSC$MIX.SC)
+CC.AXIS.MIX.SE <- cell_cycle_continuum(YSC$MIX.SE)
+CC.AXIS.HYB.SC <- cell_cycle_continuum(YSC$HYB.SC)
+CC.AXIS.HYB.SE <- cell_cycle_continuum(YSC$HYB.SE)
 
-MET.STATE.MIX.SC <- metabolic_state_cluster(YSC.MIX.SC)
-MET.STATE.MIX.SE <- metabolic_state_cluster(YSC.MIX.SE)
-MET.STATE.HYB.SC <- metabolic_state_cluster(YSC.HYB.SC)
-MET.STATE.HYB.SE <- metabolic_state_cluster(YSC.HYB.SE)
+MET.STATE.MIX.SC <- metabolic_state_cluster(YSC$MIX.SC)
+MET.STATE.MIX.SE <- metabolic_state_cluster(YSC$MIX.SE)
+MET.STATE.HYB.SC <- metabolic_state_cluster(YSC$HYB.SC)
+MET.STATE.HYB.SE <- metabolic_state_cluster(YSC$HYB.SE)
 
 COV.DIAG.MIX.SC <- covariate_noise_diagnostic(CONTRAST.MATS$MIX.SC, CONTRAST.EXPOS$MIX.SC, CONTRAST.FITS$MIX.SC, CC.AXIS.MIX.SC, MET.STATE.MIX.SC, "Sc parent")
 COV.DIAG.MIX.SE <- covariate_noise_diagnostic(CONTRAST.MATS$MIX.SE, CONTRAST.EXPOS$MIX.SE, CONTRAST.FITS$MIX.SE, CC.AXIS.MIX.SE, MET.STATE.MIX.SE, "Se parent")
@@ -2429,13 +2297,13 @@ dev.off()
 # composition difference by the matching 7.7 noise-association effect
 # size to bound the fraction of residual variance a composition
 # difference of that size could explain.
-MET.SCORE.MIX.SC <- as.matrix(YSC.MIX.SC[[c("Glycolysis1", "OXPHOS1", "RiBi1")]])
-MET.SCORE.MIX.SE <- as.matrix(YSC.MIX.SE[[c("Glycolysis1", "OXPHOS1", "RiBi1")]])
-MET.SCORE.HYB.SC <- as.matrix(YSC.HYB.SC[[c("Glycolysis1", "OXPHOS1", "RiBi1")]])
-MET.SCORE.HYB.SE <- as.matrix(YSC.HYB.SE[[c("Glycolysis1", "OXPHOS1", "RiBi1")]])
+MET.SCORE.MIX.SC <- as.matrix(YSC$MIX.SC[[c("Glycolysis1", "OXPHOS1", "RiBi1")]])
+MET.SCORE.MIX.SE <- as.matrix(YSC$MIX.SE[[c("Glycolysis1", "OXPHOS1", "RiBi1")]])
+MET.SCORE.HYB.SC <- as.matrix(YSC$HYB.SC[[c("Glycolysis1", "OXPHOS1", "RiBi1")]])
+MET.SCORE.HYB.SE <- as.matrix(YSC$HYB.SE[[c("Glycolysis1", "OXPHOS1", "RiBi1")]])
 
-CC.SHARED.PARENT <- cell_cycle_continuum_shared(YSC.MIX.SC, YSC.MIX.SE)
-CC.SHARED.HYBRID <- cell_cycle_continuum_shared(YSC.HYB.SC, YSC.HYB.SE)
+CC.SHARED.PARENT <- cell_cycle_continuum_shared(YSC$MIX.SC, YSC$MIX.SE)
+CC.SHARED.HYBRID <- cell_cycle_continuum_shared(YSC$HYB.SC, YSC$HYB.SE)
 
 COMP.BOUND.PARENT <- species_composition_report(CC.SHARED.PARENT$x1, CC.SHARED.PARENT$x2, MET.SCORE.MIX.SC, MET.SCORE.MIX.SE, COV.DIAG.MIX.SC, COV.DIAG.MIX.SE, "Sc vs Se parent")
 COMP.BOUND.HYBRID <- species_composition_report(CC.SHARED.HYBRID$x1, CC.SHARED.HYBRID$x2, MET.SCORE.HYB.SC, MET.SCORE.HYB.SE, COV.DIAG.HYB.SC, COV.DIAG.HYB.SE, "Hybrid, Sc vs Se allele")

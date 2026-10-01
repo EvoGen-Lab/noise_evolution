@@ -117,6 +117,10 @@
 ###     plot_hvg_elbow() - Diagnostic plot for hvg_elbow()'s output: full curve, chosen cutoff, and floor marked.
 ###     sweep_cluster_resolution() - Resolution sweep with a minimum-cluster-size guard; picks the coarsest resolution with near-maximal silhouette width.
 ###     plot_resolution_sweep() - Diagnostic plot for sweep_cluster_resolution()'s output: silhouette vs. resolution, guard-excluded points and the chosen resolution marked.
+###     prepare_dataset() - Log-normalization, elbow-selected variable features, scaling and PCA for one Seurat dataset.
+###     elbow_pcs() - Percent variance per PC and the elbow PC count to retain.
+###     cluster_dataset() - Resolution sweep, plot and log line for one dataset on its retained PCs.
+###     umap_dataset() - UMAP on the retained PCs of one clustered dataset, drawn on the open device.
 ###     assemble_cluster_stability() - Summarizes the returned ARI vectors per candidate resolution, picks the final resolution and relabels the object.
 ###     kegg_local() - Downloads the KEGG pathway map once, locally, for offline enrichment on cluster nodes.
 ###     load_cluster_output() - Loads a cluster result into the caller's environment, naming the script to run when the file is missing.
@@ -1639,12 +1643,12 @@ plot_cluster_marker_enrichment <- function(res, label, pdf_path, width = 7, heig
 }
 
 ## score_cell_cycle_by_cluster: cell-cycle phase scoring on a dataset's own validated
-## clustering (Idents already set, e.g. YSC.MIX.SE, YSC.HYB.SC, YSC.HYB.SE). Scores the
+## clustering (Idents already set, e.g. YSC$MIX.SE, YSC$HYB.SC, YSC$HYB.SE). Scores the
 ## curated yeast regulons (S.GENES/G2M.GENES/MG1.GENES) with CellCycleScoring()/
 ## AddModuleScore(), draws a violin plot and a phase-composition-by-cluster barplot, and
 ## prints the phase table as a quantitative check of a GO-based reading of each cluster.
 ## Returns obj with S.Score/G2M.Score/MG1.Score1/Phase added, for the caller to reassign
-## (e.g. YSC.MIX.SE <- score_cell_cycle_by_cluster(YSC.MIX.SE, ...)).
+## (e.g. YSC$MIX.SE <- score_cell_cycle_by_cluster(YSC$MIX.SE, ...)).
 score_cell_cycle_by_cluster <- function(obj, label, pdf_path, s_genes = S.GENES, g2m_genes = G2M.GENES, mg1_genes = MG1.GENES, width = 9, height = 8) {
   obj <- suppressWarnings(suppressMessages(CellCycleScoring(obj, s.features = s_genes, g2m.features = g2m_genes)))
   obj <- suppressWarnings(suppressMessages(AddModuleScore(obj, features = list(mg1_genes), name = "MG1.Score")))
@@ -2707,6 +2711,47 @@ plot_resolution_sweep <- function(sweep, label, fig_dir, min_cells) {
   abline(v = sweep$chosen_res, lty = 2, col = COLOR.ACCENT)
   legend("bottomright", legend = c("silhouette", sprintf("below %d cells/cluster", min_cells), "chosen"), pch = c(16, 4, NA), lty = c(NA, NA, 2), col = c("black", COLOR.GREY[["mid"]], COLOR.ACCENT), bty = "n")
   dev.off()
+}
+
+## prepare_dataset: normalization, variable features and PCA for one Seurat dataset. Counts are
+## log-normalized; the number of variable features comes from the elbow of the ranked standardized-variance
+## curve (hvg_elbow, plotted by plot_hvg_elbow); every gene in `genes` is scaled; PCA runs on the variable
+## features. Returns the prepared object and the elbow result.
+prepare_dataset <- function(obj, name, genes, figure_dir) {
+  obj <- NormalizeData(obj, normalization.method = "LogNormalize", scale.factor = 10000, verbose = FALSE)
+  hvg <- hvg_elbow(obj)
+  plot_hvg_elbow(hvg, name, figure_dir)
+  obj <- FindVariableFeatures(obj, selection.method = "vst", nfeatures = hvg$n_features, verbose = FALSE)
+  obj <- ScaleData(obj, features = genes, verbose = FALSE)
+  obj <- RunPCA(obj, features = VariableFeatures(object = obj), verbose = FALSE)
+  list(obj = obj, hvg = hvg)
+}
+
+## elbow_pcs: number of PCs to retain, the elbow of the ranked percent-variance curve: the latest PC among
+## consecutive PCs whose percent-variance drop exceeds 0.05 percentage points, plus one. Returns the percent
+## variance (pct), its cumulative sum (cumu) and the PC count (pcs).
+elbow_pcs <- function(obj) {
+  pct <- 100 * obj[["pca"]]@stdev / sum(obj[["pca"]]@stdev)
+  list(pct = pct, cumu = cumsum(pct), pcs = sort(which((pct[1:length(pct) - 1] - pct[2:length(pct)]) > 0.05), decreasing = TRUE)[1] + 1)
+}
+
+## cluster_dataset: resolution sweep for dataset d on its retained PCs (pcs[[d]]), the sweep plot, and a log
+## line naming the chosen resolution (labels[[d]] is the dataset's readable name). Returns the
+## sweep_cluster_resolution() result, whose obj carries the chosen clustering.
+cluster_dataset <- function(d, ysc, pcs, labels, min_cells, figure_dir) {
+  sweep <- sweep_cluster_resolution(ysc[[d]], dims = 1:pcs[[d]], min_cells = min_cells)
+  plot_resolution_sweep(sweep, d, figure_dir, min_cells)
+  cat(sprintf("%s: chosen resolution = %.2f, %d clusters, mean silhouette = %.3f\n",
+              labels[[d]], sweep$chosen_res, sweep$chosen_n_clusters, sweep$chosen_sil))
+  sweep
+}
+
+## umap_dataset: UMAP on the retained PCs of one clustered dataset, drawn with the shared cluster palette on
+## the open device. Returns the object with its UMAP reduction.
+umap_dataset <- function(obj, pcs, title) {
+  obj <- suppressWarnings(RunUMAP(obj, dims = 1:pcs, verbose = FALSE))
+  print(umap_plot(obj, title, group.by = "seurat_clusters"))
+  obj
 }
 
 ## assemble_cluster_stability: summarizes one dataset's returned ARI vectors.
