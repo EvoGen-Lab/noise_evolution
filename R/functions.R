@@ -36,12 +36,16 @@
 ###     line_colors() - Color ramp sized to the number of lines drawn in one panel.
 ###     cluster_cols() - Cluster colors from the plum ramp, n colors via interpolation.
 ###     umap_plot() - UMAP with the shared cluster palette and on-plot labels.
+###     fig_pdf() - Opens a PDF under FIGURE.DIR with the pipeline's figure settings.
+###     class_count_barplot() - Gene (or pair) counts per class, bars colored by class.
+###     class_overlap_triptych() - Figure of three class-overlap heatmaps: mean class against burst frequency, burst size and frequency-size balance class, on one shared color range.
+###     class_heatmap_grid() - Figure of class-overlap heatmaps for a table of class-vector pairs (regulatory vectors cleaned with clean_reg()).
 ###     plot_lines() - Plots one line per column of a matrix against a shared x vector, with reference lines at power 0.05 and 0.9.
 ###     legend_page() - One legend page mapping each line color to the value it represents.
 ###     .sym() - Symmetric axis limits spanning a vector of values plus their SE.
 ###     .se_scatter() - Shared SE-bar scatter body of the three gene-level scatters below.
 ###     plot_contrast_scatter() - Gene-level contrast scatter with SE bars: cis vs trans for one quantity, mean vs burst frequency or rotated burst kinetics for one mode.
-###     sig_hist() - Significance-shaded histogram of a contrast, coloured by direction and permutation significance.
+###     sig_hist_panel() - Histogram of one contrast (quantity, mode) with the genes significant at q < sig shaded by direction.
 ###   6. PERMUTATION NULL  (per-gene significance for the contrasts)
 ###     perm_pval() - Two-sided permutation p-value with add-one continuity correction, shared with the power grid.
 ###   7. CO-EXPRESSION  (residual co-fluctuation, cis/trans decomposed)
@@ -65,6 +69,7 @@
 ###     clean_reg() - Maps the "Cis x Trans" label to "Compensatory" and sets "Ambiguous" to NA in a class vector.
 ###     reg_class_vec() - Vector form of classify_reg(), aligned to BURST.CONTRASTS's rows, for a given quantity.
 ###     dom_class_vec() - Vector form of classify_dom(), aligned to BURST.CONTRASTS's rows, for a given quantity.
+###     class_stats() - Applies a per-class summary (class_mean_var, class_anova) to every regulatory and dominance class vector, named REG.MEAN ... DOM.KBAL.
 ###     ploidy_shift() - Per-gene expected log2 rise in bfreq when HYB.COMB sums two alleles (from allele weights and the intrinsic fraction).
 ###     .overlap_lor() - Log2((observed + 0.5) / (expected + 0.5)) of a class contingency table; one definition for the heatmap colours and shared_overlap_rng().
 ###     class_overlap_heatmap() - Log2(observed/expected) association heatmap between two class vectors with BH-adjusted significance; levels auto-derived from the data or fixed so panels share axes (Figures 2 and 6, diagnostics).
@@ -642,6 +647,53 @@ umap_plot <- function(obj, title = NULL, group.by = NULL) {
   DimPlot(obj, reduction = "umap", group.by = group.by, cols = cols, label = TRUE, repel = TRUE) + ggtitle(title)
 }
 
+## Labels of the burst quantities, shared by the figure functions below.
+QUANTITY.LABEL <- c(mean = "mean", bfreq = "burst frequency", bsize = "burst size", kbal = "frequency-size balance", cv2 = "CV2")
+
+## fig_pdf: opens a PDF at path (relative to FIGURE.DIR) with the pipeline's figure settings.
+fig_pdf <- function(path, width, height, useDingbats = FALSE) {
+  pdf(file.path(FIGURE.DIR, path), width = width, height = height, useDingbats = useDingbats)
+}
+
+## class_count_barplot: number of genes (or pairs, via ylab) in each class of cls, bars colored by class.
+class_count_barplot <- function(cls, levels, cols, main, ylab = "# of genes") {
+  barplot(table(factor(cls, levels = levels)), col = cols, las = 2, ylab = ylab, border = NA, main = main)
+}
+
+## class_overlap_triptych: figure of three class-overlap heatmaps, mean class (rows) against burst frequency,
+## burst size and frequency-size balance class (columns). classes is a list of class vectors named by quantity
+## (REG.VEC or DOM.VEC), levels the class levels. The three heatmaps share one color range
+## (shared_overlap_rng), so enrichment strength reads the same across panels. Cell text is the fold
+## enrichment (obs/exp), * marks BH q < OVERLAP.FDR, and color is log2(obs/exp), diverging through white.
+class_overlap_triptych <- function(path, classes, levels, width, height, mar) {
+  others <- c("bfreq", "bsize", "kbal")
+  rng <- shared_overlap_rng(lapply(others, function(o) list(classes$mean, classes[[o]])), levels)
+  fig_pdf(path, width, height)
+  par(mfrow = c(1, 3), mar = mar)
+  for (o in others)
+    class_overlap_heatmap(classes$mean, classes[[o]], levels_a = levels, levels_b = levels,
+                          xlab = paste(QUANTITY.LABEL[[o]], "class"), ylab = "mean class", rng = rng)
+  dev.off()
+}
+
+## class_heatmap_grid: figure of class-overlap heatmaps for the pairs of class vectors listed in panels
+## (columns y_kind, y_q, x_kind, x_q: kind is the name in classes, e.g. REG or DOM, and q the quantity). Regulatory
+## vectors pass through clean_reg() so "Cis x Trans" counts as Compensatory and Ambiguous drops. Axis labels read
+## "<quantity> <kind word> class<suffix>"; a kind word of "" leaves it out.
+class_heatmap_grid <- function(path, panels, classes, fdr, width, height, mfrow,
+                               kind_words = c(REG = "regulatory", DOM = "dominance"), suffix = "") {
+  vec <- function(kind, q) if (kind == "REG") clean_reg(classes[[kind]][[q]]) else classes[[kind]][[q]]
+  lab <- function(kind, q) paste0(QUANTITY.LABEL[[q]], if (nzchar(kind_words[[kind]])) paste0(" ", kind_words[[kind]]), " class", suffix)
+  fig_pdf(path, width, height)
+  par(mfrow = mfrow)
+  for (i in seq_len(nrow(panels))) {
+    pn <- panels[i, ]
+    class_overlap_heatmap(vec(pn$y_kind, pn$y_q), vec(pn$x_kind, pn$x_q), fdr = fdr,
+                          ylab = lab(pn$y_kind, pn$y_q), xlab = lab(pn$x_kind, pn$x_q))
+  }
+  dev.off()
+}
+
 ## ---- Gene-level scatters and histograms (square symmetric panels, SE bars) ----
 
 ## Symmetric axis limits about zero that cover value +/- error.
@@ -689,7 +741,7 @@ plot_contrast_scatter <- function(BURST.CONTRASTS, type = c("cis_trans", "mean_b
   col <- function(prefix, mode, stat) BURST.CONTRASTS[[paste0(prefix, "_", mode, "_", stat)]]
   if (type == "cis_trans") {
     quantity <- match.arg(what, c("mean", "bfreq", "bsize", "kbal", "cv2"))
-    lab <- c(mean = "mean", bfreq = "burst frequency", bsize = "burst size", kbal = "frequency-size balance", cv2 = "CV2")[quantity]
+    lab <- QUANTITY.LABEL[[quantity]]
     if (is.null(main)) main <- lab
     .se_scatter(col(quantity, "cis", "est"), col(quantity, "cis", "se"), col(quantity, "trans", "est"), col(quantity, "trans", "se"),
                 xlab = paste(lab, "cis (log2)"), ylab = paste(lab, "trans (log2)"), main = main, lim = lim, bar_col = bar_col, pt_col = pt_col)
@@ -707,11 +759,18 @@ plot_contrast_scatter <- function(BURST.CONTRASTS, type = c("cis_trans", "mean_b
   }
 }
 
-## significance-shaded histogram of a contrast, coloured by direction
-## Histogram of a contrast, shaded by permutation significance and coloured by direction.
-sig_hist <- function(x, p, sig = 0.05, brk = 0.1, xlim, ylim, xlab, up = SPECIES.COLOR[["Sc"]], dn = SPECIES.COLOR[["Se"]]) {
-  ## Breaks span the full range of x, rounded outward to a multiple of brk, so every gene is
-  ## counted and bin edges stay on one grid; xlim sets only the visible window.
+## sig_hist_panel: histogram of one contrast (quantity, mode) with the genes significant at q < sig shaded by
+## direction (Sc-higher up, Se-higher dn). Breaks span the full range of the estimate, rounded outward to a
+## multiple of brk, so every gene is counted and bin edges stay on one grid; the x window is only the visible
+## range. Burst frequency spans a narrower range and uses finer bins. ymax is the top of the y axis.
+sig_hist_panel <- function(contrasts, pr, mode, quantity, ymax, sig = 0.05, up = SPECIES.COLOR[["Sc"]], dn = SPECIES.COLOR[["Se"]]) {
+  x <- contrasts[[paste0(quantity, "_", mode, "_est")]]
+  p <- pr[[paste0(quantity, "_", mode, "_q")]]
+  fine <- quantity == "bfreq"
+  brk  <- if (fine) 0.05 else 0.1
+  xlim <- if (fine) c(-2.5, 2.5) else c(-5, 5)
+  ylim <- c(0, ymax)
+  xlab <- paste0(c(total = "parents", cis = "cis", trans = "trans")[[mode]], " log2(Sc/Se) ", QUANTITY.LABEL[[quantity]])
   rng <- range(x, na.rm = TRUE)
   lo  <- floor((rng[1] - 1e-9) / brk) * brk
   hi  <- ceiling((rng[2] + 1e-9) / brk) * brk
@@ -1126,6 +1185,17 @@ dom_class_vec <- function(BURST.CONTRASTS, PR, quantity = c("mean", "bfreq", "bs
   cs <- paste0(quantity, "_dpar_sc", sfx); ce <- paste0(quantity, "_dpar_se", sfx)
   if (!all(c(cs, ce) %in% names(PR))) stop(sprintf("PR lacks %s. Rerun gene_perm.R with PLOIDY.SHIFT in the inputs.", cs))
   classify_dom(PR[[cs]][i], PR[[ce]][i], BURST.CONTRASTS[[paste0(quantity, "_dpar_sc_est")]], BURST.CONTRASTS[[paste0(quantity, "_dpar_se_est")]], sig = sig)$class
+}
+
+## class_stats: applies fun(values, class vector) to every class vector in classes (a list by kind, e.g.
+## list(REG = REG.VEC, DOM = DOM.VEC), each a list by quantity), restricted to the genes in idx (positions in the
+## class vectors). The result is named "<KIND>.<QUANTITY>", e.g. REG.MEAN, DOM.KBAL.
+class_stats <- function(fun, values, classes, idx) {
+  out <- list()
+  for (kind in names(classes))
+    for (q in names(classes[[kind]]))
+      out[[paste0(kind, ".", toupper(q))]] <- fun(values, classes[[kind]][[q]][idx])
+  out
 }
 
 ## .overlap_lor(tab): log2((observed + 0.5) / (expected + 0.5)) for a class-by-class contingency
@@ -2756,7 +2826,7 @@ plot_within_between_vs_quantity <- function(wb, quantity, xlab, main = NULL) {
 ## Runs plot_within_between_by_class() for two datasets side by side
 ## (e.g. Sc and Se parent) against one classification axis, in one call:
 ## aligns the raw class vector (indexed like BURST.CONTRASTS$gene, e.g.
-## REG.BFREQ.CLASS or DOM.BSIZE.CLASS, not pre-cleaned since Ambiguous
+## REG.VEC$bfreq or DOM.VEC$bsize, not pre-cleaned since Ambiguous
 ## genes are already excluded automatically by class_levels not
 ## containing "Ambiguous") to each dataset's own gene table via match(),
 ## writes both panels to one pdf, and prints the omnibus test and Tukey

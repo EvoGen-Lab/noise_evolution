@@ -191,7 +191,7 @@ MIX.MINORITY.FRAC <- pmin(MIX.SC.SHARED.SUM, MIX.SE.SHARED.SUM) / (MIX.SC.SHARED
 MIX.FRAC.SWEEP <- 10^seq(log10(0.001), log10(0.5), length.out = 200)
 MINORITY.FRAC.THRESHOLD <- 0.005
 MIX.FRAC.SWEEP.N.EXCEED <- sapply(MIX.FRAC.SWEEP, function(t) sum(MIX.MINORITY.FRAC > t))
-pdf(file.path(FIGURE.DIR, "extra/S_mix_shared_cell_contamination_sweep.pdf"), width = 6, height = 5, useDingbats = FALSE)
+fig_pdf("extra/S_mix_shared_cell_contamination_sweep.pdf", 6, 5)
 plot(MIX.FRAC.SWEEP * 100, MIX.FRAC.SWEEP.N.EXCEED, log = "x", type = "l",
      xlab = "Minority-species read fraction threshold (%, log scale)",
      ylab = "# of shared cells exceeding threshold",
@@ -230,7 +230,7 @@ HYB.SC.MITO <- HYB.SC['MT_F', HYB.MITO.CELLS]
 HYB.SE.MITO <- HYB.SE['MT_F', HYB.MITO.CELLS]
 MITO.IGNORE <- which(HYB.SC.MITO == 0 | HYB.SE.MITO == 0)
 MITO.RATIO  <- log2(HYB.SC.MITO[-MITO.IGNORE]/HYB.SE.MITO[-MITO.IGNORE])
-pdf(file.path(FIGURE.DIR, "extra/S_mito_ratio_hybrid.pdf"), width = 6, height = 5, useDingbats = FALSE)
+fig_pdf("extra/S_mito_ratio_hybrid.pdf", 6, 5)
 par(mfrow=c(1,1))
 hist(MITO.RATIO,breaks=40,xlab="log2(Sc/Se) mitochondrial ratio in hybrid",main="")
 abline(v=mean(MITO.RATIO),col=COLOR.ACCENT,lwd=2,lty=2)
@@ -238,7 +238,7 @@ dev.off()
 cat("Mitochondrial log2(Sc/Se) ratio in hybrid, quantiles:\n")
 print(round(quantile(MITO.RATIO, probs = c(0, 0.25, 0.5, 0.75, 1)), 3))
 
-pdf(file.path(FIGURE.DIR, "extra/S_mito_ignore_depth.pdf"), width = 6, height = 5, useDingbats = FALSE)
+fig_pdf("extra/S_mito_ignore_depth.pdf", 6, 5)
 hist(colSums(HYB.SC[,HYB.MITO.CELLS[-MITO.IGNORE]]),breaks=seq(0,80000,2500), xlab="Hybrid Sc Reads/cell",main="")
 hist(colSums(HYB.SC[,HYB.MITO.CELLS[MITO.IGNORE]]),breaks=seq(0,80000,2500),col=COLOR.GREY[["dark"]],add=TRUE)
 dev.off()
@@ -274,7 +274,7 @@ QC.STATS <- list(
 # the already-small MIX.SC dataset); library size alone now decides
 QC.CELLS <- lapply(QC.STATS, qc_cell_cutoff, k = CELL.MAD.K)
 QC.TITLES <- c(MIX.SC = "Sc Parent", MIX.SE = "Se Parent", HYB = "Hybrid (alleles pooled)")
-pdf(file.path(FIGURE.DIR, "extra/S_cell_count_threshold_qc.pdf"), width = 12, height = 4, useDingbats = FALSE)
+fig_pdf("extra/S_cell_count_threshold_qc.pdf", 12, 4)
 par(mfrow=c(1,3))
 for (nm in names(QC.STATS)) {
   plot(QC.STATS[[nm]]$lib, QC.STATS[[nm]]$det, log = "xy", pch=19, cex=0.6, xlab="Count per Cell", ylab="Number of Genes", main=QC.TITLES[[nm]])
@@ -287,7 +287,7 @@ HYB.SC <- HYB.SC[, QC.CELLS$HYB$keep];    HYB.SE <- HYB.SE[, QC.CELLS$HYB$keep]
 # Genes are filtered second, using the retained cells and one relative abundance floor
 GENE.QC <- qc_gene_keep(list(MIX.SC = MIX.SC, MIX.SE = MIX.SE, HYB.SC = HYB.SC, HYB.SE = HYB.SE),
                         lambda0 = GENE.LAMBDA0, cell_frac = GENE.CELL.FRAC)
-pdf(file.path(FIGURE.DIR, "extra/S_gene_count_threshold_qc.pdf"), width = 8, height = 8, useDingbats = FALSE)
+fig_pdf("extra/S_gene_count_threshold_qc.pdf", 8, 8)
 par(mfrow=c(2,2))
 GENE.QC.MATS <- list(MIX.SC = MIX.SC, MIX.SE = MIX.SE, HYB.SC = HYB.SC, HYB.SE = HYB.SE)
 GENE.QC.TITLES <- c(MIX.SC = "Sc Parent", MIX.SE = "Se Parent", HYB.SC = "Sc Hybrid", HYB.SE = "Se Hybrid")
@@ -603,7 +603,7 @@ local({
 # (mean, burst frequency, burst size), middle row mean vs burst
 # frequency (total, cis, trans), bottom row burst kinetics (total, cis,
 # trans)
-pdf(file.path(FIGURE.DIR, "extra/contrasts_panels.pdf"), width = 13, height = 13)
+fig_pdf("extra/contrasts_panels.pdf", 13, 13, useDingbats = TRUE)
 par(mfrow = c(3, 3), mar = c(4, 4, 3, 1))
 for (panel in list(c("cis_trans", "mean"), c("cis_trans", "bfreq"), c("cis_trans", "bsize"),
                    c("mean_bfreq", "total"), c("mean_bfreq", "cis"), c("mean_bfreq", "trans"),
@@ -615,7 +615,7 @@ dev.off()
 # Compares per-gene bootstrap SEs between the two seeds saved in 2.3
 BURST.CONTRASTS2 <- local({ load(file.path(OUTPUT.DIR, "gene_boot2_output.rda")); add_burst_contrasts(BOOT.CONTRASTS) })
 
-pdf(file.path(FIGURE.DIR, "extra/S_gene_seed_compare.pdf"), width = 6, height = 9, useDingbats = FALSE)
+fig_pdf("extra/S_gene_seed_compare.pdf", 6, 9)
 par(mfrow = c(3, 2))
 SEED.CHECK <- setNames(lapply(c("total", "cis", "trans"), gene_seed_check, bc1 = BURST.CONTRASTS, bc2 = BURST.CONTRASTS2), c("total", "cis", "trans"))
 dev.off()
@@ -638,31 +638,23 @@ console_start(3)
 
 ## 3.1 Regulatory classification: mean, burst frequency, burst size,
 ## kinetic balance
-# REG.KBAL classifies kbal (= bfreq - bsize), the rotated quantity that
+# REG.VEC$kbal classifies kbal (= bfreq - bsize), the rotated quantity that
 # replaces a direct bfreq-vs-bsize comparison everywhere one would
 # otherwise be tempted below: bfreq and bsize are not independent
 # (bsize = mean - bfreq by construction), so classifying and comparing
 # them side by side mostly re-tests the size of bfreq's own variance
 # across genes, not biology. kbal and mean are the well-posed pair.
-REG.MEAN  <- classify_reg(PR$mean_cis_q,  PR$mean_trans_q,  BURST.CONTRASTS$mean_cis_est,  BURST.CONTRASTS$mean_trans_est,  sig = 0.05)
-REG.BFREQ <- classify_reg(PR$bfreq_cis_q, PR$bfreq_trans_q, BURST.CONTRASTS$bfreq_cis_est, BURST.CONTRASTS$bfreq_trans_est, sig = 0.05)
-REG.BSIZE <- classify_reg(PR$bsize_cis_q, PR$bsize_trans_q, BURST.CONTRASTS$bsize_cis_est, BURST.CONTRASTS$bsize_trans_est, sig = 0.05)
-REG.KBAL  <- classify_reg(PR$kbal_cis_q,  PR$kbal_trans_q,  BURST.CONTRASTS$kbal_cis_est,  BURST.CONTRASTS$kbal_trans_est,  sig = 0.05)
-REG.MEAN.CLASS  <- REG.MEAN$class;  REG.MEAN.COLOR  <- REG.MEAN$color
-REG.BFREQ.CLASS <- REG.BFREQ$class; REG.BFREQ.COLOR <- REG.BFREQ$color
-REG.BSIZE.CLASS <- REG.BSIZE$class; REG.BSIZE.COLOR <- REG.BSIZE$color
-REG.KBAL.CLASS  <- REG.KBAL$class;  REG.KBAL.COLOR  <- REG.KBAL$color
+QUANTITIES <- c("mean", "bfreq", "bsize", "kbal")
+REG.VEC <- lapply(setNames(QUANTITIES, QUANTITIES), function(q) reg_class_vec(BURST.CONTRASTS, PR, q))
 
 ## Figure 1: cis vs trans scatter above class counts, mean/burst
 # frequency/burst size. Scatter row on top, class-count barplots below
-pdf(file.path(FIGURE.DIR, "main/01_cis_trans.pdf"), width = 13, height = 10, useDingbats = FALSE)
+fig_pdf("main/01_cis_trans.pdf", 13, 10)
 par(mfrow = c(2, 3), mar = c(5, 4.5, 2, 1))
 plot_cis_trans_class(BURST.CONTRASTS, PR, "mean")
 plot_cis_trans_class(BURST.CONTRASTS, PR, "bfreq")
 plot_cis_trans_class(BURST.CONTRASTS, PR, "bsize")
-barplot(table(factor(REG.MEAN.CLASS,  levels = REG.CLASS)), col = COLOR.LIST.1, las = 2, ylab = "# of genes", border = NA, main = "mean")
-barplot(table(factor(REG.BFREQ.CLASS, levels = REG.CLASS)), col = COLOR.LIST.1, las = 2, ylab = "# of genes", border = NA, main = "burst frequency")
-barplot(table(factor(REG.BSIZE.CLASS, levels = REG.CLASS)), col = COLOR.LIST.1, las = 2, ylab = "# of genes", border = NA, main = "burst size")
+for (q in c("mean", "bfreq", "bsize")) class_count_barplot(REG.VEC[[q]], REG.CLASS, COLOR.LIST.1, QUANTITY.LABEL[[q]])
 dev.off()
 
 # BH FDR level for the class-overlap heatmaps below
@@ -672,26 +664,14 @@ OVERLAP.FDR <- 0.01
 # Cell text = fold enrichment (obs/exp); * = BH-corrected q < OVERLAP.FDR
 # (0.01), adjusted across the cells of each heatmap.
 # Color ramp = log2(obs/exp), diverging through white at zero.
-RNG.REG <- shared_overlap_rng(list(list(REG.MEAN.CLASS, REG.BFREQ.CLASS), list(REG.MEAN.CLASS, REG.BSIZE.CLASS), list(REG.MEAN.CLASS, REG.KBAL.CLASS)), REG.CLASS)
-pdf(file.path(FIGURE.DIR, "main/02_overlap_regulatory.pdf"), width = 21, height = 7, useDingbats = FALSE)
-par(mfrow = c(1, 3), mar = c(8, 8, 1, 1))
-class_overlap_heatmap(REG.MEAN.CLASS, REG.BFREQ.CLASS, levels_a = REG.CLASS, levels_b = REG.CLASS, xlab = "burst frequency class", ylab = "mean class", rng = RNG.REG)
-class_overlap_heatmap(REG.MEAN.CLASS, REG.BSIZE.CLASS, levels_a = REG.CLASS, levels_b = REG.CLASS, xlab = "burst size class",      ylab = "mean class", rng = RNG.REG)
-class_overlap_heatmap(REG.MEAN.CLASS, REG.KBAL.CLASS, levels_a = REG.CLASS, levels_b = REG.CLASS, xlab = "frequency-size balance class", ylab = "mean class", rng = RNG.REG)
-dev.off()
+class_overlap_triptych("main/02_overlap_regulatory.pdf", REG.VEC, REG.CLASS, width = 21, height = 7, mar = c(8, 8, 1, 1))
 
 ## 3.2 Significance histograms for total, cis, and trans effects
-pdf(file.path(FIGURE.DIR, "extra/S_reg_sig_hist.pdf"), width = 12, height = 10, useDingbats = FALSE)
+fig_pdf("extra/S_reg_sig_hist.pdf", 12, 10)
 par(mfrow = c(3, 3))
-sig_hist(BURST.CONTRASTS$mean_total_est,  PR$mean_total_q,                xlim = c(-5, 5),     ylim = c(0, 300), xlab = "parents log2(Sc/Se) mean")
-sig_hist(BURST.CONTRASTS$bfreq_total_est, PR$bfreq_total_q, brk = 0.05,   xlim = c(-2.5, 2.5), ylim = c(0, 600), xlab = "parents log2(Sc/Se) burst frequency")
-sig_hist(BURST.CONTRASTS$bsize_total_est, PR$bsize_total_q,               xlim = c(-5, 5),     ylim = c(0, 300), xlab = "parents log2(Sc/Se) burst size")
-sig_hist(BURST.CONTRASTS$mean_cis_est,    PR$mean_cis_q,                  xlim = c(-5, 5),     ylim = c(0, 400), xlab = "cis log2(Sc/Se) mean")
-sig_hist(BURST.CONTRASTS$bfreq_cis_est,   PR$bfreq_cis_q,   brk = 0.05,   xlim = c(-2.5, 2.5), ylim = c(0, 600), xlab = "cis log2(Sc/Se) burst frequency")
-sig_hist(BURST.CONTRASTS$bsize_cis_est,   PR$bsize_cis_q,                 xlim = c(-5, 5),     ylim = c(0, 400), xlab = "cis log2(Sc/Se) burst size")
-sig_hist(BURST.CONTRASTS$mean_trans_est,  PR$mean_trans_q,                xlim = c(-5, 5),     ylim = c(0, 400), xlab = "trans log2(Sc/Se) mean")
-sig_hist(BURST.CONTRASTS$bfreq_trans_est, PR$bfreq_trans_q, brk = 0.05,   xlim = c(-2.5, 2.5), ylim = c(0, 400), xlab = "trans log2(Sc/Se) burst frequency")
-sig_hist(BURST.CONTRASTS$bsize_trans_est, PR$bsize_trans_q,               xlim = c(-5, 5),     ylim = c(0, 400), xlab = "trans log2(Sc/Se) burst size")
+SIG.HIST.YMAX <- list(total = c(mean = 300, bfreq = 600, bsize = 300), cis = c(mean = 400, bfreq = 600, bsize = 400), trans = c(mean = 400, bfreq = 400, bsize = 400))
+for (md in c("total", "cis", "trans"))
+  for (q in c("mean", "bfreq", "bsize")) sig_hist_panel(BURST.CONTRASTS, PR, md, q, SIG.HIST.YMAX[[md]][[q]])
 dev.off()
 
 ## 3.3 Dominance classification: mean, burst frequency, burst size,
@@ -702,21 +682,13 @@ dev.off()
 # mean axis and the library doubling cancels. On the noise axis the sum of two
 # alleles averages their intrinsic noise, so bfreq rises in the hybrid and cv2
 # falls. The BURST.CONTRASTS block removes that shift from the dpar estimates
-DOM.MEAN  <- classify_dom(PR$mean_dpar_sc_q,  PR$mean_dpar_se_q,  BURST.CONTRASTS$mean_dpar_sc_est,  BURST.CONTRASTS$mean_dpar_se_est,  sig = 0.05)
-DOM.BFREQ <- classify_dom(PR$bfreq_dpar_sc_q_ploidy, PR$bfreq_dpar_se_q_ploidy, BURST.CONTRASTS$bfreq_dpar_sc_est, BURST.CONTRASTS$bfreq_dpar_se_est, sig = 0.05)
-DOM.BSIZE <- classify_dom(PR$bsize_dpar_sc_q_ploidy, PR$bsize_dpar_se_q_ploidy, BURST.CONTRASTS$bsize_dpar_sc_est, BURST.CONTRASTS$bsize_dpar_se_est, sig = 0.05)
-DOM.KBAL  <- classify_dom(PR$kbal_dpar_sc_q_ploidy,  PR$kbal_dpar_se_q_ploidy,  BURST.CONTRASTS$kbal_dpar_sc_est,  BURST.CONTRASTS$kbal_dpar_se_est,  sig = 0.05)
-DOM.MEAN.CLASS  <- DOM.MEAN$class
-DOM.BFREQ.CLASS <- DOM.BFREQ$class
-DOM.BSIZE.CLASS <- DOM.BSIZE$class
-DOM.KBAL.CLASS  <- DOM.KBAL$class
+DOM.VEC <- lapply(setNames(QUANTITIES, QUANTITIES), function(q) dom_class_vec(BURST.CONTRASTS, PR, q))
+CLASS.VEC <- list(REG = REG.VEC, DOM = DOM.VEC)
 
 # Sensitivity to the size of the shift. The _q_ind calls use s = 1 for every
 # gene, the upper bound for fully independent equal alleles. Classes that hold
 # under both bases do not depend on how private the allele noise is.
-DOM.BFREQ.CLASS.IND <- dom_class_vec(BURST.CONTRASTS, PR, "bfreq", basis = "ind")
-DOM.BSIZE.CLASS.IND <- dom_class_vec(BURST.CONTRASTS, PR, "bsize", basis = "ind")
-DOM.KBAL.CLASS.IND  <- dom_class_vec(BURST.CONTRASTS, PR, "kbal",  basis = "ind")
+DOM.BFREQ.IND <- dom_class_vec(BURST.CONTRASTS, PR, "bfreq", basis = "ind")
 PLOIDY.CHECK <- data.frame(
   median_shift = median(PLOIDY.SHIFT, na.rm = TRUE),
   raw_sc = median(BURST.CONTRASTS$bfreq_dpar_sc_est_raw, na.rm = TRUE),
@@ -724,51 +696,43 @@ PLOIDY.CHECK <- data.frame(
   raw_se = median(BURST.CONTRASTS$bfreq_dpar_se_est_raw, na.rm = TRUE),
   adj_se = median(BURST.CONTRASTS$bfreq_dpar_se_est,     na.rm = TRUE))
 PLOIDY.CHECK   
-table(own = DOM.BFREQ.CLASS, ind = DOM.BFREQ.CLASS.IND)
+table(own = DOM.VEC$bfreq, ind = DOM.BFREQ.IND)
 
 ## 3.4 Mean against burst frequency and burst size, parents and hybrids
 # Burst size is the composite of the two (bsize = mean - bfreq in log2
 # space)
 # The mean axis of dpar shares the parental scale, so the three views compare
 # directly.
-pdf(file.path(FIGURE.DIR, "extra/S_mean_vs_bfreq_bsize_all_modes.pdf"), width = 13, height = 18, useDingbats = FALSE)
+fig_pdf("extra/S_mean_vs_bfreq_bsize_all_modes.pdf", 13, 18)
 par(mfrow = c(3, 2), mar = c(4.5, 4.5, 2, 1))
-plot_mean_bfreq_class(BURST.CONTRASTS, PR, "total",   reg_class = REG.MEAN.CLASS, dom_class = DOM.MEAN.CLASS, y_quantity = "bfreq", main = "mean vs burst frequency: parents")
-plot_mean_bfreq_class(BURST.CONTRASTS, PR, "total",   reg_class = REG.MEAN.CLASS, dom_class = DOM.MEAN.CLASS, y_quantity = "bsize", main = "mean vs burst size: parents")
-plot_mean_bfreq_class(BURST.CONTRASTS, PR, "dpar_sc", reg_class = REG.MEAN.CLASS, dom_class = DOM.MEAN.CLASS, y_quantity = "bfreq", main = "mean vs burst frequency: hybrid vs Sc")
-plot_mean_bfreq_class(BURST.CONTRASTS, PR, "dpar_sc", reg_class = REG.MEAN.CLASS, dom_class = DOM.MEAN.CLASS, y_quantity = "bsize", main = "mean vs burst size: hybrid vs Sc")
-plot_mean_bfreq_class(BURST.CONTRASTS, PR, "dpar_se", reg_class = REG.MEAN.CLASS, dom_class = DOM.MEAN.CLASS, y_quantity = "bfreq", main = "mean vs burst frequency: hybrid vs Se")
-plot_mean_bfreq_class(BURST.CONTRASTS, PR, "dpar_se", reg_class = REG.MEAN.CLASS, dom_class = DOM.MEAN.CLASS, y_quantity = "bsize", main = "mean vs burst size: hybrid vs Se")
+plot_mean_bfreq_class(BURST.CONTRASTS, PR, "total",   reg_class = REG.VEC$mean, dom_class = DOM.VEC$mean, y_quantity = "bfreq", main = "mean vs burst frequency: parents")
+plot_mean_bfreq_class(BURST.CONTRASTS, PR, "total",   reg_class = REG.VEC$mean, dom_class = DOM.VEC$mean, y_quantity = "bsize", main = "mean vs burst size: parents")
+plot_mean_bfreq_class(BURST.CONTRASTS, PR, "dpar_sc", reg_class = REG.VEC$mean, dom_class = DOM.VEC$mean, y_quantity = "bfreq", main = "mean vs burst frequency: hybrid vs Sc")
+plot_mean_bfreq_class(BURST.CONTRASTS, PR, "dpar_sc", reg_class = REG.VEC$mean, dom_class = DOM.VEC$mean, y_quantity = "bsize", main = "mean vs burst size: hybrid vs Sc")
+plot_mean_bfreq_class(BURST.CONTRASTS, PR, "dpar_se", reg_class = REG.VEC$mean, dom_class = DOM.VEC$mean, y_quantity = "bfreq", main = "mean vs burst frequency: hybrid vs Se")
+plot_mean_bfreq_class(BURST.CONTRASTS, PR, "dpar_se", reg_class = REG.VEC$mean, dom_class = DOM.VEC$mean, y_quantity = "bsize", main = "mean vs burst size: hybrid vs Se")
 dev.off()
 
 ## Figure 3, supplement: mean against burst frequency and burst size,
 # per-class slopes for the parental (total) contrast. Points neutral
 # gray. Solid lines mark regulatory classes, dashed lines mark dominance. 
-pdf(file.path(FIGURE.DIR, "extended", "S_03_mean_vs_bfreq_bsize.pdf"), width = 13, height = 6, useDingbats = FALSE)
+fig_pdf(file.path("extended", "S_03_mean_vs_bfreq_bsize.pdf"), 13, 6)
 par(mfrow = c(1, 2), mar = c(4.5, 4.5, 2, 1))
-plot_mean_bfreq_class(BURST.CONTRASTS, PR, "total", reg_class = REG.MEAN.CLASS, dom_class = DOM.MEAN.CLASS, y_quantity = "bfreq")
-plot_mean_bfreq_class(BURST.CONTRASTS, PR, "total", reg_class = REG.MEAN.CLASS, dom_class = DOM.MEAN.CLASS, y_quantity = "bsize")
+plot_mean_bfreq_class(BURST.CONTRASTS, PR, "total", reg_class = REG.VEC$mean, dom_class = DOM.VEC$mean, y_quantity = "bfreq")
+plot_mean_bfreq_class(BURST.CONTRASTS, PR, "total", reg_class = REG.VEC$mean, dom_class = DOM.VEC$mean, y_quantity = "bsize")
 dev.off()
 
 ## Figure 5: dominance scatter above class counts, mean/burst frequency/burst size. 
-pdf(file.path(FIGURE.DIR, "main/05_dominance.pdf"), width = 13, height = 10, useDingbats = FALSE)
+fig_pdf("main/05_dominance.pdf", 13, 10)
 par(mfrow = c(2, 3), mar = c(5, 4.5, 2, 1))
 plot_dom_class(BURST.CONTRASTS, PR, "mean",  frame = "parent")
 plot_dom_class(BURST.CONTRASTS, PR, "bfreq", frame = "parent")
 plot_dom_class(BURST.CONTRASTS, PR, "bsize", frame = "parent")
-barplot(table(factor(DOM.MEAN.CLASS,  levels = DOM.CLASS)), col = COLOR.LIST.2, las = 2, ylab = "# of genes", border = NA, main = "mean")
-barplot(table(factor(DOM.BFREQ.CLASS, levels = DOM.CLASS)), col = COLOR.LIST.2, las = 2, ylab = "# of genes", border = NA, main = "burst frequency")
-barplot(table(factor(DOM.BSIZE.CLASS, levels = DOM.CLASS)), col = COLOR.LIST.2, las = 2, ylab = "# of genes", border = NA, main = "burst size")
+for (q in c("mean", "bfreq", "bsize")) class_count_barplot(DOM.VEC[[q]], DOM.CLASS, COLOR.LIST.2, QUANTITY.LABEL[[q]])
 dev.off()
 
 ## Figure 6: dominance class overlap heatmaps, all three pairings.
-RNG.DOM <- shared_overlap_rng(list(list(DOM.MEAN.CLASS, DOM.BFREQ.CLASS), list(DOM.MEAN.CLASS, DOM.BSIZE.CLASS), list(DOM.MEAN.CLASS, DOM.KBAL.CLASS)), DOM.CLASS)
-pdf(file.path(FIGURE.DIR, "main/06_overlap_dominance.pdf"), width = 22.5, height = 7.5, useDingbats = FALSE)
-par(mfrow = c(1, 3), mar = c(9, 9, 1, 1))
-class_overlap_heatmap(DOM.MEAN.CLASS, DOM.BFREQ.CLASS, levels_a = DOM.CLASS, levels_b = DOM.CLASS, xlab = "burst frequency class", ylab = "mean class", rng = RNG.DOM)
-class_overlap_heatmap(DOM.MEAN.CLASS, DOM.BSIZE.CLASS, levels_a = DOM.CLASS, levels_b = DOM.CLASS, xlab = "burst size class",      ylab = "mean class", rng = RNG.DOM)
-class_overlap_heatmap(DOM.MEAN.CLASS, DOM.KBAL.CLASS, levels_a = DOM.CLASS, levels_b = DOM.CLASS, xlab = "frequency-size balance class", ylab = "mean class", rng = RNG.DOM)
-dev.off()
+class_overlap_triptych("main/06_overlap_dominance.pdf", DOM.VEC, DOM.CLASS, width = 22.5, height = 7.5, mar = c(9, 9, 1, 1))
 
 ## Figure 4: rotated burst kinetics. Left, net mean change (x) against kinetic balance (y = bfreq - bsize)
 ## with SE bars, read from the mean_ and kbal_ columns add_burst_contrasts() stores. The rotation
@@ -776,7 +740,7 @@ dev.off()
 ## shift between frequency and size. A gene is significant when its kinetic balance differs from 0 by a
 ## two-sided z-test (nominal p < sig); significant points are drawn black over grey n.s. points. KS keeps
 ## gene, y, sy, p and direction (sig_pos, sig_neg or ns) for the companion barplot at right.
-pdf(file.path(FIGURE.DIR, "main/04_burst_kinetics.pdf"), width = 9, height = 5, useDingbats = FALSE)
+fig_pdf("main/04_burst_kinetics.pdf", 9, 5)
 par(mfrow = c(1, 2), mar = c(5, 4.5, 2, 1))
 KS <- local({
   mode <- "total"
@@ -814,11 +778,11 @@ dev.off()
 ## Figure 7 (supplement): ggplot2 violins of kinetic balance by regulatory class (left panel) and
 ## dominance class (right panel). Values range roughly -1 to 1 (log2 units).
 KBAL <- BURST.CONTRASTS$kbal_total_est   # kinetic balance, total; add_burst_contrasts() already derives this
-pdf(file.path(FIGURE.DIR, "extended", "S_07_violins.pdf"), width = 8, height = 4.5, useDingbats = FALSE)
+fig_pdf(file.path("extended", "S_07_violins.pdf"), 8, 4.5)
 print(local({
   value <- KBAL
-  reg_class <- REG.MEAN.CLASS
-  dom_class <- DOM.MEAN.CLASS
+  reg_class <- REG.VEC$mean
+  dom_class <- DOM.VEC$mean
   ylab <- "kinetic balance (burst frequency - amplitude)"
   stopifnot(requireNamespace("ggplot2", quietly=TRUE))
   df <- rbind(
@@ -841,37 +805,20 @@ dev.off()
 
 ## 3.5 Class relationship heatmaps
 # log2 observed/expected, BH-corrected significance. 
-pdf(file.path(FIGURE.DIR, "extra/S_class_heatmaps.pdf"), width = 13, height = 13, useDingbats = FALSE)
-par(mfrow = c(3, 3))
-class_overlap_heatmap(clean_reg(REG.MEAN.CLASS),  clean_reg(REG.BFREQ.CLASS), fdr = OVERLAP.FDR,
-             ylab = "mean regulatory class", xlab = "burst frequency regulatory class")
-class_overlap_heatmap(clean_reg(REG.MEAN.CLASS),  clean_reg(REG.BSIZE.CLASS), fdr = OVERLAP.FDR,
-             ylab = "mean regulatory class", xlab = "burst size regulatory class")
-class_overlap_heatmap(clean_reg(REG.MEAN.CLASS),  clean_reg(REG.KBAL.CLASS),  fdr = OVERLAP.FDR,
-             ylab = "mean regulatory class", xlab = "frequency-size balance regulatory class")
-class_overlap_heatmap(DOM.MEAN.CLASS,  DOM.BFREQ.CLASS, fdr = OVERLAP.FDR,
-             ylab = "mean dominance class", xlab = "burst frequency dominance class")
-class_overlap_heatmap(DOM.MEAN.CLASS,  DOM.BSIZE.CLASS, fdr = OVERLAP.FDR,
-             ylab = "mean dominance class", xlab = "burst size dominance class")
-class_overlap_heatmap(DOM.MEAN.CLASS,  DOM.KBAL.CLASS,  fdr = OVERLAP.FDR,
-             ylab = "mean dominance class", xlab = "frequency-size balance dominance class")
-class_overlap_heatmap(clean_reg(REG.MEAN.CLASS),  DOM.MEAN.CLASS,  fdr = OVERLAP.FDR,
-             ylab = "mean regulatory class", xlab = "mean dominance class")
-class_overlap_heatmap(clean_reg(REG.BFREQ.CLASS), DOM.BFREQ.CLASS, fdr = OVERLAP.FDR,
-             ylab = "burst frequency regulatory class", xlab = "burst frequency dominance class")
-class_overlap_heatmap(clean_reg(REG.KBAL.CLASS),  DOM.KBAL.CLASS,  fdr = OVERLAP.FDR,
-             ylab = "frequency-size balance regulatory class", xlab = "frequency-size balance dominance class")
-dev.off()
+HEATMAP.PANELS <- data.frame(
+  y_kind = c(rep("REG", 3), rep("DOM", 3), "REG", "REG", "REG"), y_q = c("mean", "mean", "mean", "mean", "mean", "mean", "mean", "bfreq", "kbal"),
+  x_kind = c(rep("REG", 3), rep("DOM", 3), "DOM", "DOM", "DOM"), x_q = c("bfreq", "bsize", "kbal", "bfreq", "bsize", "kbal", "mean", "bfreq", "kbal"))
+class_heatmap_grid("extra/S_class_heatmaps.pdf", HEATMAP.PANELS, CLASS.VEC, OVERLAP.FDR, width = 13, height = 13, mfrow = c(3, 3))
 
 ## 3.6 Gene-identity overlap
 # class_identity_overlap() computes Cohen's kappa (chance-corrected
 # agreement between two class vectors across the whole table), a
 # permutation null on kappa, and a per-class Jaccard overlap on gene
 # membership.
-REG.OVERLAP.MEAN.BFREQ  <- class_identity_overlap(clean_reg(REG.MEAN.CLASS),  clean_reg(REG.BFREQ.CLASS), levels = REG.CLASS, nperm = 2000)
-REG.OVERLAP.MEAN.BSIZE  <- class_identity_overlap(clean_reg(REG.MEAN.CLASS),  clean_reg(REG.BSIZE.CLASS), levels = REG.CLASS, nperm = 2000)
-REG.OVERLAP.BFREQ.BSIZE <- class_identity_overlap(clean_reg(REG.BFREQ.CLASS), clean_reg(REG.BSIZE.CLASS), levels = REG.CLASS, nperm = 2000)
-REG.OVERLAP.MEAN.KBAL   <- class_identity_overlap(clean_reg(REG.MEAN.CLASS),  clean_reg(REG.KBAL.CLASS),  levels = REG.CLASS, nperm = 2000)
+REG.OVERLAP.MEAN.BFREQ  <- class_identity_overlap(clean_reg(REG.VEC$mean),  clean_reg(REG.VEC$bfreq), levels = REG.CLASS, nperm = 2000)
+REG.OVERLAP.MEAN.BSIZE  <- class_identity_overlap(clean_reg(REG.VEC$mean),  clean_reg(REG.VEC$bsize), levels = REG.CLASS, nperm = 2000)
+REG.OVERLAP.BFREQ.BSIZE <- class_identity_overlap(clean_reg(REG.VEC$bfreq), clean_reg(REG.VEC$bsize), levels = REG.CLASS, nperm = 2000)
+REG.OVERLAP.MEAN.KBAL   <- class_identity_overlap(clean_reg(REG.VEC$mean),  clean_reg(REG.VEC$kbal),  levels = REG.CLASS, nperm = 2000)
 
 # Structural bfreq-bsize correlation: for one mode, compares the observed bfreq-vs-bsize correlation with the
 # one forced by bsize = mean - bfreq. Algebra gives Cov(bfreq, bsize) = Cov(bfreq, mean) - Var(bfreq).
@@ -904,7 +851,7 @@ cat(sprintf("Bfreq-vs-bsize correlation: observed (attenuation-corrected) rho = 
   STRUCT.BFREQ.BSIZE[["rho_bfreq_bsize_observed"]], STRUCT.BFREQ.BSIZE[["rho_bfreq_bsize_null"]], STRUCT.BFREQ.BSIZE[["excess_over_null"]]))
 write.csv(REG.OVERLAP.SUMMARY, file.path(TABLE.DIR, "gene_identity_overlap_mean_bfreq_bsize.csv"), row.names = FALSE)
 
-pdf(file.path(FIGURE.DIR, "extra/S_reg_overlap_kappa_null.pdf"), width = 20, height = 5, useDingbats = FALSE)
+fig_pdf("extra/S_reg_overlap_kappa_null.pdf", 20, 5)
 par(mfrow = c(1, 4))
 for (ov in list(list(ov = REG.OVERLAP.MEAN.BFREQ,  lab = "mean vs burst frequency"),
                 list(ov = REG.OVERLAP.MEAN.BSIZE,  lab = "mean vs burst size"),
@@ -917,9 +864,7 @@ for (ov in list(list(ov = REG.OVERLAP.MEAN.BFREQ,  lab = "mean vs burst frequenc
 dev.off()
 
 # Checkpoint
-save(REG.MEAN, REG.BFREQ, REG.BSIZE, REG.KBAL, DOM.MEAN, DOM.BFREQ, DOM.BSIZE, DOM.KBAL,
-     REG.MEAN.CLASS, REG.BFREQ.CLASS, REG.BSIZE.CLASS, REG.KBAL.CLASS,
-     DOM.MEAN.CLASS, DOM.BFREQ.CLASS, DOM.BSIZE.CLASS, DOM.KBAL.CLASS,
+save(REG.VEC, DOM.VEC,
      REG.OVERLAP.MEAN.BFREQ, REG.OVERLAP.MEAN.BSIZE, REG.OVERLAP.BFREQ.BSIZE, REG.OVERLAP.MEAN.KBAL,
      STRUCT.BFREQ.BSIZE, REG.OVERLAP.SUMMARY,
      file = ckpt_path(3))
@@ -1003,7 +948,7 @@ COEXPR.POINT <- coexpr_decompose(RESID)
 
 # Asks if the total correlation matrix is well described by a single shared
 # factor or is pair-specific with no such structure?
-pdf(file.path(FIGURE.DIR, "extra/S_coexpr_rank_check.pdf"), width = 5, height = 5, useDingbats = FALSE)
+fig_pdf("extra/S_coexpr_rank_check.pdf", 5, 5)
 RANK.CHECK <- coexpr_rank_check(COEXPR.POINT$total, k = 1)
 dev.off()
 RANK.CHECK$r2 
@@ -1033,7 +978,7 @@ load(file.path(OUTPUT.DIR, "coexpr_boot1_output.rda"))   # CB ($total, $cis, $tr
 # Tests whether pairwise bootstrap SE tracks the NB-predicted
 # attenuation factor sqrt(rho_i * rho_j).
 RHO.TOTAL <- gene_reliability(CONTRAST.FITS[c("MIX.SC", "MIX.SE")], GENES)
-pdf(file.path(FIGURE.DIR, "extra/S_coexpr_reliability_check.pdf"), width = 7, height = 6, useDingbats = FALSE)
+fig_pdf("extra/S_coexpr_reliability_check.pdf", 7, 6)
 REL.CHECK <- local({
   pairs <- CB$total
   rho <- RHO.TOTAL[CO.GENES]
@@ -1082,7 +1027,7 @@ local({
 ## converged at this B, SEs underestimated by chance in one run can make many pairs look spuriously
 ## significant. CB and CB2 are two CB objects at the same B and gene set that differ only in seed; rows
 ## share the same gene_i/gene_j order (true when both come from the same CO.GENES and upper.tri() call).
-pdf(file.path(FIGURE.DIR, "extra/S_coexpr_seed_compare.pdf"), width = 15, height = 3.2, useDingbats = FALSE)
+fig_pdf("extra/S_coexpr_seed_compare.pdf", 15, 3.2)
 par(mfrow = c(1, 5))
 SEED.CHECK <- setNames(lapply(c("total", "cis", "trans", "dpar_sc", "dpar_se"), coexpr_seed_check, cb1 = CB, cb2 = CB2), c("total", "cis", "trans", "dpar_sc", "dpar_se"))
 dev.off()
@@ -1129,10 +1074,10 @@ CB.DOM.CLASS <- local({
              class = cls, stringsAsFactors = FALSE)
 })
 
-pdf(file.path(FIGURE.DIR, "extra/S_coexpr_dom_class.pdf"), width = 6, height = 11, useDingbats = FALSE)
+fig_pdf("extra/S_coexpr_dom_class.pdf", 6, 11)
 par(mfrow = c(2, 1), mar = c(5, 4.5, 2, 1))
 plot_coexpr_scatter(CB.DOM.CLASS, "dominance")
-barplot(table(factor(CB.DOM.CLASS$class, levels = DOM.CLASS)), las = 2, col = COLOR.LIST.2, ylab = "# of pairs", border = NA, main = "Co-expression pair dominance class")
+class_count_barplot(CB.DOM.CLASS$class, DOM.CLASS, COLOR.LIST.2, "Co-expression pair dominance class", ylab = "# of pairs")
 dev.off()
 
 table(factor(CB.DOM.CLASS$class, levels = DOM.CLASS))
@@ -1180,10 +1125,10 @@ save(RESID, N.SC, N.SE, N.KEEP, DRAWS.PERM.COEXPR, file = file.path(INPUT.DIR, "
 # MIN.EFFECTIVE.GENES participation-ratio floor
 
 ## Figure 11: cis vs trans scatter above class counts
-pdf(file.path(FIGURE.DIR, "main/11_coexpr_cis_trans.pdf"), width = 6, height = 11, useDingbats = FALSE)
+fig_pdf("main/11_coexpr_cis_trans.pdf", 6, 11)
 par(mfrow = c(2, 1), mar = c(5, 4.5, 2, 1))
 plot_coexpr_scatter(CB.CLASS, "cis_trans")
-barplot(table(factor(CB.CLASS$class, levels = REG.CLASS)), col = COLOR.LIST.1, las = 2, ylab = "# of pairs", border = NA, main = "co-expression pair regulatory class")
+class_count_barplot(CB.CLASS$class, REG.CLASS, COLOR.LIST.1, "co-expression pair regulatory class", ylab = "# of pairs")
 dev.off()
 
 MIN.EFFECTIVE.GENES <- 10
@@ -1198,7 +1143,7 @@ CANDIDATE.LIST  <- list()
 ## axes with axis_var >= 0.01 and axis_pr >= MIN.EFFECTIVE.GENES; a dropped axis is named on the console.
 ## The table lists the top N.KEEP axes.
 for (ax in COEXPR.AXES) {
-  pdf(sprintf(file.path(FIGURE.DIR, "extra/S_coexpr_rank_check_%s_own.pdf"), ax), width = 5, height = 5, useDingbats = FALSE)
+  fig_pdf(sprintf("extra/S_coexpr_rank_check_%s_own.pdf", ax), 5, 5)
   RANK.CHECK.LIST[[ax]] <- coexpr_rank_check(COEXPR.POINT[[ax]], k = 1)
   dev.off()
   cat(sprintf("%s: rank-1 R^2 = %.3f\n", ax, RANK.CHECK.LIST[[ax]]$r2))
@@ -1369,7 +1314,7 @@ POS.MU.LOG2FC <- mu_log2fc(POS.LOAD.GENES, fits = CONTRAST.FITS)   # ribosome / 
 NEG.MU.LOG2FC <- mu_log2fc(NEG.LOAD.GENES, fits = CONTRAST.FITS)   # glycolysis / fermentation
 summary(POS.MU.LOG2FC); summary(NEG.MU.LOG2FC)
 
-pdf(file.path(FIGURE.DIR, "extra/S_coexpr_growth_check.pdf"), width = 5, height = 5, useDingbats = FALSE)
+fig_pdf("extra/S_coexpr_growth_check.pdf", 5, 5)
 boxplot(list(POS = POS.MU.LOG2FC, NEG = NEG.MU.LOG2FC), ylab = "log2(Sc MU / Se MU)", main = "mean expression shift by loading group")
 abline(h = 0, lty = 2, col = COLOR.GREY[["dark"]])
 dev.off()
@@ -1379,14 +1324,14 @@ NEG.MU.SC <- setNames(log2(CONTRAST.FITS$MIX.SC[NEG.LOAD.GENES, "MU"]), NEG.LOAD
 NEG.MU.SE <- setNames(log2(CONTRAST.FITS$MIX.SE[NEG.LOAD.GENES, "MU"]), NEG.LOAD.GENES)
 summary(NEG.MU.SC); summary(NEG.MU.SE)
 
-pdf(file.path(FIGURE.DIR, "extra/S_coexpr_neg_group_by_species.pdf"), width = 5, height = 5, useDingbats = FALSE)
+fig_pdf("extra/S_coexpr_neg_group_by_species.pdf", 5, 5)
 boxplot(list(Sc = NEG.MU.SC, Se = NEG.MU.SE), ylab = "log2(MU)", main = "NEG group (glycolysis/fermentation): level by species")
 dev.off()
 
 NEG.LOG2FC.SORTED <- sort(NEG.MU.LOG2FC, decreasing = TRUE)
 head(NEG.LOG2FC.SORTED, 15)   # most Sc-elevated / Se-depressed genes in the set
 
-pdf(file.path(FIGURE.DIR, "extra/S_coexpr_neg_log2fc_hist.pdf"), width = 6, height = 5, useDingbats = FALSE)
+fig_pdf("extra/S_coexpr_neg_log2fc_hist.pdf", 6, 5)
 hist(NEG.MU.LOG2FC, breaks = 30, xlab = "log2(Sc MU / Se MU)", main = "NEG group, per-gene expression shift")
 abline(v = 0, lty = 2, col = COLOR.GREY[["dark"]])
 dev.off()
@@ -1416,7 +1361,7 @@ RESP.MU.SE <- setNames(log2(CONTRAST.FITS$MIX.SE[RESP.LOAD.GENES, "MU"]), RESP.L
 summary(RESP.MU.SC); summary(RESP.MU.SE)
 wilcox.test(RESP.MU.SC, RESP.MU.SE, paired = TRUE)
 
-pdf(file.path(FIGURE.DIR, "extra/S_coexpr_resp_group_by_species.pdf"), width = 5, height = 5, useDingbats = FALSE)
+fig_pdf("extra/S_coexpr_resp_group_by_species.pdf", 5, 5)
 boxplot(list(Sc = RESP.MU.SC, Se = RESP.MU.SE), ylab = "log2(MU)", main = "respiration/OXPHOS group: level by species")
 dev.off()
 
@@ -1440,13 +1385,10 @@ table(CB.CLASS$pair_type, CB.CLASS$class)
 # is the comparison that isolates a real shift, since kbal does not
 # inherit the same structural link to bfreq that bsize does.
 CO.IDX         <- match(CO.GENES, BURST.CONTRASTS$gene)
-CO.MEAN.CLASS  <- REG.MEAN.CLASS[CO.IDX]
-CO.BFREQ.CLASS <- REG.BFREQ.CLASS[CO.IDX]
-CO.BSIZE.CLASS <- REG.BSIZE.CLASS[CO.IDX]
-CO.KBAL.CLASS  <- REG.KBAL.CLASS[CO.IDX]
+CO.VEC         <- lapply(REG.VEC, function(v) v[CO.IDX])
 
-BFREQ.BSIZE.OVERLAP.CO <- class_identity_overlap(clean_reg(CO.BFREQ.CLASS), clean_reg(CO.BSIZE.CLASS), levels = REG.CLASS, nperm = 2000)
-MEAN.KBAL.OVERLAP.CO   <- class_identity_overlap(clean_reg(CO.MEAN.CLASS),  clean_reg(CO.KBAL.CLASS),  levels = REG.CLASS, nperm = 2000)
+BFREQ.BSIZE.OVERLAP.CO <- class_identity_overlap(clean_reg(CO.VEC$bfreq), clean_reg(CO.VEC$bsize), levels = REG.CLASS, nperm = 2000)
+MEAN.KBAL.OVERLAP.CO   <- class_identity_overlap(clean_reg(CO.VEC$mean),  clean_reg(CO.VEC$kbal),  levels = REG.CLASS, nperm = 2000)
 
 cat(sprintf("Bfreq vs bsize class concordance (structural, see STRUCT.BFREQ.BSIZE): genome-wide = %.3f (n = %d, kappa = %.3f, p = %.4f), CO.GENES = %.3f (n = %d, kappa = %.3f, p = %.4f)\n",
   REG.OVERLAP.BFREQ.BSIZE$concordance, REG.OVERLAP.BFREQ.BSIZE$n_genes, REG.OVERLAP.BFREQ.BSIZE$kappa, REG.OVERLAP.BFREQ.BSIZE$kappa_p,
@@ -1455,13 +1397,9 @@ cat(sprintf("Mean vs frequency-size balance class concordance: genome-wide = %.3
   REG.OVERLAP.MEAN.KBAL$concordance, REG.OVERLAP.MEAN.KBAL$n_genes, REG.OVERLAP.MEAN.KBAL$kappa, REG.OVERLAP.MEAN.KBAL$kappa_p,
   MEAN.KBAL.OVERLAP.CO$concordance,  MEAN.KBAL.OVERLAP.CO$n_genes,  MEAN.KBAL.OVERLAP.CO$kappa,  MEAN.KBAL.OVERLAP.CO$kappa_p))
 
-pdf(file.path(FIGURE.DIR, "extra/S_coexpr_burst_mechanism_heatmap.pdf"), width = 10, height = 5, useDingbats = FALSE)
-par(mfrow = c(1, 2))
-class_overlap_heatmap(clean_reg(CO.BFREQ.CLASS), clean_reg(CO.BSIZE.CLASS), fdr = OVERLAP.FDR,
-             ylab = "burst frequency class (CO.GENES)", xlab = "burst size class (CO.GENES)")
-class_overlap_heatmap(clean_reg(CO.MEAN.CLASS),  clean_reg(CO.KBAL.CLASS),  fdr = OVERLAP.FDR,
-             ylab = "mean class (CO.GENES)", xlab = "frequency-size balance class (CO.GENES)")
-dev.off()
+class_heatmap_grid("extra/S_coexpr_burst_mechanism_heatmap.pdf",
+                   data.frame(y_kind = "REG", y_q = c("bfreq", "mean"), x_kind = "REG", x_q = c("bsize", "kbal")),
+                   list(REG = CO.VEC), OVERLAP.FDR, width = 10, height = 5, mfrow = c(1, 2), kind_words = c(REG = ""), suffix = " (CO.GENES)")
 
 AXIS.POLE.GROUPS <- list(Axis1.Ribosome    = POS.LOAD.GENES,
                         Axis1.Glycolysis  = NEG.LOAD.GENES,
@@ -1469,7 +1407,7 @@ AXIS.POLE.GROUPS <- list(Axis1.Ribosome    = POS.LOAD.GENES,
                         Axis2.Bulk        = AXIS2.BULK.GENES)
 
 # Fraction of each pole classified any-trans on each burst-kinetics axis
-t(sapply(AXIS.POLE.GROUPS, pole_trans_fractions, contrasts = BURST.CONTRASTS, bfreq_class = REG.BFREQ.CLASS, bsize_class = REG.BSIZE.CLASS, kbal_class = REG.KBAL.CLASS))
+t(sapply(AXIS.POLE.GROUPS, pole_trans_fractions, contrasts = BURST.CONTRASTS, bfreq_class = REG.VEC$bfreq, bsize_class = REG.VEC$bsize, kbal_class = REG.VEC$kbal))
 
 ## 4.13 Cis and trans candidate axes
 # Runs the detailed enrichment on
@@ -1516,7 +1454,7 @@ RHO.HYB.SE <- gene_reliability(CONTRAST.FITS["HYB.SE"], GENES)
 ## gene_reliability() on the HYB.SC and HYB.SE fits separately, since the two alleles' reliabilities
 ## enter the attenuation sqrt(rho_Sc * rho_Se) individually. Returns the sampled genes, raw and
 ## disattenuated correlations with their SEs, the attenuation, and a floor summary.
-pdf(file.path(FIGURE.DIR, "extra/S_intrinsic_reliability_check.pdf"), width = 9, height = 4.5, useDingbats = FALSE)
+fig_pdf("extra/S_intrinsic_reliability_check.pdf", 9, 4.5)
 INTR.REL.CHECK <- local({
   sc <- RESID.ALLELE$HYB.SC
   se <- RESID.ALLELE$HYB.SE
@@ -1600,7 +1538,7 @@ mean(DEPTH.COR.SC > 0); mean(DEPTH.COR.SE > 0)   # expect close to 0.5 if depth 
 ## correlation closely.
 RHO.PARTIAL <- sapply(INTR.SAMP, partial_cor_depth, resid = RESID.ALLELE, depth = DEPTH.CELL)
 
-pdf(file.path(FIGURE.DIR, "extra/S_intrinsic_depth_partial.pdf"), width = 5, height = 5, useDingbats = FALSE)
+fig_pdf("extra/S_intrinsic_depth_partial.pdf", 5, 5)
 plot(INTR.REL.CHECK$rho_obs, RHO.PARTIAL, pch = 19, cex = 0.5, xlab = "raw allele correlation", ylab = "allele correlation, depth partialled out")
 abline(0, 1, col = COLOR.ACCENT, lty = 2); abline(h = 0, lty = 2)
 dev.off()
@@ -1637,7 +1575,7 @@ NOISE.DECOMP <- data.frame(gene = GENES.NOISE, rho_obs = RHO.OBS.FULL, attn = AT
 # How many genes needed clipping? 
 table(NOISE.DECOMP$clipped)
 
-pdf(file.path(FIGURE.DIR, "extra/S_extrinsic_fraction_hist.pdf"), width = 5, height = 5, useDingbats = FALSE)
+fig_pdf("extra/S_extrinsic_fraction_hist.pdf", 5, 5)
 hist(NOISE.DECOMP$extrinsic_frac, breaks = 30, main = "Extrinsic noise fraction across genes", xlab = "estimated extrinsic fraction", col = COLOR.GREY[["mid"]], border = "white")
 abline(v = median(NOISE.DECOMP$extrinsic_frac), col = COLOR.ACCENT, lwd = 2, lty = 2)
 dev.off()
@@ -1655,25 +1593,9 @@ NOISE.DECOMP.CLEAN <- NOISE.DECOMP[!NOISE.DECOMP$clipped, ]
 class_idx       <- match(NOISE.DECOMP$gene,       BURST.CONTRASTS$gene)
 class_idx_clean <- match(NOISE.DECOMP.CLEAN$gene, BURST.CONTRASTS$gene)
 
-EXTFRAC.BY.CLASS <- list(
-  REG.MEAN  = class_mean_var(NOISE.DECOMP$extrinsic_frac, REG.MEAN.CLASS[class_idx]),
-  REG.BFREQ = class_mean_var(NOISE.DECOMP$extrinsic_frac, REG.BFREQ.CLASS[class_idx]),
-  REG.BSIZE = class_mean_var(NOISE.DECOMP$extrinsic_frac, REG.BSIZE.CLASS[class_idx]),
-  REG.KBAL  = class_mean_var(NOISE.DECOMP$extrinsic_frac, REG.KBAL.CLASS[class_idx]),
-  DOM.MEAN  = class_mean_var(NOISE.DECOMP$extrinsic_frac, DOM.MEAN.CLASS[class_idx]),
-  DOM.BFREQ = class_mean_var(NOISE.DECOMP$extrinsic_frac, DOM.BFREQ.CLASS[class_idx]),
-  DOM.BSIZE = class_mean_var(NOISE.DECOMP$extrinsic_frac, DOM.BSIZE.CLASS[class_idx]),
-  DOM.KBAL  = class_mean_var(NOISE.DECOMP$extrinsic_frac, DOM.KBAL.CLASS[class_idx]))
+EXTFRAC.BY.CLASS <- class_stats(class_mean_var, NOISE.DECOMP$extrinsic_frac, CLASS.VEC, class_idx)
 
-EXTFRAC.BY.CLASS.CLEAN <- list(
-  REG.MEAN  = class_mean_var(NOISE.DECOMP.CLEAN$extrinsic_frac, REG.MEAN.CLASS[class_idx_clean]),
-  REG.BFREQ = class_mean_var(NOISE.DECOMP.CLEAN$extrinsic_frac, REG.BFREQ.CLASS[class_idx_clean]),
-  REG.BSIZE = class_mean_var(NOISE.DECOMP.CLEAN$extrinsic_frac, REG.BSIZE.CLASS[class_idx_clean]),
-  REG.KBAL  = class_mean_var(NOISE.DECOMP.CLEAN$extrinsic_frac, REG.KBAL.CLASS[class_idx_clean]),
-  DOM.MEAN  = class_mean_var(NOISE.DECOMP.CLEAN$extrinsic_frac, DOM.MEAN.CLASS[class_idx_clean]),
-  DOM.BFREQ = class_mean_var(NOISE.DECOMP.CLEAN$extrinsic_frac, DOM.BFREQ.CLASS[class_idx_clean]),
-  DOM.BSIZE = class_mean_var(NOISE.DECOMP.CLEAN$extrinsic_frac, DOM.BSIZE.CLASS[class_idx_clean]),
-  DOM.KBAL  = class_mean_var(NOISE.DECOMP.CLEAN$extrinsic_frac, DOM.KBAL.CLASS[class_idx_clean]))
+EXTFRAC.BY.CLASS.CLEAN <- class_stats(class_mean_var, NOISE.DECOMP.CLEAN$extrinsic_frac, CLASS.VEC, class_idx_clean)
 
 EXTFRAC.BY.CLASS
 EXTFRAC.BY.CLASS.CLEAN
@@ -1681,8 +1603,7 @@ EXTFRAC.BY.CLASS.CLEAN
 # Ambiguous classifications can arise where a significant permutation
 # p-value pairs with an unresolved bootstrap sign, on any of the three
 # quantities. Exclude these from the ANOVA/Tukey tests and GO analysis.
-AMBIG.GENES <- BURST.CONTRASTS$gene[REG.MEAN.CLASS  == "Ambiguous" | REG.BFREQ.CLASS  == "Ambiguous" | REG.BSIZE.CLASS  == "Ambiguous" |
-                        DOM.MEAN.CLASS  == "Ambiguous" | DOM.BFREQ.CLASS  == "Ambiguous" | DOM.BSIZE.CLASS  == "Ambiguous"]
+AMBIG.GENES <- BURST.CONTRASTS$gene[Reduce(`|`, lapply(c(REG.VEC[c("mean", "bfreq", "bsize")], DOM.VEC[c("mean", "bfreq", "bsize")]), function(v) v == "Ambiguous"))]
 
 NOISE.DECOMP.NOAMBIG       <- NOISE.DECOMP[!(NOISE.DECOMP$gene %in% AMBIG.GENES), ]
 NOISE.DECOMP.CLEAN.NOAMBIG <- NOISE.DECOMP.CLEAN[!(NOISE.DECOMP.CLEAN$gene %in% AMBIG.GENES), ]
@@ -1694,25 +1615,9 @@ class_idx_clean_noambig <- match(NOISE.DECOMP.CLEAN.NOAMBIG$gene, BURST.CONTRAST
 # reflect a real overall difference rather than sampling noise.
 # Tukey pairwise comparisons follow automatically wherever the omnibus
 # test clears sig 
-ANOVA.BY.CLASS <- list(
-  REG.MEAN  = class_anova(NOISE.DECOMP.NOAMBIG$extrinsic_frac, REG.MEAN.CLASS[class_idx_noambig]),
-  REG.BFREQ = class_anova(NOISE.DECOMP.NOAMBIG$extrinsic_frac, REG.BFREQ.CLASS[class_idx_noambig]),
-  REG.BSIZE = class_anova(NOISE.DECOMP.NOAMBIG$extrinsic_frac, REG.BSIZE.CLASS[class_idx_noambig]),
-  REG.KBAL  = class_anova(NOISE.DECOMP.NOAMBIG$extrinsic_frac, REG.KBAL.CLASS[class_idx_noambig]),
-  DOM.MEAN  = class_anova(NOISE.DECOMP.NOAMBIG$extrinsic_frac, DOM.MEAN.CLASS[class_idx_noambig]),
-  DOM.BFREQ = class_anova(NOISE.DECOMP.NOAMBIG$extrinsic_frac, DOM.BFREQ.CLASS[class_idx_noambig]),
-  DOM.BSIZE = class_anova(NOISE.DECOMP.NOAMBIG$extrinsic_frac, DOM.BSIZE.CLASS[class_idx_noambig]),
-  DOM.KBAL  = class_anova(NOISE.DECOMP.NOAMBIG$extrinsic_frac, DOM.KBAL.CLASS[class_idx_noambig]))
+ANOVA.BY.CLASS <- class_stats(class_anova, NOISE.DECOMP.NOAMBIG$extrinsic_frac, CLASS.VEC, class_idx_noambig)
 
-ANOVA.BY.CLASS.CLEAN <- list(
-  REG.MEAN  = class_anova(NOISE.DECOMP.CLEAN.NOAMBIG$extrinsic_frac, REG.MEAN.CLASS[class_idx_clean_noambig]),
-  REG.BFREQ = class_anova(NOISE.DECOMP.CLEAN.NOAMBIG$extrinsic_frac, REG.BFREQ.CLASS[class_idx_clean_noambig]),
-  REG.BSIZE = class_anova(NOISE.DECOMP.CLEAN.NOAMBIG$extrinsic_frac, REG.BSIZE.CLASS[class_idx_clean_noambig]),
-  REG.KBAL  = class_anova(NOISE.DECOMP.CLEAN.NOAMBIG$extrinsic_frac, REG.KBAL.CLASS[class_idx_clean_noambig]),
-  DOM.MEAN  = class_anova(NOISE.DECOMP.CLEAN.NOAMBIG$extrinsic_frac, DOM.MEAN.CLASS[class_idx_clean_noambig]),
-  DOM.BFREQ = class_anova(NOISE.DECOMP.CLEAN.NOAMBIG$extrinsic_frac, DOM.BFREQ.CLASS[class_idx_clean_noambig]),
-  DOM.BSIZE = class_anova(NOISE.DECOMP.CLEAN.NOAMBIG$extrinsic_frac, DOM.BSIZE.CLASS[class_idx_clean_noambig]),
-  DOM.KBAL  = class_anova(NOISE.DECOMP.CLEAN.NOAMBIG$extrinsic_frac, DOM.KBAL.CLASS[class_idx_clean_noambig]))
+ANOVA.BY.CLASS.CLEAN <- class_stats(class_anova, NOISE.DECOMP.CLEAN.NOAMBIG$extrinsic_frac, CLASS.VEC, class_idx_clean_noambig)
 
 # Omnibus F, p, and eta-squared per classification
 t(sapply(ANOVA.BY.CLASS,       function(a) c(F = a$f, df1 = a$df1, df2 = a$df2, p = a$p, eta_sq = a$eta_sq)))
@@ -1735,15 +1640,15 @@ INTR.FRAC <- local({
   setNames(frac, ie$gene)
 })[BURST.CONTRASTS$gene]
 INTR.FRAC[ATTN.FULL < FLOOR] <- NA_real_
-pdf(file.path(FIGURE.DIR, "main/08_intrinsic_fraction.pdf"), width = 7, height = 5, useDingbats = FALSE)
+fig_pdf("main/08_intrinsic_fraction.pdf", 7, 5)
 par(mar = c(5, 4.5, 2, 1))
 ## Histogram of the intrinsic fraction (genes with a fraction in [0, 1]), with regulatory-class medians
 ## (triangles above) and dominance-class medians (inverted triangles below). The legend sits at topleft,
 ## clear of the tall bars on the right.
 local({
   frac <- INTR.FRAC
-  reg_class <- REG.MEAN.CLASS
-  dom_class <- DOM.MEAN.CLASS
+  reg_class <- REG.VEC$mean
+  dom_class <- DOM.VEC$mean
   brk <- 30
   main <- NULL
   ok <- is.finite(frac) & frac>=0 & frac<=1
@@ -1893,9 +1798,9 @@ ARCH <- ARCH[match(BURST.CONTRASTS$gene, ARCH$gene), ]
 # allele in the hybrid, across all three features at once
 # (promoter_direction_test()), separately for burst frequency, burst
 # size, and kinetic balance.
-PROM.DIRECTION.TEST.BFREQ <- promoter_direction_test(BURST.CONTRASTS, PR, ARCH, REG.BFREQ.CLASS, quantity = "bfreq")
-PROM.DIRECTION.TEST.BSIZE <- promoter_direction_test(BURST.CONTRASTS, PR, ARCH, REG.BSIZE.CLASS, quantity = "bsize")
-PROM.DIRECTION.TEST.KBAL  <- promoter_direction_test(BURST.CONTRASTS, PR, ARCH, REG.KBAL.CLASS,  quantity = "kbal")
+PROM.DIRECTION.TEST.BFREQ <- promoter_direction_test(BURST.CONTRASTS, PR, ARCH, REG.VEC$bfreq, quantity = "bfreq")
+PROM.DIRECTION.TEST.BSIZE <- promoter_direction_test(BURST.CONTRASTS, PR, ARCH, REG.VEC$bsize, quantity = "bsize")
+PROM.DIRECTION.TEST.KBAL  <- promoter_direction_test(BURST.CONTRASTS, PR, ARCH, REG.VEC$kbal,  quantity = "kbal")
 print(PROM.DIRECTION.TEST.BFREQ)
 print(PROM.DIRECTION.TEST.BSIZE)
 print(PROM.DIRECTION.TEST.KBAL)
@@ -1904,15 +1809,15 @@ print(PROM.DIRECTION.TEST.KBAL)
 # same gene set by |delta| magnitude and checks whether concordance
 # rises from the smallest bin toward the largest, for burst frequency,
 # burst size, and kinetic balance
-TATA.CONCORD.BINS.BFREQ   <- concordance_by_magnitude(ARCH$tata_delta,        BURST.CONTRASTS$bfreq_cis_est, REG.BFREQ.CLASS)
-POLYAT.CONCORD.BINS.BFREQ <- concordance_by_magnitude(ARCH$polyat_delta,      BURST.CONTRASTS$bfreq_cis_est, REG.BFREQ.CLASS)
-OCC.CONCORD.BINS.BFREQ    <- concordance_by_magnitude(ARCH$occ_access_delta,  BURST.CONTRASTS$bfreq_cis_est, REG.BFREQ.CLASS)
-TATA.CONCORD.BINS.BSIZE   <- concordance_by_magnitude(ARCH$tata_delta,        BURST.CONTRASTS$bsize_cis_est, REG.BSIZE.CLASS)
-POLYAT.CONCORD.BINS.BSIZE <- concordance_by_magnitude(ARCH$polyat_delta,      BURST.CONTRASTS$bsize_cis_est, REG.BSIZE.CLASS)
-OCC.CONCORD.BINS.BSIZE    <- concordance_by_magnitude(ARCH$occ_access_delta,  BURST.CONTRASTS$bsize_cis_est, REG.BSIZE.CLASS)
-TATA.CONCORD.BINS.KBAL    <- concordance_by_magnitude(ARCH$tata_delta,        BURST.CONTRASTS$kbal_cis_est,  REG.KBAL.CLASS)
-POLYAT.CONCORD.BINS.KBAL  <- concordance_by_magnitude(ARCH$polyat_delta,      BURST.CONTRASTS$kbal_cis_est,  REG.KBAL.CLASS)
-OCC.CONCORD.BINS.KBAL     <- concordance_by_magnitude(ARCH$occ_access_delta,  BURST.CONTRASTS$kbal_cis_est,  REG.KBAL.CLASS)
+TATA.CONCORD.BINS.BFREQ   <- concordance_by_magnitude(ARCH$tata_delta,        BURST.CONTRASTS$bfreq_cis_est, REG.VEC$bfreq)
+POLYAT.CONCORD.BINS.BFREQ <- concordance_by_magnitude(ARCH$polyat_delta,      BURST.CONTRASTS$bfreq_cis_est, REG.VEC$bfreq)
+OCC.CONCORD.BINS.BFREQ    <- concordance_by_magnitude(ARCH$occ_access_delta,  BURST.CONTRASTS$bfreq_cis_est, REG.VEC$bfreq)
+TATA.CONCORD.BINS.BSIZE   <- concordance_by_magnitude(ARCH$tata_delta,        BURST.CONTRASTS$bsize_cis_est, REG.VEC$bsize)
+POLYAT.CONCORD.BINS.BSIZE <- concordance_by_magnitude(ARCH$polyat_delta,      BURST.CONTRASTS$bsize_cis_est, REG.VEC$bsize)
+OCC.CONCORD.BINS.BSIZE    <- concordance_by_magnitude(ARCH$occ_access_delta,  BURST.CONTRASTS$bsize_cis_est, REG.VEC$bsize)
+TATA.CONCORD.BINS.KBAL    <- concordance_by_magnitude(ARCH$tata_delta,        BURST.CONTRASTS$kbal_cis_est,  REG.VEC$kbal)
+POLYAT.CONCORD.BINS.KBAL  <- concordance_by_magnitude(ARCH$polyat_delta,      BURST.CONTRASTS$kbal_cis_est,  REG.VEC$kbal)
+OCC.CONCORD.BINS.KBAL     <- concordance_by_magnitude(ARCH$occ_access_delta,  BURST.CONTRASTS$kbal_cis_est,  REG.VEC$kbal)
 cat("\n-- TATA score: concordance by magnitude, burst frequency --\n")
 print(TATA.CONCORD.BINS.BFREQ)
 cat("\n-- poly(dA:dT) length: concordance by magnitude, burst frequency --\n")
@@ -1932,7 +1837,7 @@ print(POLYAT.CONCORD.BINS.KBAL)
 cat("\n-- nucleosome occupancy (NuPoP): concordance by magnitude, frequency-size balance --\n")
 print(OCC.CONCORD.BINS.KBAL)
 
-pdf(file.path(FIGURE.DIR, "extra/S_promoter_concordance_by_magnitude.pdf"), width = 13, height = 13, useDingbats = FALSE)
+fig_pdf("extra/S_promoter_concordance_by_magnitude.pdf", 13, 13)
 par(mfrow = c(3, 3))
 plot_concordance_by_magnitude(TATA.CONCORD.BINS.BFREQ,   main = "TATA (burst frequency)")
 plot_concordance_by_magnitude(POLYAT.CONCORD.BINS.BFREQ, main = "poly(dA:dT) (burst frequency)")
@@ -1949,9 +1854,9 @@ dev.off()
 # Intersects a significant cis component of divergence (Cis, Cis +
 # Trans, or Compensatory) with a large shift in a promoter feature,
 # ranked by |<quantity>_cis_est|. 
-PROM.NOISE.CANDIDATES.BFREQ <- promoter_noise_candidates(BURST.CONTRASTS, PR, ARCH, REG.BFREQ.CLASS, quantity = "bfreq")
-PROM.NOISE.CANDIDATES.BSIZE <- promoter_noise_candidates(BURST.CONTRASTS, PR, ARCH, REG.BSIZE.CLASS, quantity = "bsize")
-PROM.NOISE.CANDIDATES.KBAL  <- promoter_noise_candidates(BURST.CONTRASTS, PR, ARCH, REG.KBAL.CLASS,  quantity = "kbal")
+PROM.NOISE.CANDIDATES.BFREQ <- promoter_noise_candidates(BURST.CONTRASTS, PR, ARCH, REG.VEC$bfreq, quantity = "bfreq")
+PROM.NOISE.CANDIDATES.BSIZE <- promoter_noise_candidates(BURST.CONTRASTS, PR, ARCH, REG.VEC$bsize, quantity = "bsize")
+PROM.NOISE.CANDIDATES.KBAL  <- promoter_noise_candidates(BURST.CONTRASTS, PR, ARCH, REG.VEC$kbal,  quantity = "kbal")
 write.csv(PROM.NOISE.CANDIDATES.BFREQ$tata,   file.path(TABLE.DIR, "tata_bfreq_candidates.csv"),   row.names = FALSE)
 write.csv(PROM.NOISE.CANDIDATES.BFREQ$polyat, file.path(TABLE.DIR, "polyat_bfreq_candidates.csv"), row.names = FALSE)
 write.csv(PROM.NOISE.CANDIDATES.BFREQ$occ,    file.path(TABLE.DIR, "occ_bfreq_candidates.csv"),    row.names = FALSE)
@@ -2107,7 +2012,7 @@ ELBOW.INPUTS <- list(
   HYBRID = list(pct = PCT.HYBRID, cumu = SUM.HYBRID, pcs = PCS.HYBRID),
   MERGE  = list(pct = PCT.MERGE,  cumu = SUM.MERGE,  pcs = PCS.MERGE))
 
-pdf(file.path(FIGURE.DIR, "extra/S_pca_elbow.pdf"), width = 6, height = 5, useDingbats = FALSE)
+fig_pdf("extra/S_pca_elbow.pdf", 6, 5)
 for (nm in names(ELBOW.INPUTS)) {
   e <- ELBOW.INPUTS[[nm]]
   plot_df <- data.frame(pct = e$pct, cumu = e$cumu, rank = seq_along(e$pct))
@@ -2267,7 +2172,7 @@ METRIC.CHECK.MIX.SC <- local({
 })
 cat(sprintf("Sc parent: Manhattan vs Euclidean ARI = %.3f\n", METRIC.CHECK.MIX.SC$ari))
 
-pdf(file.path(FIGURE.DIR, "extra/S_umap_clustering_checks.pdf"), width = 6, height = 5, useDingbats = FALSE)
+fig_pdf("extra/S_umap_clustering_checks.pdf", 6, 5)
 YSC.MIX.SC <- suppressWarnings(RunUMAP(YSC.MIX.SC, dims = 1:PCS.MIX.SC, verbose = FALSE))
 umap_plot(YSC.MIX.SC, "Sc parent (mono-culture)", group.by = "seurat_clusters")
 
@@ -2323,7 +2228,7 @@ plot_cluster_marker_enrichment(RES.HYB.SE, "Hybrid, Se allele", file.path(FIGURE
 
 # Pseudobulk correlation of each hybrid-allele cluster against each
 # corresponding parent cluster.
-pdf(file.path(FIGURE.DIR, "extra/S_sc_hybrid_cluster_consistency_scatter.pdf"), width = 4*length(SC.HYB.CLUSTERS), height = 4*length(SC.PAR.CLUSTERS), useDingbats = FALSE)
+fig_pdf("extra/S_sc_hybrid_cluster_consistency_scatter.pdf", 4*length(SC.HYB.CLUSTERS), 4*length(SC.PAR.CLUSTERS))
 par(mfrow=c(length(SC.PAR.CLUSTERS), length(SC.HYB.CLUSTERS)))
 for (pc in SC.PAR.CLUSTERS) for (hc in SC.HYB.CLUSTERS) {
   x <- rowSums(MIX.SC[,YSC.IDENTS[SC.PAR.ID] == pc]); y <- rowSums(HYB.SC[,YSC.IDENTS[SC.HYB.ID] == hc])
@@ -2332,7 +2237,7 @@ for (pc in SC.PAR.CLUSTERS) for (hc in SC.HYB.CLUSTERS) {
 }
 dev.off()
 
-pdf(file.path(FIGURE.DIR, "extra/S_se_hybrid_cluster_consistency_scatter.pdf"), width = 4*length(SE.HYB.CLUSTERS), height = 4*length(SE.PAR.CLUSTERS), useDingbats = FALSE)
+fig_pdf("extra/S_se_hybrid_cluster_consistency_scatter.pdf", 4*length(SE.HYB.CLUSTERS), 4*length(SE.PAR.CLUSTERS))
 par(mfrow=c(length(SE.PAR.CLUSTERS), length(SE.HYB.CLUSTERS)))
 for (pc in SE.PAR.CLUSTERS) for (hc in SE.HYB.CLUSTERS) {
   x <- rowSums(MIX.SE[,YSC.IDENTS[SE.PAR.ID] == pc]); y <- rowSums(HYB.SE[,YSC.IDENTS[SE.HYB.ID] == hc])
@@ -2343,7 +2248,7 @@ dev.off()
 
 # Pseudobulk correlation of each Sc-parent cluster against all of Se,
 # identifying which Sc-parent cluster is the species comparison point.
-pdf(file.path(FIGURE.DIR, "extra/S_sc_cluster_vs_se_scatter.pdf"), width = 6, height = 4*length(SC.PAR.CLUSTERS), useDingbats = FALSE)
+fig_pdf("extra/S_sc_cluster_vs_se_scatter.pdf", 6, 4*length(SC.PAR.CLUSTERS))
 par(mfrow=c(length(SC.PAR.CLUSTERS),1))
 SC.PAR.VS.SE.COR <- setNames(numeric(length(SC.PAR.CLUSTERS)), SC.PAR.CLUSTERS)
 for (pc in SC.PAR.CLUSTERS) {
@@ -2388,7 +2293,7 @@ CL.MIX.SC <- Idents(YSC.MIX.SC)[colnames(CONTRAST.MATS$MIX.SC)]
 WB.MIX.SC <- within_between_decomp(CONTRAST.MATS$MIX.SC, CONTRAST.EXPOS$MIX.SC, CL.MIX.SC)
 cat("Sc parent: cells per cluster\n"); print(WB.MIX.SC$cluster_n)
 
-pdf(file.path(FIGURE.DIR, "extra/S_within_between_hist_MIX.SC.pdf"), width = 6, height = 5, useDingbats = FALSE)
+fig_pdf("extra/S_within_between_hist_MIX.SC.pdf", 6, 5)
 WB.HIST.MIX.SC <- plot_within_between_hist(WB.MIX.SC, main = "Sc parent: within/between-cluster variance ratio")
 dev.off()
 cat(sprintf("Sc parent: within/between ratio, n = %d genes, %.1f%% with within > between (ratio > 1)\n",
@@ -2399,7 +2304,7 @@ MU.LOG2.MIX.SC    <- setNames(log2(BF.MIX.SC$MU), rownames(BF.MIX.SC))
 BFREQ.LOG2.MIX.SC <- setNames(log2(BF.MIX.SC$DISP), rownames(BF.MIX.SC))
 BSIZE.LOG2.MIX.SC <- setNames(log2(BF.MIX.SC$MU / BF.MIX.SC$DISP), rownames(BF.MIX.SC))
 
-pdf(file.path(FIGURE.DIR, "extra/S_within_between_vs_burst_MIX.SC.pdf"), width = 15, height = 5, useDingbats = FALSE)
+fig_pdf("extra/S_within_between_vs_burst_MIX.SC.pdf", 15, 5)
 par(mfrow = c(1, 3), mar = c(5, 4.5, 2, 1))
 WB.VS.MU.MIX.SC    <- plot_within_between_vs_quantity(WB.MIX.SC, MU.LOG2.MIX.SC,    xlab = "log2(mean)")
 WB.VS.BFREQ.MIX.SC <- plot_within_between_vs_quantity(WB.MIX.SC, BFREQ.LOG2.MIX.SC, xlab = "log2(burst frequency)")
@@ -2414,7 +2319,7 @@ CL.MIX.SE <- Idents(YSC.MIX.SE)[colnames(CONTRAST.MATS$MIX.SE)]
 WB.MIX.SE <- within_between_decomp(CONTRAST.MATS$MIX.SE, CONTRAST.EXPOS$MIX.SE, CL.MIX.SE)
 cat("Se parent: cells per cluster\n"); print(WB.MIX.SE$cluster_n)
 
-pdf(file.path(FIGURE.DIR, "extra/S_within_between_hist_MIX.SE.pdf"), width = 6, height = 5, useDingbats = FALSE)
+fig_pdf("extra/S_within_between_hist_MIX.SE.pdf", 6, 5)
 WB.HIST.MIX.SE <- plot_within_between_hist(WB.MIX.SE, main = "Se parent: within/between-cluster variance ratio")
 dev.off()
 cat(sprintf("Se parent: within/between ratio, n = %d genes, %.1f%% with within > between (ratio > 1)\n",
@@ -2425,7 +2330,7 @@ MU.LOG2.MIX.SE    <- setNames(log2(BF.MIX.SE$MU), rownames(BF.MIX.SE))
 BFREQ.LOG2.MIX.SE <- setNames(log2(BF.MIX.SE$DISP), rownames(BF.MIX.SE))
 BSIZE.LOG2.MIX.SE <- setNames(log2(BF.MIX.SE$MU / BF.MIX.SE$DISP), rownames(BF.MIX.SE))
 
-pdf(file.path(FIGURE.DIR, "extra/S_within_between_vs_burst_MIX.SE.pdf"), width = 15, height = 5, useDingbats = FALSE)
+fig_pdf("extra/S_within_between_vs_burst_MIX.SE.pdf", 15, 5)
 par(mfrow = c(1, 3), mar = c(5, 4.5, 2, 1))
 WB.VS.MU.MIX.SE    <- plot_within_between_vs_quantity(WB.MIX.SE, MU.LOG2.MIX.SE,    xlab = "log2(mean)")
 WB.VS.BFREQ.MIX.SE <- plot_within_between_vs_quantity(WB.MIX.SE, BFREQ.LOG2.MIX.SE, xlab = "log2(burst frequency)")
@@ -2442,7 +2347,7 @@ cat(sprintf("Se parent: within/between vs burst size, n = %d, Spearman rho = %.3
 ## by the shared GENES ortholog-pair set built earlier in the pipeline,
 ## so no additional ortholog mapping is needed here). Spearman rho
 ## reported, same rank-based convention used throughout this section.
-pdf(file.path(FIGURE.DIR, "extra/S_within_between_cross_species.pdf"), width = 6, height = 6, useDingbats = FALSE)
+fig_pdf("extra/S_within_between_cross_species.pdf", 6, 6)
 WB.CROSS.SPECIES <- local({
   wb_a <- WB.MIX.SC
   wb_b <- WB.MIX.SE
@@ -2464,18 +2369,14 @@ dev.off()
 cat(sprintf("Within/between ratio, Sc vs Se parent, n = %d genes, Spearman rho = %.3f\n",
             WB.CROSS.SPECIES$n, WB.CROSS.SPECIES$rho))
 
-WB.BY.REG.MEAN  <- report_within_between_by_class(WB.MIX.SC, WB.MIX.SE, REG.MEAN.CLASS,  BURST.CONTRASTS$gene, REG.CLASS, COLOR.LIST.1,
-                      "Sc parent", "Se parent", "regulatory class (mean)",           file.path(FIGURE.DIR, "extra/S_within_between_by_reg_mean_class.pdf"))
-WB.BY.REG.BFREQ <- report_within_between_by_class(WB.MIX.SC, WB.MIX.SE, REG.BFREQ.CLASS, BURST.CONTRASTS$gene, REG.CLASS, COLOR.LIST.1,
-                      "Sc parent", "Se parent", "regulatory class (burst frequency)", file.path(FIGURE.DIR, "extra/S_within_between_by_reg_bfreq_class.pdf"))
-WB.BY.REG.BSIZE <- report_within_between_by_class(WB.MIX.SC, WB.MIX.SE, REG.BSIZE.CLASS, BURST.CONTRASTS$gene, REG.CLASS, COLOR.LIST.1,
-                      "Sc parent", "Se parent", "regulatory class (burst size)",     file.path(FIGURE.DIR, "extra/S_within_between_by_reg_bsize_class.pdf"))
-WB.BY.DOM.MEAN  <- report_within_between_by_class(WB.MIX.SC, WB.MIX.SE, DOM.MEAN.CLASS,  BURST.CONTRASTS$gene, DOM.CLASS, COLOR.LIST.2,
-                      "Sc parent", "Se parent", "dominance class (mean)",            file.path(FIGURE.DIR, "extra/S_within_between_by_dom_mean_class.pdf"))
-WB.BY.DOM.BFREQ <- report_within_between_by_class(WB.MIX.SC, WB.MIX.SE, DOM.BFREQ.CLASS, BURST.CONTRASTS$gene, DOM.CLASS, COLOR.LIST.2,
-                      "Sc parent", "Se parent", "dominance class (burst frequency)", file.path(FIGURE.DIR, "extra/S_within_between_by_dom_bfreq_class.pdf"))
-WB.BY.DOM.BSIZE <- report_within_between_by_class(WB.MIX.SC, WB.MIX.SE, DOM.BSIZE.CLASS, BURST.CONTRASTS$gene, DOM.CLASS, COLOR.LIST.2,
-                      "Sc parent", "Se parent", "dominance class (burst size)",     file.path(FIGURE.DIR, "extra/S_within_between_by_dom_bsize_class.pdf"))
+CLASS.LEVELS <- list(REG = REG.CLASS, DOM = DOM.CLASS)
+CLASS.COLORS <- list(REG = COLOR.LIST.1, DOM = COLOR.LIST.2)
+for (kind in c("REG", "DOM"))
+  for (q in c("mean", "bfreq", "bsize"))
+    report_within_between_by_class(WB.MIX.SC, WB.MIX.SE, CLASS.VEC[[kind]][[q]], BURST.CONTRASTS$gene,
+      CLASS.LEVELS[[kind]], CLASS.COLORS[[kind]], "Sc parent", "Se parent",
+      sprintf("%s class (%s)", c(REG = "regulatory", DOM = "dominance")[[kind]], QUANTITY.LABEL[[q]]),
+      file.path(FIGURE.DIR, sprintf("extra/S_within_between_by_%s_%s_class.pdf", tolower(kind), q)))
 
 ## 7.6 Cell-cycle and metabolic module scoring
 # Scores every cell for cell-cycle phase (three curated regulons: the
@@ -2523,7 +2424,7 @@ COV.DIAG.MIX.SE <- covariate_noise_diagnostic(CONTRAST.MATS$MIX.SE, CONTRAST.EXP
 COV.DIAG.HYB.SC <- covariate_noise_diagnostic(CONTRAST.MATS$HYB.SC, CONTRAST.EXPOS$HYB,    CONTRAST.FITS$HYB.SC, CC.AXIS.HYB.SC, MET.STATE.HYB.SC, "Hybrid, Sc allele")
 COV.DIAG.HYB.SE <- covariate_noise_diagnostic(CONTRAST.MATS$HYB.SE, CONTRAST.EXPOS$HYB,    CONTRAST.FITS$HYB.SE, CC.AXIS.HYB.SE, MET.STATE.HYB.SE, "Hybrid, Se allele")
 
-pdf(file.path(FIGURE.DIR, "extra/S_covariate_noise_diagnostic.pdf"), width = 9, height = 4.5, useDingbats = FALSE)
+fig_pdf("extra/S_covariate_noise_diagnostic.pdf", 9, 4.5)
 plot_covariate_noise_diagnostic(COV.DIAG.MIX.SC, "Sc parent")
 plot_covariate_noise_diagnostic(COV.DIAG.MIX.SE, "Se parent")
 plot_covariate_noise_diagnostic(COV.DIAG.HYB.SC, "Hybrid, Sc allele")
@@ -2547,7 +2448,7 @@ CC.SHARED.HYBRID <- cell_cycle_continuum_shared(YSC.HYB.SC, YSC.HYB.SE)
 COMP.BOUND.PARENT <- species_composition_report(CC.SHARED.PARENT$x1, CC.SHARED.PARENT$x2, MET.SCORE.MIX.SC, MET.SCORE.MIX.SE, COV.DIAG.MIX.SC, COV.DIAG.MIX.SE, "Sc vs Se parent")
 COMP.BOUND.HYBRID <- species_composition_report(CC.SHARED.HYBRID$x1, CC.SHARED.HYBRID$x2, MET.SCORE.HYB.SC, MET.SCORE.HYB.SE, COV.DIAG.HYB.SC, COV.DIAG.HYB.SE, "Hybrid, Sc vs Se allele")
 
-pdf(file.path(FIGURE.DIR, "extra/S_species_composition_bound.pdf"), width = 8, height = 5, useDingbats = FALSE)
+fig_pdf("extra/S_species_composition_bound.pdf", 8, 5)
 par(mfrow = c(1, 2), mar = c(8, 4.5, 3, 1))
 barplot(setNames(COMP.BOUND.PARENT$bound, COMP.BOUND.PARENT$axis), las = 2, col = COLOR.GREY[["mid"]], border = NA,
         ylab = "bound on expected noise shift (fraction of residual SD)", main = "Sc vs Se parent")
@@ -2893,7 +2794,7 @@ ADJ.CORR <- do.call(rbind, lapply(names(ALL.RAW), adj_corr_row, all_raw = ALL.RA
 print(ADJ.CORR, row.names = FALSE)
 
 ## 9.6 Diagnostic plots
-pdf(file.path(FIGURE.DIR, "extra", "external_noise_validation.pdf"), width = 8, height = 4)
+fig_pdf(file.path("extra", "external_noise_validation.pdf"), 8, 4, useDingbats = TRUE)
 for (src in names(EXT.MERGE)) {
   d <- EXT.MERGE[[src]]
   par(mfrow = c(1, 2))
@@ -2908,7 +2809,7 @@ dev.off()
 
 # One page per single-cell RNA-seq source, showing the mean panel, the
 # raw CV^2 panel, and the mean-adjusted panel together
-pdf(file.path(FIGURE.DIR, "extra", "external_noise_validation_scrnaseq.pdf"), width = 12, height = 4)
+fig_pdf(file.path("extra", "external_noise_validation_scrnaseq.pdf"), 12, 4, useDingbats = TRUE)
 for (src in names(NEW.SOURCES)) {
   d <- merge(NB.SC, ALL.RAW[[src]], by = "ORF")
   par(mfrow = c(1, 3))
@@ -3183,7 +3084,7 @@ for (p in P) {
 }
 dev.off()
 
-pdf(file.path(FIGURE.DIR, "extended", "Power.Analysis.heatmap_colorbar.pdf"), width = 4, height = 1.3)
+fig_pdf(file.path("extended", "Power.Analysis.heatmap_colorbar.pdf"), 4, 1.3, useDingbats = TRUE)
 par(mar = c(2.2,1,1,1))
 image(seq(0,1,length.out=100), 1, matrix(seq(0,1,length.out=100), ncol=1), col = HM.COLS,
       axes = FALSE, xlab = paste0("Power to detect SIZE.RATIO = ", round(SIZE.RATIO[HM.Q],2)), ylab = "")
@@ -3220,7 +3121,7 @@ for (p in P) {
 }
 dev.off()
 
-pdf(file.path(FIGURE.DIR, "extended", "Power.Analysis.min_detectable_ratio_colorbar.pdf"), width = 4, height = 1.3)
+fig_pdf(file.path("extended", "Power.Analysis.min_detectable_ratio_colorbar.pdf"), 4, 1.3, useDingbats = TRUE)
 par(mar = c(2.2,1,1,1))
 zseq <- seq(MDR.ZLIM[1], MDR.ZLIM[2], length.out = 100)
 image(zseq, 1, matrix(zseq, ncol=1), col = MDR.COLS,
