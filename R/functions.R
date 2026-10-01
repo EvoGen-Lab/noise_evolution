@@ -82,6 +82,7 @@
 ###     build_reg_go_sets() - Builds one GO gene set per (class, direction) pair for a given classification quantity.
 ###     build_component_go_sets() - Builds pooled any-cis or any-trans GO gene sets, direction-matched on that component's own sign.
 ###     run_enrichment() - Runs GO (BP/MF/CC, simplified) and KEGG enrichment for one gene set against a fixed universe.
+###     axis_pole_enrichment() - GO (BP/MF/CC) or KEGG enrichment of one pole of a co-expression axis against the co-expressed universe.
 ###     n_sig_terms() - Counts significant terms (q < threshold) in one enrichResult, 0 for a NULL or empty result.
 ###     print_enrich_brief() - Console view of one enrichResult: Description, p.adjust and Count for the n_top most significant terms.
 ###     plot_cluster_marker_enrichment() - Writes cluster_marker_enrichment()'s per-cluster up/down enrichment to one pdf (its bar-pair helper is nested inside).
@@ -1560,6 +1561,16 @@ run_enrichment <- function(genes, universe, orgdb = org.Sc.sgd.db, keytype = "OR
                                  TERM2NAME = kegg_data$KEGGPATHID2NAME, qvalueCutoff = qval),
                    error = function(e) NULL)
   list(BP = go_one("BP"), CC = go_one("CC"), MF = go_one("MF"), KEGG = kegg)
+}
+
+## axis_pole_enrichment: GO (BP, MF or CC, simplified) or KEGG enrichment of one pole of a co-expression axis
+## (genes) against the co-expressed universe, at enrichGO()/enrichKEGG()'s default cutoffs. A pole with fewer
+## than min_genes genes returns NULL without testing.
+axis_pole_enrichment <- function(genes, universe, ont = c("BP", "MF", "CC", "KEGG"), min_genes = 0) {
+  ont <- match.arg(ont)
+  if (length(genes) < min_genes) return(NULL)
+  if (ont == "KEGG") enrichKEGG(gene = genes, universe = universe, organism = "sce")
+  else simplify(enrichGO(gene = genes, universe = universe, OrgDb = org.Sc.sgd.db, keyType = "ORF", ont = ont))
 }
 
 ## n_sig_terms: number of terms at qvalue < q in one enrichResult, 0 for a

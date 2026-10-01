@@ -1211,8 +1211,8 @@ for (ax in COEXPR.AXES) {
       genes_lo <- names(post_lo)[post_lo > 0.5]
       genes_hi <- names(post_hi)[post_hi > 0.5]
 
-      enrich_lo <- if (length(genes_lo) >= 5) simplify(enrichGO(gene = genes_lo, universe = co_genes, OrgDb = org.Sc.sgd.db, keyType = "ORF", ont = "BP")) else NULL
-      enrich_hi <- if (length(genes_hi) >= 5) simplify(enrichGO(gene = genes_hi, universe = co_genes, OrgDb = org.Sc.sgd.db, keyType = "ORF", ont = "BP")) else NULL
+      enrich_lo <- axis_pole_enrichment(genes_lo, co_genes, "BP", min_genes = 5)
+      enrich_hi <- axis_pole_enrichment(genes_hi, co_genes, "BP", min_genes = 5)
 
       out[[paste0("axis", k)]] <- list(
         var_explained = axis_var[as.character(k)], eff_genes = axis_pr[as.character(k)],
@@ -1298,15 +1298,8 @@ NEG.LOAD.GENES <- AXIS1$genes_lo
 POS.LOAD.GENES <- AXIS1$genes_hi
 length(NEG.LOAD.GENES); length(POS.LOAD.GENES); length(CO.GENES)
 
-NEG.ENRICH.BP   <- AXIS1$enrich_lo
-NEG.ENRICH.MF   <- simplify(enrichGO(gene = NEG.LOAD.GENES, universe = CO.GENES, OrgDb = org.Sc.sgd.db, keyType = "ORF", ont = "MF"))
-NEG.ENRICH.CC   <- simplify(enrichGO(gene = NEG.LOAD.GENES, universe = CO.GENES, OrgDb = org.Sc.sgd.db, keyType = "ORF", ont = "CC"))
-NEG.ENRICH.KEGG <- enrichKEGG(gene = NEG.LOAD.GENES, universe = CO.GENES, organism = "sce")
-
-POS.ENRICH.BP   <- AXIS1$enrich_hi
-POS.ENRICH.MF   <- simplify(enrichGO(gene = POS.LOAD.GENES, universe = CO.GENES, OrgDb = org.Sc.sgd.db, keyType = "ORF", ont = "MF"))
-POS.ENRICH.CC   <- simplify(enrichGO(gene = POS.LOAD.GENES, universe = CO.GENES, OrgDb = org.Sc.sgd.db, keyType = "ORF", ont = "CC"))
-POS.ENRICH.KEGG <- enrichKEGG(gene = POS.LOAD.GENES, universe = CO.GENES, organism = "sce")
+AXIS1.ENRICH <- lapply(list(NEG = list(genes = NEG.LOAD.GENES, bp = AXIS1$enrich_lo), POS = list(genes = POS.LOAD.GENES, bp = AXIS1$enrich_hi)), function(pole)
+  c(list(BP = pole$bp), lapply(c(MF = "MF", CC = "CC", KEGG = "KEGG"), axis_pole_enrichment, genes = pole$genes, universe = CO.GENES)))
 
 # Growth-rate check: log2 fold change in mean expression (Sc/Se) for
 # each loading group
@@ -1340,8 +1333,7 @@ dev.off()
 NEG.TAIL.GENES <- names(NEG.MU.LOG2FC)[NEG.MU.LOG2FC > 1]
 length(NEG.TAIL.GENES)
 
-NEG.TAIL.ENRICH.BP <- simplify(enrichGO(gene = NEG.TAIL.GENES, universe = CO.GENES, OrgDb = org.Sc.sgd.db, keyType = "ORF", ont = "BP"))
-NEG.TAIL.ENRICH.CC <- simplify(enrichGO(gene = NEG.TAIL.GENES, universe = CO.GENES, OrgDb = org.Sc.sgd.db, keyType = "ORF", ont = "CC"))
+NEG.TAIL.ENRICH <- lapply(c(BP = "BP", CC = "CC"), axis_pole_enrichment, genes = NEG.TAIL.GENES, universe = CO.GENES)
 
 # Cis/trans decomposition of axis 1's eigenvalue
 AXIS1.CT <- coexpr_axis_cis_trans(RANK.CHECK$loading1, COEXPR.POINT)
@@ -1431,7 +1423,7 @@ for (ax_mode in c("cis", "trans")) {
 # Checkpoint
 save(RESID, PLOIDY.F, COEXPR.POINT, CB, CB2, CB.CLASS, CB.DOM.CLASS,
      RANK.CHECK.LIST, CANDIDATE.LIST, EXTRA.AXES.LIST, VALIDATED.LIST,
-     AXIS1.CT, AXIS2.CT, BFREQ.BSIZE.OVERLAP.CO,
+     AXIS1.CT, AXIS2.CT, BFREQ.BSIZE.OVERLAP.CO, AXIS1.ENRICH, NEG.TAIL.ENRICH,
      file = ckpt_path(4))
 
 console_start(5)
