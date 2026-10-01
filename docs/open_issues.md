@@ -49,6 +49,6 @@ Source: `docs/function_review.md` (item numbers refer to its section 3), re-chec
 ## E. Structure and housekeeping
 
 - Section 7.1 to 7.4 now run as list-valued pipelines over `DS.NAMES` (`YSC`, `HVG`, `PCS`, `RES.SWEEP`, `BOOT`) through `prepare_dataset`, `elbow_pcs`, `cluster_dataset` and `umap_dataset`; they were checked with Seurat stubs only, not a real Seurat run. Sections 7.5 to 7.8 (within/between, cell-cycle, metabolic steps) still repeat per dataset, as do the paired Sc/Se blocks, the ploidy block and the power heatmap blocks 10.7 and 10.8; these were left on request.
-- The `plot_cis_trans_class` / `plot_mean_bfreq_class` pair and `plot_coexpr_scatter` still draw their own axes and legends; they could share `.se_scatter` once their class colouring is a parameter.
+- `.se_scatter` now serves `plot_contrast_scatter`, `plot_cis_trans_class`, `plot_dom_class` and `plot_coexpr_scatter`. `plot_mean_bfreq_class` keeps its own axes (grey points, per-class regression lines, rectangular panel) and shares only `class_slope_lines`.
 - Some `analysis.R` comments quote the algebra of a step in prose that now sits beside inline code; keep them in step with the code when it changes.
-- One-line function literals remain inside `R/functions.R` functions (accessors, small `sapply` bodies, `tryCatch` handlers). The scripts keep none except `tryCatch(error = function(e) NULL)` in `analysis.R`.
+- `R/functions.R` holds no one-line function literals except `tryCatch(error = function(e) ...)` handlers; longer anonymous functions inside apply calls (about 34) remain there.

@@ -33,8 +33,6 @@
 ###     eiv_components() - Errors-in-variables mean-bfreq coupling for one mode: attenuation-corrected variances, covariance and correlation, plus the raw correlation.
 ###   5. PLOTTING HELPERS AND GENE-LEVEL PLOTS
 ###     open_grid_pdf() - Opens a PDF sized to the panel grid it is about to hold, with tight margins throughout.
-###     line_colors() - Color ramp sized to the number of lines drawn in one panel.
-###     cluster_cols() - Cluster colors from the plum ramp, n colors via interpolation.
 ###     umap_plot() - UMAP with the shared cluster palette and on-plot labels.
 ###     fig_pdf() - Opens a PDF under FIGURE.DIR with the pipeline's figure settings.
 ###     class_count_barplot() - Gene (or pair) counts per class, bars colored by class.
@@ -43,7 +41,6 @@
 ###     plot_lines() - Plots one line per column of a matrix against a shared x vector, with reference lines at power 0.05 and 0.9.
 ###     legend_page() - One legend page mapping each line color to the value it represents.
 ###     power_line_figure() - Multi-panel PDF of power curves from the POWER array: one panel per (outer, inner) pair, one line per series value, with a legend page.
-###     .sym() - Symmetric axis limits spanning a vector of values plus their SE.
 ###     .se_scatter() - Shared SE-bar scatter body of the three gene-level scatters below.
 ###     plot_contrast_scatter() - Gene-level contrast scatter with SE bars: cis vs trans for one quantity, mean vs burst frequency or rotated burst kinetics for one mode.
 ###     sig_hist_panel() - Histogram of one contrast (quantity, mode) with the genes significant at q < sig shaded by direction.
@@ -146,33 +143,25 @@
 ###     fstar_from_r() - closed-form split fraction f* = [(2+r) - sqrt(r^2+4)] / (2r) for r = B*Nh/A.
 ###     gene_pass_group() - genes passing the filters in one group g: a finite NB dispersion, a mean count at or.
 ###     perm_label_draw() - one permutation's relabelings for every mode.
-###     dpar_est_col() - name of the dpar estimate column for quantity q in species sp.
 ###     eiv_mode_ci_row() - errors-in-variables correlation for one mode m with a gene-resampling bootstrap CI.
 ###     seed_check_rows() - Summary rows (correlation, SE ratio median and IQR, count) of a two-seed bootstrap SE comparison, for the gene-level and co-expression checks.
 ###     se_floor_row() - count and median bootstrap SE (one column per SE vector) among items whose attenuation is at least floor f.
 ###     coexpr_seed_check() - two-seed adequacy check for the co-expression bootstrap.
 ###     coexpr_perm_draw() - one permutation draw for the co-expression null: the pooled-cell order (n_tot cells),.
 ###     axis_mixture_summary() - variance explained, effective genes, mixture means and sigmas, and pole sizes of.
-###     mu_log2fc() - log2 fold change in mean expression (Sc/Se) for each gene, from the contrast fits.
-###     loading_group() - labels genes POS or NEG by membership in the two loading groups (NA for neither).
 ###     pole_trans_fractions() - for one gene group g, its size and the fraction classified any-trans (Trans or.
 ###     allele_cor_boot_se_row() - bootstrap SE of row i's allele-residual correlation between sc and se: B.
 ###     partial_cor_depth() - correlation of gene g's Sc- and Se-allele residuals with cell depth partialled out.
-###     class_median() - median of f within each level lv of the class vector cls.
 ###     to_seurat_counts() - converts a count matrix to a Seurat-ready sparse matrix with dash-delimited feature names.
 ###     stability_task_rows() - the candidate resolutions to bootstrap for dataset d: the chosen resolution plus the.
-###     reference_partition() - the cluster labels of dataset/resolution task k, recomputed on the fitted neighbor.
 ###     stability_dataset_inputs() - sparse counts and the fit settings (nfeatures, dims_n, metric) the cluster job.
 ###     boot_resample_matrix() - draws every bootstrap resample of dataset d up front, one column per replicate,.
 ###     metric_clusters() - clusters of a Seurat object at one resolution using the annoy distance metric m on the.
-###     cluster_sizes() - ids of the clusters holding at least min_cells of the cells in id_range (positions in idents).
 ###     consistent_pair_row() - keeps Sc-hybrid cluster sc as a pair only when its best Se-hybrid partner picks it.
 ###     noise_corr_rows() - Spearman correlation of mean, CV2, burst frequency and burst size between a source and MIX.SC or between two sources.
 ###     raw_source_table() - the ORF, Mean, CV2, BFREQ and BSIZE columns of one fitted source, in the layout shared.
 ###     add_cv2_adj() - adds CV2_ADJ, the loess residual of log CV2 on log mean (mean_adjusted_noise()), to one.
 ###     adj_corr_row() - agreement of source src's mean-adjusted noise (CV2_ADJ) with MIX.SC's (nb_sc) over the.
-###     contrast_fit_frame() - the MU and DISP columns of one fit frame fr for the given genes, as numeric.
-###     gene_seed_check() - two-seed comparison of the gene-level bootstrap SEs for mode m, for the mean and for burst frequency (bc1, bc2: the two BURST.CONTRASTS tables).
 ###     diet_for_markers() - strips a Seurat object to the counts and data layers FindMarkers needs, keeping the cluster job's input small.
 ###   13c. FUNCTIONS THE CLUSTER SCRIPTS RUN
 ###     pilot_split_se_one() - one gene's bootstrap SE of log(mu) and log(size) for the four datasets needed to compute A and B, plus the bootstrap.
@@ -185,11 +174,9 @@
 ###     report_regions() - Summarizes the regions that needed fallback flanks or stayed unscored,.
 ###     power_grid_row() - power of one grid row i (mean reads x cell count x burst-frequency size) over the SIZE.RATIO sweep.
 ###     bootstrap_ari_job() - one bootstrap replicate (job j of the tasks x replicates table).
-###     par_apply() - mclapply over X with one forked process per element (mc.preschedule = FALSE hands elements to workers one at a time,.
 ###     dataset_marker_enrichment() - for each cluster of dataset d at its final resolution, marker genes against the rest of the SAME dataset's.
 ###     go_enrich_job() - one enrichment job k.
 ###     ora_jobs() - one over-representation job per gene set in sets (named group::set), all against the same universe.
-###     pick_group() - the results in res whose job names start with group::, with the prefix removed from the names.
 ###     gse_job_set() - The rank-based enrichment jobs (BP, MF, CC) for one rank list.
 ###############################################################
 
@@ -333,7 +320,7 @@ fit_counts_offset <- function(mat, exposure, cl = NULL) {
     todo   <- c(todo, intersect(codetools::findGlobals(get(f, envir = globalenv()), merge = TRUE), ls(globalenv(), all.names = TRUE)))
   }
   chunk_id   <- cut(seq_len(nrow(mat)), length(cl), labels = FALSE)
-  mat_chunks <- lapply(split(seq_len(nrow(mat)), chunk_id), function(i) mat[i, , drop = FALSE])
+  mat_chunks <- split.data.frame(mat, chunk_id)
   parallel::clusterEvalQ(cl, suppressPackageStartupMessages(library(MASS)))
   parallel::clusterExport(cl, needed, envir = globalenv())
   fit_chunks <- parallel::parLapply(cl, mat_chunks, fit_counts_offset, exposure = exposure)
@@ -387,11 +374,12 @@ split_indices_by_depth <- function(n, f) {
 ## of a dispersion fit depends on informative cells, not on their fraction.
 qc_gene_keep <- function(mats, lambda0 = 0.20, cell_frac = 0.10) {
   genes <- Reduce(intersect, lapply(mats, rownames))
-  mats  <- lapply(mats, function(m) m[genes, , drop = FALSE])
-  depth <- vapply(mats, function(m) sum(m) / ncol(m), numeric(1))
+  mats  <- lapply(mats, `[`, genes, , drop = FALSE)
+  depth <- vapply(mats, sum, numeric(1)) / vapply(mats, ncol, integer(1))
   p_min <- lambda0 / min(depth)
   n_min <- ceiling(cell_frac * min(vapply(mats, ncol, integer(1))))
-  pass  <- lapply(mats, function(m) rowSums(m) / sum(m) >= p_min & rowSums(m > 0) >= n_min)
+  pass  <- vector("list", length(mats)); names(pass) <- names(mats)
+  for (i in seq_along(mats)) pass[[i]] <- rowSums(mats[[i]]) / sum(mats[[i]]) >= p_min & rowSums(mats[[i]] > 0) >= n_min
   list(genes = sort(genes[Reduce(`&`, pass)]), p_min = p_min, n_min = n_min,
        depth = depth, exp_mean = p_min * depth)
 }
@@ -599,8 +587,8 @@ eiv_components <- function(BURST.CONTRASTS, mode = .OUT_MODES) {
 ## ============================================================
 
 ## ---- Shared plotting helpers: panel layout, color ramps, line panels, UMAP ----
-## The helpers below serve the power-analysis figures (open_grid_pdf, line_colors, plot_lines,
-## legend_page) and the clustering figures (cluster_cols, umap_plot). open_grid_pdf() gives every
+## The helpers below serve the power-analysis figures (open_grid_pdf, plot_lines,
+## legend_page) and the clustering figures (umap_plot). open_grid_pdf() gives every
 ## multi-panel figure the same compact layout.
 
 ## Opens a PDF sized to the nr x nc panel grid it is about to hold.
@@ -611,19 +599,12 @@ open_grid_pdf <- function(file, nr, nc, panel_w = 2.3, panel_h = 2.3, mar = c(3,
   par(mfrow = c(nr, nc), mar = mar, mgp = mgp)
 }
 
-## Color ramp with n colors, one per line in a panel.
-line_colors <- function(n) colorRampPalette(POWER.COLOR)(n)
-
-## Cluster colors come from the plum ramp, kept separate from the warm power-curve ramp.
-## On-plot labels in umap_plot() carry identity alongside color.
-cluster_cols <- function(n) colorRampPalette(COLOR.CLUSTER)(n)
-
 ## Plots one line per column of `mat` against `xv`, using a color ramp
 ## sized to ncol(mat). Reference lines at power 0.05 (nominal false
 ## positive rate) and 0.9 (a common target) give every panel the same
 ## visual anchor regardless of which quantity is on the x-axis.
 plot_lines <- function(xv, mat, xlab = "", ylab = "Power", main = "", show_axes = TRUE, lwd = 1.4, x_at = NULL, x_labels = NULL) {
-  cols <- line_colors(ncol(mat))
+  cols <- colorRampPalette(POWER.COLOR)(ncol(mat))
   plot(xv, mat[, 1], type = "l", lwd = lwd, col = cols[1], ylim = c(0, 1), xlab = if (show_axes && is.null(x_at)) xlab else "", ylab = if (show_axes) ylab else "", xaxt = if (!is.null(x_at) || !show_axes) "n" else "s", yaxt = if (show_axes) "s" else "n", main = main, cex.main = 0.8)
   abline(h = 0.05, col = COLOR.ACCENT, lty = 2); abline(h = 0.9, col = COLOR.ACCENT, lty = 3)
   if (ncol(mat) > 1) for (k in 2:ncol(mat)) lines(xv, mat[,k], lwd = lwd, col = cols[k])
@@ -639,7 +620,7 @@ plot_lines <- function(xv, mat, xlab = "", ylab = "Power", main = "", show_axes 
 ## One legend page appended after a grid of panels, mapping each line
 ## color to the value it represents.
 legend_page <- function(labels, title) {
-  cols <- line_colors(length(labels))
+  cols <- colorRampPalette(POWER.COLOR)(length(labels))
   plot.new()
   legend("center", legend = labels, col = cols, lwd = 2, title = title, ncol = ceiling(length(labels)/15), bty = "n", cex = 0.9)
 }
@@ -649,7 +630,7 @@ legend_page <- function(labels, title) {
 umap_plot <- function(obj, title = NULL, group.by = NULL) {
   ids  <- if (is.null(group.by)) Idents(obj) else obj[[group.by, drop = TRUE]]
   lv   <- if (is.factor(ids)) levels(droplevels(ids)) else sort(unique(as.character(ids)))
-  cols <- setNames(cluster_cols(length(lv)), lv)
+  cols <- setNames(colorRampPalette(COLOR.CLUSTER)(length(lv)), lv)
   DimPlot(obj, reduction = "umap", group.by = group.by, cols = cols, label = TRUE, repel = TRUE) + ggtitle(title)
 }
 
@@ -673,7 +654,9 @@ class_count_barplot <- function(cls, levels, cols, main, ylab = "# of genes") {
 ## enrichment (obs/exp), * marks BH q < OVERLAP.FDR, and color is log2(obs/exp), diverging through white.
 class_overlap_triptych <- function(path, classes, levels, width, height, mar) {
   others <- c("bfreq", "bsize", "kbal")
-  rng <- shared_overlap_rng(lapply(others, function(o) list(classes$mean, classes[[o]])), levels)
+  pairs <- vector("list", length(others))
+  for (i in seq_along(others)) pairs[[i]] <- list(classes$mean, classes[[others[i]]])
+  rng <- shared_overlap_rng(pairs, levels)
   fig_pdf(path, width, height)
   par(mfrow = c(1, 3), mar = mar)
   for (o in others)
@@ -688,14 +671,19 @@ class_overlap_triptych <- function(path, classes, levels, width, height, mar) {
 ## "<quantity> <kind word> class<suffix>"; a kind word of "" leaves it out.
 class_heatmap_grid <- function(path, panels, classes, fdr, width, height, mfrow,
                                kind_words = c(REG = "regulatory", DOM = "dominance"), suffix = "") {
-  vec <- function(kind, q) if (kind == "REG") clean_reg(classes[[kind]][[q]]) else classes[[kind]][[q]]
-  lab <- function(kind, q) paste0(QUANTITY.LABEL[[q]], if (nzchar(kind_words[[kind]])) paste0(" ", kind_words[[kind]]), " class", suffix)
   fig_pdf(path, width, height)
   par(mfrow = mfrow)
   for (i in seq_len(nrow(panels))) {
     pn <- panels[i, ]
-    class_overlap_heatmap(vec(pn$y_kind, pn$y_q), vec(pn$x_kind, pn$x_q), fdr = fdr,
-                          ylab = lab(pn$y_kind, pn$y_q), xlab = lab(pn$x_kind, pn$x_q))
+    ## Class vector and axis label of the y and x side of this panel.
+    side <- list(y = list(), x = list())
+    for (a in names(side)) {
+      kind <- pn[[paste0(a, "_kind")]]; q <- pn[[paste0(a, "_q")]]
+      v <- classes[[kind]][[q]]
+      side[[a]]$vec <- if (kind == "REG") clean_reg(v) else v
+      side[[a]]$lab <- paste0(QUANTITY.LABEL[[q]], if (nzchar(kind_words[[kind]])) paste0(" ", kind_words[[kind]]), " class", suffix)
+    }
+    class_overlap_heatmap(side$y$vec, side$x$vec, fdr = fdr, ylab = side$y$lab, xlab = side$x$lab)
   }
   dev.off()
 }
@@ -740,13 +728,9 @@ power_line_figure <- function(file, power, grid, outer, inner, x, series, main_f
 
 ## ---- Gene-level scatters and histograms (square symmetric panels, SE bars) ----
 
-## Symmetric axis limits about zero that cover value +/- error.
-.sym <- function(v, e) { m <- max(abs(c(v + e, v - e)), na.rm = TRUE); c(-m, m) }
-
 ## .se_scatter(): square scatter of y against x, the shared body of plot_contrast_scatter(), plot_cis_trans_class(),
 ## plot_dom_class() and plot_coexpr_scatter(). sx, sy are SEs drawn as bars behind the points (NULL draws none).
-## bar_col is one colour or a function of the SE vector that returns one colour per bar; pt_col is one colour
-## or one per point. legend_labels with legend_cols adds a top-left legend. With diagonals = TRUE both axes
+## bar_col is one colour or list(x, y) with one colour per bar on each axis (already restricted to the plotted points); pt_col is one colour or one per point. legend_labels with legend_cols adds a top-left legend. With diagonals = TRUE both axes
 ## share one symmetric range (unless lim is given) and the dotted +/-45 degree lines are drawn, so
 ## same-direction and opposite-direction changes are readable. With diagonals = FALSE each axis gets its
 ## own symmetric range. Only points with a finite x, y and (when given) SEs are drawn.
@@ -762,15 +746,16 @@ power_line_figure <- function(file, power, grid, outer, inner, x, series, main_f
     if (is.null(lim)) { m <- max(abs(c(x + sx, x - sx, y + sy, y - sy)), na.rm = TRUE); lim <- c(-m, m) }
     xlim <- ylim <- lim
   } else {
-    xlim <- .sym(x, sx); ylim <- .sym(y, sy)
+    xlim <- c(-1, 1) * max(abs(c(x + sx, x - sx)), na.rm = TRUE)   # symmetric about zero, covering value +/- error
+    ylim <- c(-1, 1) * max(abs(c(y + sy, y - sy)), na.rm = TRUE)
   }
   op <- par(pty = "s"); on.exit(par(op))
   plot(NA, xlim = xlim, ylim = ylim, xlab = xlab, ylab = ylab, main = main)
   if (diagonals) { abline(0, 1, lty = 3, col = COLOR.GREY[["mid"]]); abline(0, -1, lty = 3, col = COLOR.GREY[["mid"]]) }
   abline(h = 0, v = 0, col = COLOR.GREY[["dark"]])
   if (bars) {
-    segments(x - sx, y, x + sx, y, col = if (is.function(bar_col)) bar_col(sx) else bar_col)
-    segments(x, y - sy, x, y + sy, col = if (is.function(bar_col)) bar_col(sy) else bar_col)
+    segments(x - sx, y, x + sx, y, col = if (is.list(bar_col)) bar_col$x else bar_col)
+    segments(x, y - sy, x, y + sy, col = if (is.list(bar_col)) bar_col$y else bar_col)
   }
   points(x, y, pch = 16, cex = pt_cex, col = pt_col)
   if (!is.null(legend_labels)) legend("topleft", legend = legend_labels, col = legend_cols, pch = 16, bty = "n", cex = 0.8)
@@ -792,25 +777,29 @@ power_line_figure <- function(file, power, grid, outer, inner, x, series, main_f
 plot_contrast_scatter <- function(BURST.CONTRASTS, type = c("cis_trans", "mean_bfreq", "burst_kinetics"), what, main = NULL, lim = NULL,
                                   bar_col = adjustcolor(COLOR.GREY[["dark"]], 0.33), pt_col = "black") {
   type <- match.arg(type)
-  col <- function(prefix, mode, stat) BURST.CONTRASTS[[paste0(prefix, "_", mode, "_", stat)]]
+  diagonals <- type != "burst_kinetics"
   if (type == "cis_trans") {
     quantity <- match.arg(what, c("mean", "bfreq", "bsize", "kbal", "cv2"))
     lab <- QUANTITY.LABEL[[quantity]]
     if (is.null(main)) main <- lab
-    .se_scatter(col(quantity, "cis", "est"), col(quantity, "cis", "se"), col(quantity, "trans", "est"), col(quantity, "trans", "se"),
-                xlab = paste(lab, "cis (log2)"), ylab = paste(lab, "trans (log2)"), main = main, lim = lim, bar_col = bar_col, pt_col = pt_col)
-  } else if (type == "mean_bfreq") {
-    mode <- match.arg(what, .OUT_MODES)
-    if (is.null(main)) main <- paste0("mean vs noise: ", mode)
-    .se_scatter(col("mean", mode, "est"), col("mean", mode, "se"), col("bfreq", mode, "est"), col("bfreq", mode, "se"),
-                xlab = "mean (log2)", ylab = "dispersion (log2)", main = main, bar_col = bar_col, pt_col = pt_col)
+    cols <- paste0(quantity, c("_cis_est", "_cis_se", "_trans_est", "_trans_se"))
+    xlab <- paste(lab, "cis (log2)"); ylab <- paste(lab, "trans (log2)")
   } else {
     mode <- match.arg(what, .OUT_MODES)
-    if (is.null(main)) main <- paste0("burst kinetics: ", mode)
-    .se_scatter(col("mean", mode, "est"), col("mean", mode, "se"), col("kbal", mode, "est"), col("kbal", mode, "se"),
-                xlab = "net mean change (log2)", ylab = "frequency - amplitude (kinetic balance, log2)", main = main,
-                diagonals = FALSE, bar_col = bar_col, pt_col = pt_col)
+    lim <- NULL
+    if (type == "mean_bfreq") {
+      if (is.null(main)) main <- paste0("mean vs noise: ", mode)
+      cols <- paste0(c("mean_", "mean_", "bfreq_", "bfreq_"), mode, c("_est", "_se", "_est", "_se"))
+      xlab <- "mean (log2)"; ylab <- "dispersion (log2)"
+    } else {
+      if (is.null(main)) main <- paste0("burst kinetics: ", mode)
+      cols <- paste0(c("mean_", "mean_", "kbal_", "kbal_"), mode, c("_est", "_se", "_est", "_se"))
+      xlab <- "net mean change (log2)"; ylab <- "frequency - amplitude (kinetic balance, log2)"
+    }
   }
+  v <- BURST.CONTRASTS[cols]
+  .se_scatter(v[[1]], v[[2]], v[[3]], v[[4]], xlab = xlab, ylab = ylab, main = main, lim = lim, diagonals = diagonals,
+              bar_col = bar_col, pt_col = pt_col)
 }
 
 ## sig_hist_panel: histogram of one contrast (quantity, mode) with the genes significant at q < sig shaded by
@@ -1018,9 +1007,10 @@ row_cor <- function(A, B) {
 ## (regulatory, dominance, burst kinetics).
 class_mean_var <- function(x, class) {
   ok  <- !is.na(class) & !is.na(x)
-  agg <- aggregate(x[ok], by = list(class = class[ok]), FUN = function(v) c(n = length(v), mean = mean(v), var = var(v)))
-  data.frame(class = agg$class, n = agg$x[, "n"], mean = agg$x[, "mean"],
-             var = agg$x[, "var"], row.names = NULL)
+  by  <- list(class = class[ok])
+  agg <- aggregate(x[ok], by = by, FUN = length)
+  data.frame(class = agg$class, n = as.numeric(agg$x), mean = aggregate(x[ok], by = by, FUN = mean)$x,
+             var = aggregate(x[ok], by = by, FUN = var)$x, row.names = NULL)
 }
 
 ## Splits genes into low, average and high groups by a continuous score, using the outer quantiles
@@ -1432,7 +1422,7 @@ plot_cis_trans_class <- function(BURST.CONTRASTS, PR, quantity = c("mean", "bfre
   ok  <- is.finite(cx)&is.finite(cy)&is.finite(sx)&is.finite(sy)&cls %in% REG.CLASS
   if (is.null(main)) main <- paste0(lab,": cis vs trans")
   .se_scatter(cx[ok], sx[ok], cy[ok], sy[ok], xlab = "log2(Sc/Se) in hybrid", ylab = "parents - hybrid (log2)", main = main, lim = lim,
-              bar_col = function(se) se_alpha_col(se, bar_col), pt_col = colors[match(cls[ok], REG.CLASS)],
+              bar_col = list(x = se_alpha_col(sx[ok], bar_col), y = se_alpha_col(sy[ok], bar_col)), pt_col = colors[match(cls[ok], REG.CLASS)],
               legend_labels = REG.CLASS, legend_cols = colors)
   invisible(cls[ok])
 }
@@ -1651,7 +1641,7 @@ score_cell_cycle_by_cluster <- function(obj, label, pdf_path, s_genes = S.GENES,
 
   pdf(pdf_path, width = width, height = height, useDingbats = FALSE)
   par(mfrow = c(1, 1))
-  print(suppressWarnings(VlnPlot(obj, features = c("S.Score", "G2M.Score", "MG1.Score1"), ncol = 1, pt.size = 0, cols = cluster_cols(nlevels(Idents(obj))))))
+  print(suppressWarnings(VlnPlot(obj, features = c("S.Score", "G2M.Score", "MG1.Score1"), ncol = 1, pt.size = 0, cols = colorRampPalette(COLOR.CLUSTER)(nlevels(Idents(obj))))))
 
   phase_by_cluster <- prop.table(table(Idents(obj), obj$Phase), margin = 1)
   barplot(t(phase_by_cluster), col = COLOR.PHASE[colnames(phase_by_cluster)],
@@ -1685,11 +1675,12 @@ score_modules_by_cluster <- function(obj, gene_sets, label, pdf_path, width = 9,
 
   pdf(pdf_path, width = width, height = height, useDingbats = FALSE)
   par(mfrow = c(1, 1))
-  print(suppressWarnings(VlnPlot(obj, features = score_names, ncol = 1, pt.size = 0, cols = cluster_cols(nlevels(Idents(obj))))))
+  print(suppressWarnings(VlnPlot(obj, features = score_names, ncol = 1, pt.size = 0, cols = colorRampPalette(COLOR.CLUSTER)(nlevels(Idents(obj))))))
 
   cl    <- Idents(obj)
-  means <- sapply(score_names, function(sn) tapply(obj[[sn]][, 1], cl, mean))
-  ses   <- sapply(score_names, function(sn) tapply(obj[[sn]][, 1], cl, function(x) sd(x) / sqrt(length(x))))
+  sc    <- as.data.frame(obj[[score_names]])
+  means <- sapply(sc, tapply, cl, mean)
+  ses   <- sapply(sc, tapply, cl, sd) / sqrt(sapply(sc, tapply, cl, length))
 
   par(mfrow = c(1, length(score_names)), mar = c(5, 4.5, 3, 1))
   for (i in seq_along(score_names)) {
@@ -1751,7 +1742,8 @@ metabolic_state_cluster <- function(obj, score_names = c("Glycolysis1", "OXPHOS1
     stop(sprintf("metabolic_state_cluster(): %s not found; run score_modules_by_cluster() on this object first and reassign its result", paste(missing, collapse = ", ")))
   scores <- scale(as.matrix(obj[[score_names]]))
   d      <- dist(scores)
-  sil    <- sapply(k_range, function(k) mean(silhouette(kmeans(scores, centers = k, nstart = 10)$cluster, d)[, 3]))
+  sil    <- numeric(length(k_range))
+  for (i in seq_along(k_range)) sil[i] <- mean(silhouette(kmeans(scores, centers = k_range[i], nstart = 10)$cluster, d)[, 3])
   best_k <- k_range[which.max(sil)]
   km     <- kmeans(scores, centers = best_k, nstart = 10)
   setNames(factor(km$cluster), rownames(scores))
@@ -1773,14 +1765,19 @@ covariate_noise_diagnostic <- function(mat, expo, fit, cc_axis, metab_state, lab
   cc  <- cc_axis[cells]
   met <- droplevels(metab_state[cells])
 
-  cc_rho <- apply(R, 1, function(r) suppressWarnings(cor(r, cc, method = "spearman", use = "complete.obs")))
-  cc_p   <- apply(R, 1, function(r) suppressWarnings(cor.test(r, cc, method = "spearman")$p.value))
-  cc_q   <- p.adjust(cc_p, method = "BH")
-
-  eta_sq  <- function(r, g) { ss <- summary(aov(r ~ g))[[1]][["Sum Sq"]]; ss[1] / sum(ss) }
-  met_eta <- apply(R, 1, function(r) eta_sq(r, met))
-  met_p   <- apply(R, 1, function(r) suppressWarnings(kruskal.test(r, met)$p.value))
-  met_q   <- p.adjust(met_p, method = "BH")
+  ## One pass over genes: Spearman correlation with the cell-cycle axis, and eta^2 (share of residual
+  ## variance explained by metabolic state) with its Kruskal-Wallis p-value.
+  cc_rho <- cc_p <- met_eta <- met_p <- setNames(rep(NA_real_, nrow(R)), rownames(R))
+  for (i in seq_len(nrow(R))) {
+    r <- R[i, ]
+    cc_rho[i] <- suppressWarnings(cor(r, cc, method = "spearman", use = "complete.obs"))
+    cc_p[i]   <- suppressWarnings(cor.test(r, cc, method = "spearman")$p.value)
+    ss <- summary(aov(r ~ met))[[1]][["Sum Sq"]]
+    met_eta[i] <- ss[1] / sum(ss)
+    met_p[i]   <- suppressWarnings(kruskal.test(r, met)$p.value)
+  }
+  cc_q  <- p.adjust(cc_p, method = "BH")
+  met_q <- p.adjust(met_p, method = "BH")
 
   cat(sprintf("%s: cell-cycle axis, %d / %d genes (%.1f%%) at q < 0.05, median |rho| = %.3f\n",
               label, sum(cc_q < 0.05, na.rm = TRUE), length(cc_q), 100 * mean(cc_q < 0.05, na.rm = TRUE), median(abs(cc_rho), na.rm = TRUE)))
@@ -1859,7 +1856,7 @@ shared_overlap_rng <- function(pairs, levels_common) {
   lors <- lapply(pairs, function(p) {
     .overlap_lor(table(factor(p[[1]], levels = levels_common), factor(p[[2]], levels = levels_common)))
   })
-  max(sapply(lors, function(l) max(abs(l))), 1e-6)
+  max(abs(unlist(lors)), 1e-6)
 }
 
 ## ============================================================
@@ -2509,7 +2506,6 @@ promoter_noise_candidates <- function(BURST.CONTRASTS, PR, ARCH, reg_class, quan
     occ    = list(delta = "occ_access_delta",
                   cols = c("occ_score_sc", "occ_score_se", "occ_delta", "occ_access_delta")))
   prom_cols <- c("prom_len_sc", "prom_len_se", "prom_extended_sc", "prom_extended_se")
-  pick <- function(cols, keep) as.data.frame(lapply(setNames(cols, cols), function(cn) ARCH[[cn]][keep]), stringsAsFactors = FALSE)
 
   lapply(feature_spec, function(spec) {
     delta <- ARCH[[spec$delta]]
@@ -2528,9 +2524,12 @@ promoter_noise_candidates <- function(BURST.CONTRASTS, PR, ARCH, reg_class, quan
     ctx[[paste0(quantity, "_total_est")]] <- est_total[keep]; ctx[[paste0(quantity, "_total_p")]] <- p_total[keep]
     ## FDR-adjusted values sit beside the raw p-values so a reader can see both
     ctx[[paste0(quantity, "_cis_q")]] <- q_cis[keep]; ctx[[paste0(quantity, "_trans_q")]] <- q_trans[keep]; ctx[[paste0(quantity, "_total_q")]] <- q_total[keep]
-    out <- cbind(ctx, pick(spec$cols, keep),
+    arch_feature <- as.data.frame(ARCH[spec$cols], stringsAsFactors = FALSE)[keep, , drop = FALSE]
+    arch_prom    <- as.data.frame(ARCH[prom_cols], stringsAsFactors = FALSE)[keep, , drop = FALSE]
+    row.names(arch_feature) <- row.names(arch_prom) <- NULL
+    out <- cbind(ctx, arch_feature,
                  data.frame(concordant = sign(delta[keep]) == sign(est_cis[keep])),
-                 pick(prom_cols, keep))
+                 arch_prom)
     out[order(-abs(out[[est_col]])), ]
   })
 }
@@ -2757,7 +2756,7 @@ assemble_cluster_stability <- function(inputs, ari, dataset, obj) {
                       boot_mean_ari = vapply(a, mean, numeric(1), na.rm = TRUE),
                       boot_min_ari  = vapply(a, min,  numeric(1), na.rm = TRUE),
                       boot_max_ari  = vapply(a, max,  numeric(1), na.rm = TRUE),
-                      n_ok = vapply(a, function(x) sum(is.finite(x)), integer(1)), row.names = NULL)
+                      n_ok = vapply(lapply(a, is.finite), sum, integer(1)), row.names = NULL)
   win <- which.max(table$boot_mean_ari)
   ## apply_cluster_labels: installs a partition on a Seurat object as its
   ## identities, the same state FindClusters() leaves behind.
@@ -3241,9 +3240,6 @@ perm_label_draw <- function(b, nHYB, nHYC, nHYC.N, nHYT, nHYT.N, nSC, nSE) list(
   inhSC   = sample.int(nHYB + nSC),
   inhSE   = sample.int(nHYB + nSE))
 
-## dpar_est_col: name of the dpar estimate column for quantity q in species sp.
-dpar_est_col <- function(q, sp) paste0(q, "_dpar_", sp, "_est")
-
 ## eiv_mode_ci_row: errors-in-variables correlation for one mode m with a gene-resampling bootstrap CI
 ## (B resamples of the rows of contrasts). Draws with negative Vm or Vs give NaN; when more than half of
 ## the draws are non-finite the survivors are a biased subset that can fall outside [-1, 1], so the CI is
@@ -3300,12 +3296,6 @@ axis_mixture_summary <- function(a) c(
   sigma_lo = a$sigma[1], sigma_hi = a$sigma[2],
   n_lo = length(a$genes_lo), n_hi = length(a$genes_hi))
 
-## mu_log2fc: log2 fold change in mean expression (Sc/Se) for each gene, from the contrast fits.
-mu_log2fc <- function(genes, fits) setNames(log2(fits$MIX.SC[genes, "MU"] / fits$MIX.SE[genes, "MU"]), genes)
-
-## loading_group: labels genes POS or NEG by membership in the two loading groups (NA for neither).
-loading_group <- function(g, pos_genes, neg_genes) ifelse(g %in% pos_genes, "POS", ifelse(g %in% neg_genes, "NEG", NA))
-
 ## pole_trans_fractions: for one gene group g, its size and the fraction classified any-trans (Trans or
 ## Cis + Trans) on each burst-kinetics axis.
 pole_trans_fractions <- function(g, contrasts, bfreq_class, bsize_class, kbal_class) {
@@ -3341,9 +3331,6 @@ partial_cor_depth <- function(g, resid, depth) {
   (rxy - rxz * ryz) / sqrt((1 - rxz^2) * (1 - ryz^2))
 }
 
-## class_median: median of f within each level lv of the class vector cls.
-class_median <- function(cls, lv, f) vapply(lv, function(k) median(f[cls==k],na.rm=TRUE), numeric(1))
-
 ## to_seurat_counts: converts a count matrix to a Seurat-ready sparse matrix with dash-delimited feature names.
 to_seurat_counts <- function(mat) {
   rownames(mat) <- gsub("_", "-", rownames(mat), fixed = TRUE)
@@ -3370,10 +3357,6 @@ stability_task_rows <- function(d, sweeps) {
              stringsAsFactors = FALSE)
 }
 
-## reference_partition: the cluster labels of dataset/resolution task k, recomputed on the fitted neighbor
-## graph so the local and cluster sides share one labelling.
-reference_partition <- function(k, sweeps, tasks) Idents(FindClusters(sweeps[[tasks$dataset[k]]]$obj, resolution = tasks$res[k], verbose = FALSE))
-
 ## stability_dataset_inputs: sparse counts and the fit settings (nfeatures, dims_n, metric) the cluster job
 ## reuses for dataset d.
 stability_dataset_inputs <- function(d, counts, dims_n, metric, nfeatures, sweeps) {
@@ -3399,9 +3382,6 @@ metric_clusters <- function(m, obj, dims, resolution) {
   o2 <- FindClusters(o2, resolution = resolution, verbose = FALSE)
   Idents(o2)
 }
-
-## cluster_sizes: ids of the clusters holding at least min_cells of the cells in id_range (positions in idents).
-cluster_sizes <- function(id_range, idents, min_cells) { t <- table(idents[id_range]); as.integer(names(t)[t >= min_cells]) }
 
 ## consistent_pair_row: keeps Sc-hybrid cluster sc as a pair only when its best Se-hybrid partner picks it
 ## back. sc: cluster id (character); sc_best_se and se_best_sc: best-partner lookups from the hybrid crosstab.
@@ -3434,12 +3414,6 @@ adj_corr_row <- function(src, all_raw, nb_sc) {
   out
 }
 
-## contrast_fit_frame: the MU and DISP columns of one fit frame fr for the given genes, as numeric.
-contrast_fit_frame <- function(fr, genes) data.frame(MU = as.numeric(as.character(fr[genes, "MU"])), DISP = as.numeric(as.character(fr[genes, "DISP"])), row.names = genes)
-
-## gene_seed_check: two-seed comparison of the gene-level bootstrap SEs for mode m, for the mean and for burst frequency (bc1, bc2: the two BURST.CONTRASTS tables).
-gene_seed_check <- function(m, bc1, bc2) list(mean = gene_seed_compare(bc1, bc2, "mean", m), bfreq = gene_seed_compare(bc1, bc2, "bfreq", m))
-
 ## diet_for_markers: strips a Seurat object to the counts and data layers FindMarkers needs, keeping the cluster job's input small.
 diet_for_markers <- function(obj) {
   if (packageVersion("Seurat") >= "5.0.0") DietSeurat(obj, layers = c("counts", "data")) else DietSeurat(obj)
@@ -3456,7 +3430,7 @@ seed_check_rows <- function(m, checks, count_label) {
     out[[count_label]] <- r[[count_label]]
     out
   }
-  if ("cor" %in% names(x)) one(x) else do.call(rbind, lapply(names(x), function(q) one(x[[q]], quantity = q)))
+  if ("cor" %in% names(x)) one(x) else do.call(rbind, unname(Map(one, x, quantity = names(x))))
 }
 
 ## noise_corr_rows: Spearman correlation of the mean, CV2, burst frequency and burst size between two noise
@@ -3474,7 +3448,7 @@ noise_corr_rows <- function(key, tables, kind = c("vs_mix", "pairwise")) {
     d <- merge(tables[[key[1]]], tables[[key[2]]], by = "ORF")
     x <- paste0(c("Mean", "CV2", "BFREQ", "BSIZE"), ".x"); y <- paste0(c("Mean", "CV2", "BFREQ", "BSIZE"), ".y")
   }
-  out <- do.call(rbind, lapply(1:4, function(i) cor_row(log(d[[x[i]]]), log(d[[y[i]]]))))
+  out <- do.call(rbind, unname(Map(cor_row, lapply(d[x], log), lapply(d[y], log))))
   if (kind == "vs_mix") out$source <- key else out$comparison <- paste(key[1], "vs", key[2])
   out$statistic <- stats
   out
@@ -3531,37 +3505,34 @@ pilot_split_se_one <- function(g, B, expos, mats, seed) {
     row.names = NULL, check.names = FALSE)
 }
 
+## fit_group_values: gene g's fitted values in every group of fits (a list of per-group data frames with MU and
+## DISP columns): lists named by group holding mu, disp and the squared coefficient of variation cv2.
+fit_group_values <- function(fits, g) {
+  rows <- vector("list", length(fits)); names(rows) <- names(fits)
+  for (grp in names(fits)) rows[[grp]] <- fits[[grp]][g, ]
+  mu   <- lapply(rows, `[[`, "MU")
+  disp <- lapply(rows, `[[`, "DISP")
+  list(mu = mu, disp = disp, cv2 = Map(.cv2_of, mu, disp))
+}
+
 ## boot_contrasts_one: one gene's bootstrap contrasts across all modes (the unit of work a cluster worker does). draws holds every resample
 ## index set, drawn before any fit so replicates are independent.
 boot_contrasts_one <- function(g, expos, fits, mats, draws) {
-  ## The set of draws-list keys a mode's contrast is built from, e.g. "trans"
-  ## touches the MIX.SC/MIX.SE and HYT draws, "trans_n" the MIX.SC/MIX.SE and
-  ## HYT.N draws. Two modes share draws exactly when this set matches.
-  .mode_draw_keys <- function(mode) sort(unique(unname(.DRAW.KEY[.MODES[[mode]]])))
-
   B <- length(draws); modes <- names(.MODES)
   mcol <- paste0("m.", modes); scol <- paste0("s.", modes); ccol <- paste0("c.", modes)
   M <- matrix(NA_real_, B, 3 * length(modes), dimnames = list(NULL, c(mcol, scol, ccol)))
   for (b in seq_len(B)) {
     d <- draws[[b]]
-    fg <- function(mat, ex, idx) .fit_one(mat[g, idx], ex[idx])
-    f <- list(
-      MIX.SC   = fg(mats$MIX.SC,   expos$MIX.SC, d$MIX.SC),
-      MIX.SE   = fg(mats$MIX.SE,   expos$MIX.SE, d$MIX.SE),
-      HYC.SC   = fg(mats$HYC.SC,   expos$HYC,    d$HYC),
-      HYC.SE   = fg(mats$HYC.SE,   expos$HYC,    d$HYC),
-      HYT.SC   = fg(mats$HYT.SC,   expos$HYT,    d$HYT),
-      HYT.SE   = fg(mats$HYT.SE,   expos$HYT,    d$HYT),
-      HYC.SC.N = fg(mats$HYC.SC.N, expos$HYC.N,  d$HYC.N),
-      HYC.SE.N = fg(mats$HYC.SE.N, expos$HYC.N,  d$HYC.N),
-      HYT.SC.N = fg(mats$HYT.SC.N, expos$HYT.N,  d$HYT.N),
-      HYT.SE.N = fg(mats$HYT.SE.N, expos$HYT.N,  d$HYT.N),
-      HYB.COMB = fg(mats$HYB.COMB, expos$HYB,    d$HYB),
-      HYB.SC   = fg(mats$HYB.SC,   expos$HYB,    d$HYB),
-      HYB.SE   = fg(mats$HYB.SE,   expos$HYB,    d$HYB))
-    gv.mu <- lapply(f, function(z) unname(z[["mu"]]))
-    gv.bf <- lapply(f, function(z) unname(z[["disp"]]))
-    gv.cv <- lapply(f, function(z) .cv2_of(z[["mu"]], z[["disp"]]))
+    ## Each dataset is refit on the resample of its draw key (.DRAW.KEY); exposures follow the same key.
+    f <- vector("list", length(.DRAW.KEY)); names(f) <- names(.DRAW.KEY)
+    for (grp in names(f)) {
+      key <- .DRAW.KEY[[grp]]
+      f[[grp]] <- .fit_one(mats[[grp]][g, d[[key]]], expos[[key]][d[[key]]])
+    }
+    mu_all <- lapply(f, `[[`, "mu"); disp_all <- lapply(f, `[[`, "disp")
+    gv.mu <- lapply(mu_all, unname)
+    gv.bf <- lapply(disp_all, unname)
+    gv.cv <- Map(.cv2_of, mu_all, disp_all)
     for (k in seq_along(modes)) {
       grp <- .MODES[[modes[k]]]
       mu <- unlist(gv.mu[grp]); bf <- unlist(gv.bf[grp]); cv <- unlist(gv.cv[grp])
@@ -3571,14 +3542,11 @@ boot_contrasts_one <- function(g, expos, fits, mats, draws) {
     }
   }
   se   <- apply(M, 2, sd, na.rm = TRUE)
-  bdry <- setNames(vapply(modes, function(md) mean(is.na(M[, paste0("s.", md)])), numeric(1)), modes)
-  point <- function(q, gv_fun) {
-    gv <- setNames(lapply(names(fits), function(grp) gv_fun(fits[[grp]][g, ])), names(fits))
-    vapply(modes, function(md) .contrast_value(md, gv, q), numeric(1))
-  }
-  pm <- point("MU",    function(row) row[["MU"]])
-  ps <- point("BFREQ", function(row) row[["DISP"]])
-  pc <- point("CV2",   function(row) .cv2_of(row[["MU"]], row[["DISP"]]))
+  bdry <- setNames(colMeans(is.na(M[, scol, drop = FALSE])), modes)
+  fv <- fit_group_values(fits, g)
+  pm <- vapply(modes, .contrast_value, numeric(1), fv$mu,   "MU")
+  ps <- vapply(modes, .contrast_value, numeric(1), fv$disp, "BFREQ")
+  pc <- vapply(modes, .contrast_value, numeric(1), fv$cv2,  "CV2")
   out <- list(gene = g)
   for (md in .OUT_MODES) {
     smd <- .BFREQ_SOURCE[[md]]
@@ -3590,10 +3558,14 @@ boot_contrasts_one <- function(g, expos, fits, mats, draws) {
     out[[paste0("cv2_", md, "_est")]]    <- unname(pc[smd])
     out[[paste0("cv2_", md, "_se")]]     <- unname(se[paste0("c.", smd)])
     ## cor_<md>: correlation of the mean and bfreq bootstrap draws, defined when both contrasts are
-    ## built from the same resampled datasets (matching .mode_draw_keys). For cis and trans the bfreq
+    ## built from the same resampled datasets (matching draw keys). For cis and trans the bfreq
     ## value comes from the noise split (HYC.N/HYT.N) and the mean from the mean split (HYC/HYT),
     ## which are resampled with separate index vectors, so cor is NA and downstream code uses 0.
-    out[[paste0("cor_", md)]] <- if (identical(.mode_draw_keys(md), .mode_draw_keys(smd))) {
+    ## A mode's draw keys are the draws-list elements its contrast is built from, e.g. "trans" touches the
+    ## MIX.SC/MIX.SE and HYT draws and "trans_n" the MIX.SC/MIX.SE and HYT.N draws.
+    keys_md  <- sort(unique(unname(.DRAW.KEY[.MODES[[md]]])))
+    keys_smd <- sort(unique(unname(.DRAW.KEY[.MODES[[smd]]])))
+    out[[paste0("cor_", md)]] <- if (identical(keys_md, keys_smd)) {
       x <- M[, paste0("m.", md)]; y <- M[, paste0("s.", md)]; ok <- is.finite(x) & is.finite(y)
       if (sum(ok) > 2) cor(x[ok], y[ok]) else NA_real_
     } else NA_real_
@@ -3611,16 +3583,15 @@ boot_contrasts_one <- function(g, expos, fits, mats, draws) {
 ## contrasts (mean, bfreq, CV2, bsize, kbal) with the null by a two-sided permutation p, and adds ploidy-adjusted p-values for the dpar
 ## contrasts. bsize and kbal nulls recombine the mean and bfreq null draws of the same permutation.
 permute_contrasts_one <- function(g, expos, fits, mats, perms, ploidy_shift) {
-  l2 <- function(x) log2(x); B <- length(perms); modes <- names(.MODES)
+  l2 <- log2; B <- length(perms); modes <- names(.MODES)
   Nm <- matrix(NA_real_, B, length(modes), dimnames = list(NULL, modes))
   Ns <- matrix(NA_real_, B, length(modes), dimnames = list(NULL, modes))
   Nc <- matrix(NA_real_, B, length(modes), dimnames = list(NULL, modes))
-  gv   <- setNames(lapply(names(fits), function(grp) fits[[grp]][g, ]), names(fits))
-  gvmu <- lapply(gv, function(z) z[["MU"]]); gvbf <- lapply(gv, function(z) z[["DISP"]])
-  gvcv <- lapply(gv, function(z) .cv2_of(z[["MU"]], z[["DISP"]]))
-  obs.m <- vapply(modes, function(m) .contrast_value(m, gvmu, "MU"),    numeric(1))
-  obs.s <- vapply(modes, function(m) .contrast_value(m, gvbf, "BFREQ"), numeric(1))
-  obs.c <- vapply(modes, function(m) .contrast_value(m, gvcv, "CV2"),   numeric(1))
+  fv   <- fit_group_values(fits, g)
+  gvmu <- fv$mu; gvbf <- fv$disp; gvcv <- fv$cv2
+  obs.m <- vapply(modes, .contrast_value, numeric(1), gvmu, "MU")
+  obs.s <- vapply(modes, .contrast_value, numeric(1), gvbf, "BFREQ")
+  obs.c <- vapply(modes, .contrast_value, numeric(1), gvcv, "CV2")
   cMIXsc <- mats$MIX.SC[g, ]; cMIXse <- mats$MIX.SE[g, ]
   cHYCsc <- mats$HYC.SC[g, ]; cHYCse <- mats$HYC.SE[g, ]
   cHYTsc <- mats$HYT.SC[g, ]; cHYTse <- mats$HYT.SE[g, ]
@@ -3848,7 +3819,8 @@ nupop_occupancy_cluster <- function(inputs, species = 7, model = 4,
 
   chroms <- inputs$chroms
   coords <- inputs$coords
-  occ    <- lapply(chroms, function(s) rep(NA_real_, nchar(s)))
+  occ    <- vector("list", length(chroms)); names(occ) <- names(chroms)
+  for (sq in names(chroms)) occ[[sq]] <- rep(NA_real_, nchar(chroms[[sq]]))
 
   ## Node-local scratch space for every window's files, removed at the end
   work_root <- file.path(dirname(tempdir()), sprintf("nupop_work_%d", Sys.getpid()))
@@ -3860,7 +3832,6 @@ nupop_occupancy_cluster <- function(inputs, species = 7, model = 4,
     s <- seq(1, n, by = window_bp)
     data.frame(seqid = sq, start = s, end = pmin(s + window_bp - 1, n), stringsAsFactors = FALSE)
   }))
-  window_ok <- function(r, t) is.numeric(r) && length(r) == t$end - t$start + 1
 
   reduced <- NULL
   failed  <- NULL
@@ -3869,7 +3840,8 @@ nupop_occupancy_cluster <- function(inputs, species = 7, model = 4,
     round <- round + 1
     t0    <- Sys.time()
     res   <- nupop_run_windows(chroms, tasks, flank, species, model, cores, work_root)
-    ok    <- vapply(seq_len(nrow(tasks)), function(i) window_ok(res[[i]], tasks[i, ]), logical(1))
+    ## A window is scored when its result is numeric and covers every base of the window.
+    ok    <- vapply(res, is.numeric, logical(1)) & lengths(res) == tasks$end - tasks$start + 1
     for (i in which(ok)) occ[[tasks$seqid[i]]][tasks$start[i]:tasks$end[i]] <- res[[i]]
 
     bad   <- tasks[!ok, , drop = FALSE]
@@ -3878,7 +3850,7 @@ nupop_occupancy_cluster <- function(inputs, species = 7, model = 4,
 
     if (nrow(small) > 0) {
       res2 <- nupop_run_windows(chroms, small, fallback_flank, species, model, cores, work_root)
-      ok2  <- vapply(seq_len(nrow(small)), function(i) window_ok(res2[[i]], small[i, ]), logical(1))
+      ok2  <- vapply(res2, is.numeric, logical(1)) & lengths(res2) == small$end - small$start + 1
       for (i in which(ok2)) occ[[small$seqid[i]]][small$start[i]:small$end[i]] <- res2[[i]]
       if (any(ok2))  reduced <- rbind(reduced, cbind(small[ok2, , drop = FALSE], flank = fallback_flank))
       if (any(!ok2)) failed  <- rbind(failed, small[!ok2, , drop = FALSE])
@@ -3934,9 +3906,9 @@ power_grid_row <- function(i, ALPHA, CELL.RATIO, EXPOSURE.CV, GRID, MEAN.READS, 
 
   set.seed(SEED.BASE + 1e6 + row$n)  #shared draws, keyed only by cell count
   sdlog <- sqrt(log(1 + EXPOSURE.CV^2))
-  EXPO.X.LIST <- lapply(seq_len(NJ), function(j) rlnorm(N.SC.X, meanlog = -0.5*sdlog^2, sdlog = sdlog))
-  EXPO.Y.LIST <- lapply(seq_len(NJ), function(j) rlnorm(N.SE.X, meanlog = -0.5*sdlog^2, sdlog = sdlog))
-  PERM.LIST   <- lapply(seq_len(NI), function(k) sample.int(N.SC.X + N.SE.X))
+  EXPO.X.LIST <- replicate(NJ, rlnorm(N.SC.X, meanlog = -0.5*sdlog^2, sdlog = sdlog), simplify = FALSE)
+  EXPO.Y.LIST <- replicate(NJ, rlnorm(N.SE.X, meanlog = -0.5*sdlog^2, sdlog = sdlog), simplify = FALSE)
+  PERM.LIST   <- replicate(NI, sample.int(N.SC.X + N.SE.X), simplify = FALSE)
 
   set.seed(SEED.BASE + i)  #row-specific draws (X depends on m, p, n)
   X.LIST  <- vector("list", NJ)
@@ -4001,10 +3973,6 @@ bootstrap_ari_job <- function(j, inputs, jobs, tasks) {
   }, error = function(e) { message(sprintf("%s replicate %d: %s", tk$task, jobs$b[j], conditionMessage(e))); NA_real_ })
 }
 
-## par_apply: mclapply over X with one forked process per element (mc.preschedule = FALSE hands elements to workers one at a time,
-## which keeps all cores busy when elements differ in cost). cores: number of forked workers.
-par_apply <- function(X, FUN, cores) mclapply(X, FUN, mc.cores = cores, mc.preschedule = FALSE)
-
 ## dataset_marker_enrichment: for each cluster of dataset d at its final resolution, marker genes against the rest of the SAME dataset's
 ## cells (FindMarkers with ident.2 left at its default) and GO/KEGG over-representation of the up and down markers (run_enrichment).
 ## The object carries its own final, validated clustering in Idents, so the question answered is whether the clustering validated for
@@ -4019,24 +3987,31 @@ dataset_marker_enrichment <- function(d, ari, inputs, marker_objs, labels, kegg_
     return(NULL)
   }
 
-  markers_list <- par_apply(cluster_ids, function(cc) {
+  markers_list <- mclapply(cluster_ids, function(cc) {
     m <- suppressWarnings(FindMarkers(obj, ident.1 = cc))
     m[order(m$avg_log2FC, decreasing = TRUE), ]
-  }, cores = cores)
+  }, mc.cores = cores, mc.preschedule = FALSE)
   names(markers_list) <- cluster_ids
 
-  up_list   <- lapply(markers_list, function(m) m[abs(m$avg_log2FC) > log2(1.25) & -log10(m$p_val_adj) > 20 & m$avg_log2FC > 0, ])
-  down_list <- lapply(markers_list, function(m) m[abs(m$avg_log2FC) > log2(1.25) & -log10(m$p_val_adj) > 20 & m$avg_log2FC < 0, ])
+  ## Strong markers (fold change above 1.25x and adjusted p below 1e-20) split by direction.
+  up_list <- down_list <- markers_list
+  for (cc in cluster_ids) {
+    m <- markers_list[[cc]]
+    strong <- abs(m$avg_log2FC) > log2(1.25) & -log10(m$p_val_adj) > 20
+    up_list[[cc]]   <- m[strong & m$avg_log2FC > 0, ]
+    down_list[[cc]] <- m[strong & m$avg_log2FC < 0, ]
+  }
 
-  ## avg_log2FC is selected by name: FindMarkers column order differs across Seurat versions.
-  gene_vec <- function(m) { v <- m[["avg_log2FC"]]; names(v) <- row.names(m); v }
-  background_list <- lapply(markers_list, gene_vec)
-  up_genes_list    <- lapply(up_list,   gene_vec)
-  down_genes_list  <- lapply(down_list, gene_vec)
+  ## Named fold-change vectors for the background and the up and down sets. avg_log2FC is selected by name:
+  ## FindMarkers column order differs across Seurat versions.
+  fc <- list(background = markers_list, up = up_list, down = down_list)
+  for (kind in names(fc))
+    for (cc in cluster_ids) fc[[kind]][[cc]] <- setNames(fc[[kind]][[cc]][["avg_log2FC"]], row.names(fc[[kind]][[cc]]))
+  background_list <- fc$background; up_genes_list <- fc$up; down_genes_list <- fc$down
 
-  enrich <- setNames(par_apply(cluster_ids, function(cc) list(
+  enrich <- setNames(mclapply(cluster_ids, function(cc) list(
     up   = run_enrichment(names(up_genes_list[[cc]]),   names(background_list[[cc]]), kegg_data = kegg_data),
-    down = run_enrichment(names(down_genes_list[[cc]]), names(background_list[[cc]]), kegg_data = kegg_data)), cores = cores), cluster_ids)
+    down = run_enrichment(names(down_genes_list[[cc]]), names(background_list[[cc]]), kegg_data = kegg_data)), mc.cores = cores, mc.preschedule = FALSE), cluster_ids)
   up_enrich   <- lapply(enrich, `[[`, "up")
   down_enrich <- lapply(enrich, `[[`, "down")
 
@@ -4060,15 +4035,16 @@ go_enrich_job <- function(k, go_inputs, jobs, kegg_data) {
 }
 
 ## ora_jobs: one over-representation job per gene set in sets (named group::set), all against the same universe.
-ora_jobs <- function(sets, universe, group)
-  lapply(setNames(names(sets), paste0(group, "::", names(sets))),
-         function(s) list(kind = "ora", genes = sets[[s]], universe = universe))
-
-## pick_group: the results in res whose job names start with group::, with the prefix removed from the names.
-pick_group <- function(res, group) { r <- res[startsWith(names(res), paste0(group, "::"))]; setNames(r, sub("^[^:]+::", "", names(r))) }
+ora_jobs <- function(sets, universe, group) {
+  jobs <- vector("list", length(sets)); names(jobs) <- paste0(group, "::", names(sets))
+  for (i in seq_along(sets)) jobs[[i]] <- list(kind = "ora", genes = sets[[i]], universe = universe)
+  jobs
+}
 
 ## gse_job_set: the rank-based enrichment jobs (BP, MF, CC) for rank list q of ranks_lists, named GSE::GO.GSE.<q>.<ontology>.
 gse_job_set <- function(q, ranks_lists) {
-  lapply(setNames(c("BP", "MF", "CC"), sprintf("GSE::GO.GSE.%s.%s", q, c("BP", "MF", "CC"))),
-         function(ont) list(kind = "gse", ranks = ranks_lists[[q]], ont = ont))
+  onts <- c("BP", "MF", "CC")
+  jobs <- vector("list", length(onts)); names(jobs) <- sprintf("GSE::GO.GSE.%s.%s", q, onts)
+  for (i in seq_along(onts)) jobs[[i]] <- list(kind = "gse", ranks = ranks_lists[[q]], ont = onts[i])
+  jobs
 }

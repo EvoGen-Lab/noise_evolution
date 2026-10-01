@@ -506,7 +506,7 @@ CONTRAST.EXPOS <- list(MIX.SC = EXPO.MIX.SC, MIX.SE = EXPO.MIX.SE,
              HYC.N = EXPO.HYC.N, HYT.N = EXPO.HYT.N,
              HYB = EXPO.HYB)
 
-CONTRAST.FITS <- lapply(SPLIT.FITS, contrast_fit_frame, genes = GENES)
+CONTRAST.FITS <- lapply(SPLIT.FITS, function(fr) data.frame(MU = as.numeric(as.character(fr[GENES, "MU"])), DISP = as.numeric(as.character(fr[GENES, "DISP"])), row.names = GENES))
 
 # Expected rise in bfreq when HYB.COMB sums the two hybrid alleles, per gene
 # in log2 units (0 to 1). The permutation job reads the dpar noise contrasts
@@ -569,11 +569,12 @@ BURST.CONTRASTS <- local({
   for (sp in c("sc", "se")) {
     par  <- fits[[if (sp == "sc") "MIX.SC" else "MIX.SE"]][df$gene, ]
     cv_p <- 1 / par$MU + 1 / par$DISP
-    for (q in c("bfreq", "bsize", "kbal", "cv2")) df[[paste0(dpar_est_col(q, sp = sp), "_raw")]] <- df[[dpar_est_col(q, sp = sp)]]
-    df[[dpar_est_col("bfreq", sp = sp)]] <- df[[dpar_est_col("bfreq", sp = sp)]] - s
-    df[[dpar_est_col("bsize", sp = sp)]] <- df[[dpar_est_col("bsize", sp = sp)]] + s
-    df[[dpar_est_col("kbal", sp = sp)]]  <- df[[dpar_est_col("kbal", sp = sp)]]  - 2 * s
-    df[[dpar_est_col("cv2", sp = sp)]]   <- ifelse(is.finite(cv_h) & cv_h > 0 & is.finite(cv_p) & cv_p > 0, log2(cv_h) - log2(cv_p), NA_real_)
+    est <- setNames(paste0(c("bfreq", "bsize", "kbal", "cv2"), "_dpar_", sp, "_est"), c("bfreq", "bsize", "kbal", "cv2"))
+    for (q in names(est)) df[[paste0(est[[q]], "_raw")]] <- df[[est[[q]]]]
+    df[[est[["bfreq"]]]] <- df[[est[["bfreq"]]]] - s
+    df[[est[["bsize"]]]] <- df[[est[["bsize"]]]] + s
+    df[[est[["kbal"]]]]  <- df[[est[["kbal"]]]]  - 2 * s
+    df[[est[["cv2"]]]]   <- ifelse(is.finite(cv_h) & cv_h > 0 & is.finite(cv_p) & cv_p > 0, log2(cv_h) - log2(cv_p), NA_real_)
   }
   df
 })
@@ -613,7 +614,7 @@ BURST.CONTRASTS2 <- add_burst_contrasts(BOOT.CONTRASTS.REPS[[2]])
 
 fig_pdf("extra/S_gene_seed_compare.pdf", 6, 9)
 par(mfrow = c(3, 2))
-SEED.CHECK <- setNames(lapply(c("total", "cis", "trans"), gene_seed_check, bc1 = BURST.CONTRASTS, bc2 = BURST.CONTRASTS2), c("total", "cis", "trans"))
+SEED.CHECK <- setNames(lapply(c("total", "cis", "trans"), function(m) list(mean = gene_seed_compare(BURST.CONTRASTS, BURST.CONTRASTS2, "mean", m), bfreq = gene_seed_compare(BURST.CONTRASTS, BURST.CONTRASTS2, "bfreq", m))), c("total", "cis", "trans"))
 dev.off()
 
 # Expect correlation 0.9+ and a tight SE ratio 
@@ -755,7 +756,7 @@ KS <- local({
   sig_idx <- dir != "ns"
   if (is.null(main)) main <- paste0("burst kinetics: ", mode)
   op <- par(pty = "s"); on.exit(par(op))
-  plot(NA, xlim = .sym(x, sx), ylim = .sym(y, sy), xlab = "net mean change (log2)", ylab = "frequency - amplitude (kinetic balance)", main = main)
+  plot(NA, xlim = c(-1, 1) * max(abs(c(x + sx, x - sx))), ylim = c(-1, 1) * max(abs(c(y + sy, y - sy))), xlab = "net mean change (log2)", ylab = "frequency - amplitude (kinetic balance)", main = main)
   abline(h = 0, v = 0, col = COLOR.GREY[["dark"]])
   segments(x - sx, y, x + sx, y, col = bar_col)        # bars first
   segments(x, y - sy, x, y + sy, col = bar_col)
@@ -1285,8 +1286,8 @@ AXIS1.ENRICH <- lapply(list(NEG = list(genes = NEG.LOAD.GENES, bp = AXIS1$enrich
 
 # Growth-rate check: log2 fold change in mean expression (Sc/Se) for
 # each loading group
-POS.MU.LOG2FC <- mu_log2fc(POS.LOAD.GENES, fits = CONTRAST.FITS)   # ribosome / translation
-NEG.MU.LOG2FC <- mu_log2fc(NEG.LOAD.GENES, fits = CONTRAST.FITS)   # glycolysis / fermentation
+POS.MU.LOG2FC <- setNames(log2(CONTRAST.FITS$MIX.SC[POS.LOAD.GENES, "MU"] / CONTRAST.FITS$MIX.SE[POS.LOAD.GENES, "MU"]), POS.LOAD.GENES)   # ribosome / translation
+NEG.MU.LOG2FC <- setNames(log2(CONTRAST.FITS$MIX.SC[NEG.LOAD.GENES, "MU"] / CONTRAST.FITS$MIX.SE[NEG.LOAD.GENES, "MU"]), NEG.LOAD.GENES)   # glycolysis / fermentation
 summary(POS.MU.LOG2FC); summary(NEG.MU.LOG2FC)
 
 fig_pdf("extra/S_coexpr_growth_check.pdf", 5, 5)
@@ -1346,8 +1347,8 @@ AXIS2.CT
 # For pairs within the ribosome group, within the
 # glycolysis/fermentation group, and pairs crossing between them, how do
 # they classify under the existing five-class scheme (CB.CLASS)?
-CB.CLASS$grp_i <- loading_group(CB.CLASS$gene_i, pos_genes = POS.LOAD.GENES, neg_genes = NEG.LOAD.GENES)
-CB.CLASS$grp_j <- loading_group(CB.CLASS$gene_j, pos_genes = POS.LOAD.GENES, neg_genes = NEG.LOAD.GENES)
+CB.CLASS$grp_i <- ifelse(CB.CLASS$gene_i %in% POS.LOAD.GENES, "POS", ifelse(CB.CLASS$gene_i %in% NEG.LOAD.GENES, "NEG", NA))
+CB.CLASS$grp_j <- ifelse(CB.CLASS$gene_j %in% POS.LOAD.GENES, "POS", ifelse(CB.CLASS$gene_j %in% NEG.LOAD.GENES, "NEG", NA))
 CB.CLASS$pair_type <- with(CB.CLASS, ifelse(is.na(grp_i) | is.na(grp_j), NA, ifelse(grp_i == grp_j, paste0("within_", grp_i), "cross")))
 
 table(CB.CLASS$pair_type, CB.CLASS$class)
@@ -1630,7 +1631,8 @@ local({
   h  <- hist(f, breaks=seq(0,1,length.out=brk+1), plot=FALSE)
   top <- max(h$counts)
   plot(h, col=COLOR.GREY[["light"]], border="white", xlim=c(0, 1), ylim=c(-top*0.06, top*1.20), xlab="intrinsic / (intrinsic + extrinsic)", ylab="# of genes", main=if(is.null(main)) "" else main)
-  rm <- class_median(rc, REG.CLASS, f = f); dm <- class_median(dc, DOM.CLASS, f = f)
+  rm <- vapply(REG.CLASS, function(k) median(f[rc == k], na.rm = TRUE), numeric(1))   # median score within each class
+  dm <- vapply(DOM.CLASS, function(k) median(f[dc == k], na.rm = TRUE), numeric(1))
   yR <- top*1.10; yD <- -top*0.04
   for (i in seq_along(rm))
     if (is.finite(rm[i])) segments(rm[i],0,rm[i],yR, col=COLOR.LIST.1[i], lty=3, lwd=0.7)
@@ -1958,7 +1960,7 @@ CSTAB.INPUTS <- local({
   ds <- names(sweeps)
   tasks <- do.call(rbind, lapply(ds, stability_task_rows, sweeps = sweeps))
   tasks$task <- sprintf("%s@%.2f", tasks$dataset, tasks$res)
-  ref <- setNames(lapply(seq_len(nrow(tasks)), reference_partition, sweeps = sweeps, tasks = tasks), tasks$task)
+  ref <- setNames(lapply(seq_len(nrow(tasks)), function(k) Idents(FindClusters(sweeps[[tasks$dataset[k]]]$obj, resolution = tasks$res[k], verbose = FALSE))), tasks$task)
   data <- setNames(lapply(ds, stability_dataset_inputs, counts = counts, dims_n = dims_n, metric = metric, nfeatures = nfeatures, sweeps = sweeps), ds)
   ## ---- Cluster-stability bootstrap ----
   ## A stable partition survives resampling of the cells. Each replicate
@@ -2049,10 +2051,11 @@ SE.PAR.ID  <- (1+ncol(MIX.SC)):(ncol(MIX.SC)+ncol(MIX.SE))
 SC.HYB.ID  <- (1+ncol(MIX.SC)+ncol(MIX.SE)):(ncol(MIX.SC)+ncol(MIX.SE)+ncol(HYB.SC))
 SE.HYB.ID  <- (1+ncol(MIX.SC)+ncol(MIX.SE)+ncol(HYB.SC)):(ncol(MIX.SC)+ncol(MIX.SE)+ncol(HYB.SC)+ncol(HYB.SE))
 
-SC.PAR.CLUSTERS <- cluster_sizes(SC.PAR.ID, idents = YSC.IDENTS, min_cells = MIN.CLUSTER.CELLS)
-SE.PAR.CLUSTERS <- cluster_sizes(SE.PAR.ID, idents = YSC.IDENTS, min_cells = MIN.CLUSTER.CELLS)
-SC.HYB.CLUSTERS <- cluster_sizes(SC.HYB.ID, idents = YSC.IDENTS, min_cells = MIN.CLUSTER.CELLS)
-SE.HYB.CLUSTERS <- cluster_sizes(SE.HYB.ID, idents = YSC.IDENTS, min_cells = MIN.CLUSTER.CELLS)
+## Cluster ids holding at least MIN.CLUSTER.CELLS of each dataset's cells
+BIG.CLUSTERS <- lapply(list(SC.PAR = SC.PAR.ID, SE.PAR = SE.PAR.ID, SC.HYB = SC.HYB.ID, SE.HYB = SE.HYB.ID),
+                       function(id) { tab <- table(YSC.IDENTS[id]); as.integer(names(tab)[tab >= MIN.CLUSTER.CELLS]) })
+SC.PAR.CLUSTERS <- BIG.CLUSTERS$SC.PAR; SE.PAR.CLUSTERS <- BIG.CLUSTERS$SE.PAR
+SC.HYB.CLUSTERS <- BIG.CLUSTERS$SC.HYB; SE.HYB.CLUSTERS <- BIG.CLUSTERS$SE.HYB
 cat(sprintf("Clusters with at least %d cells, by dataset:\n", MIN.CLUSTER.CELLS))
 cat("Sc parent:", SC.PAR.CLUSTERS, "\nSe parent:", SE.PAR.CLUSTERS, "\nHybrid Sc allele:", SC.HYB.CLUSTERS, "\nHybrid Se allele:", SE.HYB.CLUSTERS, "\n")
 

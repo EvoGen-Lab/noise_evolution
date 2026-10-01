@@ -43,10 +43,12 @@ cat(sprintf("enrichment done in %.1f min\n", as.numeric(difftime(Sys.time(), t0,
 
 ## ---- Unpack into the objects Section 8 reads ----
 
-GO.ENRICH     <- pick_group(RES, "GO")[names(GO.INPUTS$GO.SETS)]
-INTR.GO       <- pick_group(RES, "INTR")[names(GO.INPUTS$INTR.SETS)]
-INTR.GO.CLEAN <- pick_group(RES, "INTR.CLEAN")[names(GO.INPUTS$INTR.SETS.CLEAN)]
-GO.GSE        <- pick_group(RES, "GSE")
+## Results grouped by the job-name prefix (group::name), with the prefix removed from the names.
+RES.GROUPS    <- lapply(split(RES, sub("::.*$", "", names(RES))), function(r) setNames(r, sub("^[^:]+::", "", names(r))))
+GO.ENRICH     <- RES.GROUPS$GO[names(GO.INPUTS$GO.SETS)]
+INTR.GO       <- RES.GROUPS$INTR[names(GO.INPUTS$INTR.SETS)]
+INTR.GO.CLEAN <- RES.GROUPS$INTR.CLEAN[names(GO.INPUTS$INTR.SETS.CLEAN)]
+GO.GSE        <- RES.GROUPS$GSE
 GO.KEY        <- GO.INPUTS
 
 save(GO.ENRICH, INTR.GO, INTR.GO.CLEAN, GO.GSE, GO.KEY, file = "go_enrich_output.rda")
