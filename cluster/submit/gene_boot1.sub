@@ -10,7 +10,7 @@
 #SBATCH --time=1:30:00
 #SBATCH --job-name gene_boot1
 
-module load r/4.2.2
+module load r/4.5.2
 
 export OMP_NUM_THREADS=1
 export MKL_NUM_THREADS=1
