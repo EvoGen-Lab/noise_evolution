@@ -59,10 +59,46 @@ cat(sprintf("replicates completed: %d / %d\n", sum(is.finite(ari)), length(ari))
 ## ---- Stage 2: marker enrichment at each dataset's final resolution ----
 ## Clusters within a dataset are spread over the forked workers
 par_apply <- function(X, FUN) mclapply(X, FUN, mc.cores = NUM.CORES, mc.preschedule = FALSE)
+## For each cluster: marker genes against the rest of the SAME dataset's cells (FindMarkers with
+## ident.2 left at its default) and GO/KEGG over-representation of the up and down markers
+## (run_enrichment), for however many clusters the dataset has. The object carries its own final,
+## validated clustering in Idents, so the question answered is whether the clustering validated for
+## THIS dataset corresponds to distinguishable biology; no GSEA is computed. A dataset with fewer than
+## two clusters gives NULL (with a message); otherwise the entry is a list of
+## markers/up/down/up_enrich/down_enrich/background/cluster_ids, one element per cluster, keyed by cluster ID.
 CSTAB.MARKERS <- lapply(setNames(names(CSTAB.MARKER.OBJS), names(CSTAB.MARKER.OBJS)), function(d) {
   obj <- assemble_cluster_stability(CSTAB.INPUTS, CSTAB.ARI, d, CSTAB.MARKER.OBJS[[d]])$final_obj
   cat(sprintf("marker enrichment: %s, %d clusters\n", DS.LABELS[[d]], length(levels(Idents(obj))))); flush.console()
-  cluster_marker_enrichment(obj, DS.LABELS[[d]], kegg_data = KEGG.DATA, apply_fun = par_apply)
+  cluster_ids <- sort(unique(as.character(Idents(obj))))
+  if (length(cluster_ids) < 2) {
+    cat(sprintf("%s: only one cluster found; skipping the per-cluster marker/enrichment comparison.\n", DS.LABELS[[d]]))
+    return(NULL)
+  }
+
+  markers_list <- par_apply(cluster_ids, function(cc) {
+    m <- suppressWarnings(FindMarkers(obj, ident.1 = cc))
+    m[order(m$avg_log2FC, decreasing = TRUE), ]
+  })
+  names(markers_list) <- cluster_ids
+
+  up_list   <- lapply(markers_list, function(m) m[abs(m$avg_log2FC) > log2(1.25) & -log10(m$p_val_adj) > 20 & m$avg_log2FC > 0, ])
+  down_list <- lapply(markers_list, function(m) m[abs(m$avg_log2FC) > log2(1.25) & -log10(m$p_val_adj) > 20 & m$avg_log2FC < 0, ])
+
+  ## avg_log2FC is selected by name: FindMarkers column order differs across Seurat versions.
+  gene_vec <- function(m) { v <- m[["avg_log2FC"]]; names(v) <- row.names(m); v }
+  background_list <- lapply(markers_list, gene_vec)
+  up_genes_list    <- lapply(up_list,   gene_vec)
+  down_genes_list  <- lapply(down_list, gene_vec)
+
+  enrich <- setNames(par_apply(cluster_ids, function(cc) list(
+    up   = run_enrichment(names(up_genes_list[[cc]]),   names(background_list[[cc]]), kegg_data = KEGG.DATA),
+    down = run_enrichment(names(down_genes_list[[cc]]), names(background_list[[cc]]), kegg_data = KEGG.DATA))), cluster_ids)
+  up_enrich   <- lapply(enrich, `[[`, "up")
+  down_enrich <- lapply(enrich, `[[`, "down")
+
+  list(markers = markers_list, up = up_list, down = down_list,
+       up_enrich = up_enrich, down_enrich = down_enrich,
+       background = background_list, cluster_ids = cluster_ids)
 })
 
 CSTAB.KEY <- CSTAB.INPUTS$key

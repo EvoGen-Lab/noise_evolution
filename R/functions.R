@@ -6,7 +6,8 @@
 ### coexpr_boot.R, coexpr_perm.R, nupop_occupancy.R,
 ### cluster_stability.R, go_enrich.R, power_grid.R)
 ###
-### A function with a single caller lives where it is used: nested inside that caller here (for
+### A function that only a cluster script calls is defined in that script. Otherwise a function with
+### a single caller lives where it is used: nested inside that caller here (for
 ### example .heatmap_legend inside class_overlap_heatmap), or, when the caller is analysis.R, defined in
 ### analysis.R just above its first call. Search analysis.R for "<- function" to list those.
 ###
@@ -54,7 +55,6 @@
 ###     coexpr_axis_cis_trans() - Exact cis/trans decomposition of one eigenvector's eigenvalue, via total = cis + trans.
 ###     make_coexpr_draws() - Builds the cell-resampling draws used by the co-expression bootstrap.
 ###     coexpr_bootstrap_one() - One bootstrap draw of the co-expression decomposition, for one resampled cell set.
-###     coexpr_perm_one() - One permutation draw's top-N squared-eigenvalue spectrum for total/cis/trans/dpar_sc/dpar_se.
 ###     coexpr_acc_init() - Initializes the streaming sum/sum-of-squares accumulator over the five co-expression parts (.COEXPR_PARTS).
 ###     coexpr_acc_update() - Folds one chunk of coexpr_bootstrap_one() draws into the running accumulator.
 ###     coexpr_acc_finalize() - Converts the finished accumulator into CB's per-pair estimate/SE structure.
@@ -87,7 +87,6 @@
 ###     run_enrichment() - Runs GO (BP/MF/CC, simplified) and KEGG enrichment for one gene set against a fixed universe.
 ###     n_sig_terms() - Counts significant terms (q < threshold) in one enrichResult, 0 for a NULL or empty result.
 ###     print_enrich_brief() - Console view of one enrichResult: Description, p.adjust and Count for the n_top most significant terms.
-###     cluster_marker_enrichment() - Marker/enrichment comparison of each cluster against the rest of a dataset's own cells, generalized to however many clusters it has.
 ###     plot_cluster_marker_enrichment() - Writes cluster_marker_enrichment()'s per-cluster up/down enrichment to one pdf (its bar-pair helper is nested inside).
 ###     score_cell_cycle_by_cluster() - Cell-cycle phase scoring (CellCycleScoring()/AddModuleScore()) extended to a dataset's own validated clustering; violin plot, phase-composition-by-cluster barplot, and console table.
 ###     go_gene_set() - Pulls all genes (including descendant terms) annotated to a GO term from org.Sc.sgd.db, for building an independently-sourced module-score gene set.
@@ -108,7 +107,6 @@
 ###     extract_promoters() - Extracts each gene's promoter sequence, bounded by its upstream neighbor.
 ###     score_promoters() - Applies both the TATA PWM score and poly(dA:dT) tract length to every promoter in a set.
 ###     nupop_cluster_inputs() - Packages one species' chromosomes and promoter coordinates for the NuPoP cluster job.
-###     nupop_occupancy_cluster() - Tiles, scores and bisects every chromosome on the cluster and returns promoter occupancy tracks.
 ###     score_promoters_nupop() - Scores each promoter from the cluster occupancy tracks after confirming they match the current promoters.
 ###     .concordance_eligible() - Genes eligible for the concordance tests: cis-class, both values defined and nonzero (with the .CIS_CLASSES constant).
 ###     promoter_direction_test() - Tests whether a promoter feature's between-species direction matches the direction of cis divergence.
@@ -128,14 +126,12 @@
 ###     kegg_local() - Downloads the KEGG pathway map once, locally, for offline enrichment on cluster nodes.
 ###     load_cluster_output() - Loads a cluster result into the caller's environment, naming the script to run when the file is missing.
 ###     check_cluster_key() - Confirms a cluster output was built from the inputs packaged in this session.
-###     go_enrich_one() - One enrichment job for go_enrich.R: over-representation or rank-based GSEA with a job-specific seed.
 ###   12. CLUSTER-BASED NOISE PARTITIONING (within/between-cluster variance vs. the intrinsic/extrinsic decomposition)
 ###     within_between_decomp() - Within- and between-cluster variance per gene, in shot-noise-corrected, mean-normalized rate space, from a Seurat cluster partition.
 ###     plot_within_between_hist() - Genome-wide distribution of within_between_decomp()'s ratio, one dataset, with the within = between line marked.
 ###     plot_within_between_vs_quantity() - Scatter of within_between_decomp()'s ratio against one burst kinetics quantity (mean, burst frequency, or burst size), with Spearman rho reported.
 ###     report_within_between_by_class() - Plots the within/between ratio by class (with class_anova()'s omnibus test and Tukey comparisons) for two datasets side by side against one classification axis; writes the combined figure and prints both datasets' test statistics.
-###   13. POWER ANALYSIS (simulation and fit, shared with the SLURM job power_grid.R)
-###     power_grid_row() - Power for one (MEAN.READS, N.CELLS, SIZE) row, across every SIZE.RATIO value at once.
+###   13. POWER-ANALYSIS PLOTS AND SHARED PLOTTING HELPERS
 ###     open_grid_pdf() - Opens a PDF sized to the panel grid it is about to hold, with tight margins throughout.
 ###     line_colors() - Color ramp sized to the number of lines drawn in one panel.
 ###     cluster_cols() - Cluster colors from the plum ramp, n colors via interpolation.
@@ -1105,46 +1101,6 @@ coexpr_acc_finalize <- function(resid, pt, acc) {
   c(parts, list(lambda = pt$lambda))
 }
 
-## One permutation draw of the five null spectra, for rank-matched testing of every candidate axis
-## (observed rank k is compared with the null's own rank k). draw: one element of
-## make_coexpr_perm_draws(). resid: the RESID list (including HYB.COMB). nSC, nSE: parent cell counts,
-## used to split each pooled, reshuffled pool back into groups of the original sizes. n_keep: ranks
-## retained per decomposition (15, the top-15 candidate window). Returns the top n_keep squared
-## eigenvalues by magnitude, descending, for all five decompositions; this is the unit of work a
-## cluster worker does.
-coexpr_perm_one <- function(draw, resid, nSC, nSE, n_keep = 15) {
-  pooled   <- cbind(resid$MIX.SC, resid$MIX.SE)
-  perm.sc  <- pooled[, draw$idx[seq_len(nSC)]]
-  perm.se  <- pooled[, draw$idx[-seq_len(nSC)]]
-  perm.hsc <- resid$HYB.SC; perm.hse <- resid$HYB.SE
-  perm.hsc[, draw$swap] <- resid$HYB.SE[, draw$swap]
-  perm.hse[, draw$swap] <- resid$HYB.SC[, draw$swap]
-
-  d <- coexpr_decompose(list(MIX.SC = perm.sc, MIX.SE = perm.se, HYB.SC = perm.hsc, HYB.SE = perm.hse))
-  topk <- function(m) {
-    ev <- eigen(m, symmetric = TRUE, only.values = TRUE)$values
-    (ev[order(abs(ev), decreasing = TRUE)][seq_len(n_keep)])^2
-  }
-
-  ## The dpar nulls are zero-centred exchangeability nulls on the raw pooled cells (no ploidy
-  ## rescale); the observed dpar matrices (COEXPR.POINT) carry the rescale from coexpr_decompose().
-  ## dpar_sc's null pools Sc-parent and allele-summed hybrid cells and reshuffles them into
-  ## pseudo-Sc / pseudo-hybrid groups of the original sizes, giving the leading eigenvalues of
-  ## "condition A minus condition B" when condition carries no information. dpar_se's null does the
-  ## same with Se-parent and hybrid cells.
-  pooled.sc <- cbind(resid$MIX.SC, resid$HYB.COMB)
-  perm.a.sc <- pooled.sc[, draw$idx_dpar_sc[seq_len(nSC)]]
-  perm.b.sc <- pooled.sc[, draw$idx_dpar_sc[-seq_len(nSC)]]
-  dpar_sc_null <- topk(shrink_cor(t(perm.b.sc)) - shrink_cor(t(perm.a.sc)))
-
-  pooled.se <- cbind(resid$MIX.SE, resid$HYB.COMB)
-  perm.a.se <- pooled.se[, draw$idx_dpar_se[seq_len(nSE)]]
-  perm.b.se <- pooled.se[, draw$idx_dpar_se[-seq_len(nSE)]]
-  dpar_se_null <- topk(shrink_cor(t(perm.b.se)) - shrink_cor(t(perm.a.se)))
-
-  list(total = topk(d$total), cis = topk(d$cis), trans = topk(d$trans), dpar_sc = dpar_sc_null, dpar_se = dpar_se_null)
-}
-
 ## Per-gene reliability: the fraction of a gene's total NB variance (mu + mu^2/k) that is biological
 ## rather than Poisson sampling noise, rho = mu / (mu + k), from the MU/DISP already fitted for
 ## every gene. A pairwise correlation is attenuated by about sqrt(rho_i * rho_j), so rho predicts how
@@ -1759,52 +1715,6 @@ print_enrich_brief <- function(e, q = 0.2, n_top = 10) {
   tab <- tab[order(tab$p.adjust), ][seq_len(min(n_top, nrow(tab))), ]
   tab$p.adjust <- signif(tab$p.adjust, 3)
   print(tab, row.names = FALSE)
-}
-
-## cluster_marker_enrichment: marker and GO/KEGG enrichment analysis of each cluster against
-## the rest of the SAME dataset's cells, for however many clusters the dataset has. obj must
-## carry its own final, validated clustering in Idents (from sweep_cluster_resolution() /
-## bootstrap_compare_resolutions(), e.g. YSC.MIX.SC), so the question answered is whether the
-## clustering validated for THIS dataset corresponds to distinguishable biology. ident.2 is
-## left at FindMarkers()'s default (NULL), i.e. all other cells in obj.
-## Over-representation analysis (run_enrichment, plotted by barplot_enrich_pair) is the
-## enrichment readout; no GSEA is computed.
-## apply_fun sets how clusters are distributed (lapply locally, a forked mclapply in
-## cluster_stability.R); kegg_data passes through to run_enrichment().
-## Returns NULL (with a message) if obj has fewer than two clusters, otherwise a list with
-## markers/up/down/up_enrich/down_enrich/background/cluster_ids, one entry per cluster,
-## keyed by cluster ID.
-cluster_marker_enrichment <- function(obj, label, kegg_data = NULL, apply_fun = lapply) {
-  cluster_ids <- sort(unique(as.character(Idents(obj))))
-  if (length(cluster_ids) < 2) {
-    cat(sprintf("%s: only one cluster found; skipping the per-cluster marker/enrichment comparison.\n", label))
-    return(NULL)
-  }
-
-  markers_list <- apply_fun(cluster_ids, function(cc) {
-    m <- suppressWarnings(FindMarkers(obj, ident.1 = cc))
-    m[order(m$avg_log2FC, decreasing = TRUE), ]
-  })
-  names(markers_list) <- cluster_ids
-
-  up_list   <- lapply(markers_list, function(m) m[abs(m$avg_log2FC) > log2(1.25) & -log10(m$p_val_adj) > 20 & m$avg_log2FC > 0, ])
-  down_list <- lapply(markers_list, function(m) m[abs(m$avg_log2FC) > log2(1.25) & -log10(m$p_val_adj) > 20 & m$avg_log2FC < 0, ])
-
-  ## avg_log2FC is selected by name: FindMarkers column order differs across Seurat versions.
-  gene_vec <- function(m) { v <- m[["avg_log2FC"]]; names(v) <- row.names(m); v }
-  background_list <- lapply(markers_list, gene_vec)
-  up_genes_list    <- lapply(up_list,   gene_vec)
-  down_genes_list  <- lapply(down_list, gene_vec)
-
-  enrich <- setNames(apply_fun(cluster_ids, function(cc) list(
-    up   = run_enrichment(names(up_genes_list[[cc]]),   names(background_list[[cc]]), kegg_data = kegg_data),
-    down = run_enrichment(names(down_genes_list[[cc]]), names(background_list[[cc]]), kegg_data = kegg_data))), cluster_ids)
-  up_enrich   <- lapply(enrich, `[[`, "up")
-  down_enrich <- lapply(enrich, `[[`, "down")
-
-  list(markers = markers_list, up = up_list, down = down_list,
-       up_enrich = up_enrich, down_enrich = down_enrich,
-       background = background_list, cluster_ids = cluster_ids)
 }
 
 ## plot_cluster_marker_enrichment: writes cluster_marker_enrichment()'s up/down enrichment for
@@ -2500,120 +2410,6 @@ nupop_cluster_inputs <- function(genome, seqs) {
   list(chroms = chroms, coords = coords)
 }
 
-## Scores every chromosome in one species' inputs and returns each gene's
-## promoter occupancy track. Rounds of windows run until every window is
-## scored or reaches min_core_bp. Minus-strand slices are reversed so the
-## promoter-proximal end sits at the end of every vector, matching
-## tata_box_score() and poly_at_tract() on the same gene's sequence. The
-## coords the tracks came from travel with the result, so
-## score_promoters_nupop() can confirm they match the current promoters.
-nupop_occupancy_cluster <- function(inputs, species = 7, model = 4,
-                                    window_bp = 250000, flank = 7000, fallback_flank = 2000,
-                                    min_core_bp = 5000, cores = 1) {
-  ## Runs a table of core windows (seqid, start, end) with `flank` bp of
-  ## context, one forked process per window, and returns one result per
-  ## row. A window whose process ends early returns NULL or a try-error,
-  ## which the caller reads as "split and rerun".
-  nupop_run_windows <- function(chroms, tasks, flank, species, model, cores, work_root) {
-    ## Predicts occupancy for one sequence in the current process and returns
-    ## positions core_from to core_to. Each call works in its own temporary
-    ## folder, because NuPoP writes its prediction file into the working
-    ## directory. The folder name carries the process ID, which is unique
-    ## among running processes, so forked workers that start from the same
-    ## tempfile() state still receive separate folders. The folders sit under
-    ## work_root, which nupop_occupancy_cluster() places beside R's session
-    ## temp directory rather than inside it, so each worker's files stay
-    ## independent of every other worker.
-    nupop_predict_window <- function(seg_seq, core_from, core_to, species = 7, model = 4,
-                                     work_root = tempdir()) {
-      n <- nchar(seg_seq)
-      ## NuPoP scores sequences of at least 148 bp, one nucleosome plus one base
-      if (n < 148) return(rep(NA_real_, core_to - core_from + 1))
-      wd <- tempfile(pattern = sprintf("nupop_pid%d_", Sys.getpid()), tmpdir = work_root)
-      dir.create(wd, recursive = TRUE)
-      old_wd <- setwd(wd)
-      on.exit({ setwd(old_wd); unlink(wd, recursive = TRUE) }, add = TRUE)
-
-      st <- seq(1, n, by = 80)
-      writeLines(c(">window", substring(seg_seq, st, pmin(st + 79, n))), "window.fa")
-      invisible(utils::capture.output(NuPoP::predNuPoP("window.fa", species = species, model = model)))
-      pred <- paste0("window.fa_Prediction", model, ".txt")
-      if (!file.exists(pred)) return(NULL)
-
-      ## Columns are Position, P.start, Occup, N/L, Affinity. NULL skips a column.
-      tab  <- scan(pred, what = list(0L, NULL, 0, NULL, NULL), skip = 1, quiet = TRUE)
-      occ  <- rep(NA_real_, n)
-      keep <- tab[[1]] >= 1 & tab[[1]] <= n & tab[[3]] >= 0
-      occ[tab[[1]][keep]] <- tab[[3]][keep]
-      occ[core_from:core_to]
-    }
-
-    parallel::mclapply(seq_len(nrow(tasks)), function(i) {
-      s  <- chroms[[tasks$seqid[i]]]
-      ws <- max(1, tasks$start[i] - flank)
-      we <- min(nchar(s), tasks$end[i] + flank)
-      nupop_predict_window(substr(s, ws, we), tasks$start[i] - ws + 1, tasks$end[i] - ws + 1,
-                           species = species, model = model, work_root = work_root)
-    }, mc.cores = cores, mc.preschedule = FALSE)
-  }
-
-  chroms <- inputs$chroms
-  coords <- inputs$coords
-  occ    <- lapply(chroms, function(s) rep(NA_real_, nchar(s)))
-
-  ## Node-local scratch space for every window's files, removed at the end
-  work_root <- file.path(dirname(tempdir()), sprintf("nupop_work_%d", Sys.getpid()))
-  dir.create(work_root, recursive = TRUE, showWarnings = FALSE)
-  on.exit(unlink(work_root, recursive = TRUE), add = TRUE)
-
-  tasks <- do.call(rbind, lapply(names(chroms), function(sq) {
-    n <- nchar(chroms[[sq]])
-    s <- seq(1, n, by = window_bp)
-    data.frame(seqid = sq, start = s, end = pmin(s + window_bp - 1, n), stringsAsFactors = FALSE)
-  }))
-  window_ok <- function(r, t) is.numeric(r) && length(r) == t$end - t$start + 1
-
-  reduced <- NULL
-  failed  <- NULL
-  round   <- 0
-  while (nrow(tasks) > 0) {
-    round <- round + 1
-    t0    <- Sys.time()
-    res   <- nupop_run_windows(chroms, tasks, flank, species, model, cores, work_root)
-    ok    <- vapply(seq_len(nrow(tasks)), function(i) window_ok(res[[i]], tasks[i, ]), logical(1))
-    for (i in which(ok)) occ[[tasks$seqid[i]]][tasks$start[i]:tasks$end[i]] <- res[[i]]
-
-    bad   <- tasks[!ok, , drop = FALSE]
-    small <- bad[bad$end - bad$start + 1 <= min_core_bp, , drop = FALSE]
-    big   <- bad[bad$end - bad$start + 1 >  min_core_bp, , drop = FALSE]
-
-    if (nrow(small) > 0) {
-      res2 <- nupop_run_windows(chroms, small, fallback_flank, species, model, cores, work_root)
-      ok2  <- vapply(seq_len(nrow(small)), function(i) window_ok(res2[[i]], small[i, ]), logical(1))
-      for (i in which(ok2)) occ[[small$seqid[i]]][small$start[i]:small$end[i]] <- res2[[i]]
-      if (any(ok2))  reduced <- rbind(reduced, cbind(small[ok2, , drop = FALSE], flank = fallback_flank))
-      if (any(!ok2)) failed  <- rbind(failed, small[!ok2, , drop = FALSE])
-    }
-
-    mid   <- (big$start + big$end) %/% 2
-    tasks <- rbind(data.frame(seqid = big$seqid, start = big$start, end = mid,     stringsAsFactors = FALSE),
-                   data.frame(seqid = big$seqid, start = mid + 1,   end = big$end, stringsAsFactors = FALSE))
-    cat(sprintf("[%s] round %d: %d windows scored, %d split for the next round, %.1f min\n",
-                format(Sys.time(), "%H:%M:%S"), round, sum(ok), nrow(big),
-                as.numeric(difftime(Sys.time(), t0, units = "mins"))))
-    flush.console()
-  }
-
-  out <- setNames(vector("list", nrow(coords)), coords$gene)
-  for (i in seq_len(nrow(coords))) {
-    s <- occ[[coords$seqid[i]]][coords$start[i]:coords$end[i]]
-    out[[coords$gene[i]]] <- if (coords$strand[i] == "-") rev(s) else s
-  }
-  attr(out, "coords")                <- coords
-  attr(out, "reduced_flank_regions") <- reduced
-  attr(out, "failed_regions")        <- failed
-  out
-}
 ## Returns one row per gene (gene, occ_score) from the occupancy tracks
 ## the cluster job produced (NUPOP.OCC.SC or NUPOP.OCC.SE, loaded from
 ## nupop_output.rda); merge it onto score_promoters()'s table by gene.
@@ -3161,15 +2957,6 @@ check_cluster_key <- function(out_key, in_key, what, script) {
   invisible(TRUE)
 }
 
-## go_enrich_one: one unit of work for go_enrich.R. Over-representation
-## jobs call run_enrichment(); rank-based jobs call gseGO() with a
-## job-specific seed so permutation p-values reproduce.
-go_enrich_one <- function(job, kegg_data, qval, seed) {
-  if (job$kind == "ora") return(run_enrichment(job$genes, job$universe, qval = qval, kegg_data = kegg_data))
-  set.seed(seed)
-  suppressWarnings(gseGO(geneList = job$ranks, OrgDb = org.Sc.sgd.db, keyType = "ORF", ont = job$ont, nPermSimple = 100000))
-}
-
 ##############################################################################
 ## 12. CLUSTER-BASED NOISE PARTITIONING                                    ##
 ##############################################################################
@@ -3330,93 +3117,8 @@ report_within_between_by_class <- function(wb_a, wb_b, class, gene_ref, class_le
 }
 
 ## ============================================================
-## 13. POWER ANALYSIS (simulation and fit, shared with the SLURM job power_grid.R)
+## 13. POWER-ANALYSIS PLOTS AND SHARED PLOTTING HELPERS
 ## ============================================================
-## ============================================================
-## power_grid_row: power for one (MEAN.READS, N.CELLS, SIZE) row of GRID
-## across every SIZE.RATIO value at once; the unit of work that
-## power_grid.R distributes with parLapply, returning one power value per
-## SIZE.RATIO.
-##
-## Design: two independent groups with equal mean reads, a reference (Sc)
-## group of N.CELLS.X cells with NB size SIZE and a second group of
-## round(N.CELLS.X * CELL.RATIO) cells with size SIZE / SIZE.RATIO.
-## Exposures and permutation index sets are seeded from row$n (the cell
-## count) alone, so rows sharing a cell count draw identical sequences. The
-## reference group's counts and MLE fit are drawn once per replicate and
-## reused across the SIZE.RATIO sweep, so the sweep isolates the effect of
-## SIZE.RATIO.
-##
-## Calling power at a Benjamini-Hochberg FDR: every dataset gets a
-## permutation p-value (NI shuffles of the pooled count/exposure pairs).
-## For each SIZE.RATIO above 1, the p-values of a random subset of
-## true-difference datasets (fraction PI1 of the pooled set) are pooled
-## with the SIZE.RATIO = 1 datasets, which supply the null. BH is applied
-## to the pooled set and power is the fraction of true-difference datasets
-## called at q < ALPHA. Averaging over N.MIX random subsets uses every
-## simulated dataset without further fitting. The SIZE.RATIO = 1 entry is
-## the raw false-positive rate at p < ALPHA, a calibration check of the
-## permutation test; SIZE.RATIO therefore includes 1 exactly once.
-## ============================================================
-power_grid_row <- function(i, GRID, MEAN.READS, N.CELLS, SIZE, SIZE.RATIO, EXPOSURE.CV, CELL.RATIO, ALPHA, NJ, NI, SEED.BASE, PI1 = 0.1, N.MIX = 50) {
-  ## size_log2_ratio: log2 ratio of the NB size (disp, the burst-frequency axis) between two
-  ## .fit_one() results, NA if either side is non-positive or non-finite.
-  size_log2_ratio <- function(fit_a, fit_b) {
-    a <- fit_a[["disp"]]; b <- fit_b[["disp"]]
-    if (is.finite(a) && a > 0 && is.finite(b) && b > 0) log2(a) - log2(b) else NA_real_
-  }
-
-  row <- GRID[i, ]
-  MEAN.READS.X <- MEAN.READS[row$m]
-  N.SC.X       <- N.CELLS[row$n]
-  N.SE.X       <- round(N.SC.X * CELL.RATIO)
-  SIZE.1.X     <- SIZE[row$p]
-
-  set.seed(SEED.BASE + 1e6 + row$n)  #shared draws, keyed only by cell count
-  sdlog <- sqrt(log(1 + EXPOSURE.CV^2))
-  EXPO.X.LIST <- lapply(seq_len(NJ), function(j) rlnorm(N.SC.X, meanlog = -0.5*sdlog^2, sdlog = sdlog))
-  EXPO.Y.LIST <- lapply(seq_len(NJ), function(j) rlnorm(N.SE.X, meanlog = -0.5*sdlog^2, sdlog = sdlog))
-  PERM.LIST   <- lapply(seq_len(NI), function(k) sample.int(N.SC.X + N.SE.X))
-
-  set.seed(SEED.BASE + i)  #row-specific draws (X depends on m, p, n)
-  X.LIST  <- vector("list", NJ)
-  FA.LIST <- vector("list", NJ)
-  for (j in seq_len(NJ)) {
-    X.LIST[[j]]  <- rnbinom(n = N.SC.X, size = SIZE.1.X, mu = MEAN.READS.X*EXPO.X.LIST[[j]])
-    FA.LIST[[j]] <- .fit_one(X.LIST[[j]], EXPO.X.LIST[[j]])  #shared across SIZE.RATIO below
-  }
-
-  P.ALL <- matrix(NA_real_, NJ, length(SIZE.RATIO))
-  for (qi in seq_along(SIZE.RATIO)) {
-    SIZE.2.X <- SIZE.1.X / SIZE.RATIO[qi]
-    for (j in seq_len(NJ)) {
-      EXPO.Y <- EXPO.Y.LIST[[j]]
-      Y  <- rnbinom(n = N.SE.X, size = SIZE.2.X, mu = MEAN.READS.X*EXPO.Y)
-      fb <- .fit_one(Y, EXPO.Y)   #same estimator as the null below
-      OBS <- size_log2_ratio(FA.LIST[[j]], fb)
-
-      XY <- c(X.LIST[[j]], Y); EXPO.XY <- c(EXPO.X.LIST[[j]], EXPO.Y)
-      NULL.DIST <- numeric(NI)
-      for (k in seq_len(NI)) {
-        sp <- .fit_split(XY, EXPO.XY, PERM.LIST[[k]], N.SC.X)  #same estimator as the observed contrast
-        NULL.DIST[k] <- size_log2_ratio(sp$a, sp$b)
-      }
-      P.ALL[j, qi] <- perm_pval(OBS, NULL.DIST)
-    }
-  }
-
-  i0     <- which(SIZE.RATIO == 1)
-  P.NULL <- P.ALL[, i0]
-  n_alt  <- min(NJ, round(NJ * PI1 / (1 - PI1)))
-  vapply(seq_along(SIZE.RATIO), function(qi) {
-    if (qi == i0) return(mean(P.NULL < ALPHA, na.rm = TRUE))
-    mean(replicate(N.MIX, {
-      q <- p.adjust(c(P.NULL, P.ALL[sample.int(NJ, n_alt), qi]), method = "BH")
-      mean(q[NJ + seq_len(n_alt)] < ALPHA, na.rm = TRUE)
-    }), na.rm = TRUE)
-  }, numeric(1))
-}
-
 ## Opens a PDF sized to the nr x nc panel grid it is about to hold.
 ## Margins and label spacing (mgp) are set tight throughout, so every
 ## power-analysis figure shares the same compact panel layout.

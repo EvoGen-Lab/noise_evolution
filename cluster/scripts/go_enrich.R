@@ -39,9 +39,18 @@ JOBS <- c(gse_jobs,
 
 cat(sprintf("enrichment start: %d jobs (%d rank-based), %d cores\n", length(JOBS), length(gse_jobs), NUM.CORES)); flush.console()
 t0 <- Sys.time()
+## One unit of work per job. Over-representation jobs call run_enrichment(); rank-based jobs call
+## gseGO() with a job-specific seed so permutation p-values reproduce.
 RES <- mclapply(seq_along(JOBS), function(k)
-  tryCatch(go_enrich_one(JOBS[[k]], KEGG.DATA, GO.INPUTS$GO.QVAL, GO.INPUTS$SEED.GO + k),
-           error = function(e) { message(sprintf("%s: %s", names(JOBS)[k], conditionMessage(e))); NULL }),
+  tryCatch({
+    job <- JOBS[[k]]
+    if (job$kind == "ora") {
+      run_enrichment(job$genes, job$universe, qval = GO.INPUTS$GO.QVAL, kegg_data = KEGG.DATA)
+    } else {
+      set.seed(GO.INPUTS$SEED.GO + k)
+      suppressWarnings(gseGO(geneList = job$ranks, OrgDb = org.Sc.sgd.db, keyType = "ORF", ont = job$ont, nPermSimple = 100000))
+    }
+  }, error = function(e) { message(sprintf("%s: %s", names(JOBS)[k], conditionMessage(e))); NULL }),
   mc.cores = NUM.CORES, mc.preschedule = FALSE)
 names(RES) <- names(JOBS)
 cat(sprintf("enrichment done in %.1f min\n", as.numeric(difftime(Sys.time(), t0, units = "mins"))))
