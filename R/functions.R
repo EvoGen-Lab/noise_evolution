@@ -7,7 +7,7 @@
 ### cluster_stability.R, go_enrich.R, power_grid.R)
 ###
 ### A function lives here when its code runs more than once: it is called from two or more places, or it is
-### applied across many items (Section 14b for analysis.R, Section 14c for the cluster scripts). Code that
+### applied across many items (Section 13b for analysis.R, Section 13c for the cluster scripts). Code that
 ### runs once is written inline where it runs. analysis.R and the cluster scripts define no functions.
 ###
 ### Outline (function name - purpose), grouped by section:
@@ -31,7 +31,13 @@
 ###     .cv2_of() - CV2 (1/mu + 1/disp) of one fitted group; NA unless mu and disp are finite and positive.
 ###   4. DISATTENUATED MEAN-DISP COUPLING (population summary)
 ###     eiv_components() - Errors-in-variables mean-bfreq coupling for one mode: attenuation-corrected variances, covariance and correlation, plus the raw correlation.
-###   5. PLOTS (gene-level, square symmetric panels, SE bars)
+###   5. PLOTTING HELPERS AND GENE-LEVEL PLOTS
+###     open_grid_pdf() - Opens a PDF sized to the panel grid it is about to hold, with tight margins throughout.
+###     line_colors() - Color ramp sized to the number of lines drawn in one panel.
+###     cluster_cols() - Cluster colors from the plum ramp, n colors via interpolation.
+###     umap_plot() - UMAP with the shared cluster palette and on-plot labels.
+###     plot_lines() - Plots one line per column of a matrix against a shared x vector, with reference lines at power 0.05 and 0.9.
+###     legend_page() - One legend page mapping each line color to the value it represents.
 ###     .sym() - Symmetric axis limits spanning a vector of values plus their SE.
 ###     .se_scatter() - Shared SE-bar scatter body of the three gene-level scatters below.
 ###     plot_cis_trans() - Cis vs trans scatter for one quantity (mean/bfreq/bsize/kbal/cv2) on a shared symmetric range, with SE bars.
@@ -115,25 +121,17 @@
 ###     plot_within_between_hist() - Genome-wide distribution of within_between_decomp()'s ratio, one dataset, with the within = between line marked.
 ###     plot_within_between_vs_quantity() - Scatter of within_between_decomp()'s ratio against one burst kinetics quantity (mean, burst frequency, or burst size), with Spearman rho reported.
 ###     report_within_between_by_class() - Plots the within/between ratio by class (with class_anova()'s omnibus test and Tukey comparisons) for two datasets side by side against one classification axis; writes the combined figure and prints both datasets' test statistics.
-###   13. POWER-ANALYSIS PLOTS AND SHARED PLOTTING HELPERS
-###     open_grid_pdf() - Opens a PDF sized to the panel grid it is about to hold, with tight margins throughout.
-###     line_colors() - Color ramp sized to the number of lines drawn in one panel.
-###     cluster_cols() - Cluster colors from the plum ramp, n colors via interpolation.
-###     umap_plot() - UMAP with the shared cluster palette and on-plot labels.
-###     plot_lines() - Plots one line per column of a matrix against a shared x vector, with reference lines at power 0.05 and 0.9.
-###     legend_page() - One legend page mapping each line color to the value it represents.
-###   14. EXTERNAL NOISE VALIDATION
+###   13. EXTERNAL NOISE VALIDATION
 ###     cor_row() - Spearman rank correlation between two vectors, with pairwise-complete filtering; returns one row (n, rho, p).
 ###     add_burst_terms() - Implied Fano factor, burst size, and burst frequency algebraically recovered from a reported mean and CV^2.
 ###     read_header_line() - Header line of a delimited file as a character vector, with quotes stripped.
 ###     get_data_header() - Sample/gene names of a file's header with the row-id field removed, whichever header convention the file uses.
 ###     fread_matrix() - Fast row-named numeric matrix reader (fread based) with column selection.
-###     qc_filter_counts() - Drops low-depth cells, then genes detected in too few remaining cells.
 ###     to_numeric_matrix() - Coerces a table to a numeric matrix, reporting and dropping non-numeric columns.
-###     map_to_orf() / collapse_to_orf() - Resolve gene identifiers to systematic ORF names; sum rows that share an ORF.
-###     fit_source() - Offset NB fit for one external count matrix, returned on the NB.SC layout (ORF, Mean, CV2, Fano, BFREQ, BSIZE).
+###     map_to_orf() - Resolves gene identifiers to systematic ORF names (NA when unresolved).
+###     fit_scrna_source() - One published scRNA-seq source: ORF collapse, cell/gene QC and offset NB fit, returned on the NB.SC layout (ORF, Mean, CV2, Fano, BFREQ, BSIZE).
 ###     mean_adjusted_noise() - Loess residual of log CV^2 on log mean: noise relative to genes of similar abundance.
-###   14b. FUNCTIONS APPLIED ACROSS ITEMS BY analysis.R
+###   13b. FUNCTIONS APPLIED ACROSS ITEMS BY analysis.R
 ###     qc_cell_cutoff() - library-size cell filter for one dataset s (a list with lib, the per-cell library.
 ###     fstar_from_r() - closed-form split fraction f* = [(2+r) - sqrt(r^2+4)] / (2r) for r = B*Nh/A.
 ###     gene_pass_group() - genes passing the filters in one group g: a finite NB dispersion, a mean count at or.
@@ -180,7 +178,7 @@
 ###     n_sig_by_set() - number of significant terms (q-value below q) in every enrichment result of one gene-set list s.
 ###     mean_cv2_spearman() - Spearman correlation of log mean and log CV2 in one source table d, the share of CV2 variation that follows from abundance alone.
 ###     diet_for_markers() - strips a Seurat object to the counts and data layers FindMarkers needs, keeping the cluster job's input small.
-###   14c. FUNCTIONS THE CLUSTER SCRIPTS RUN
+###   13c. FUNCTIONS THE CLUSTER SCRIPTS RUN
 ###     pilot_split_se_one() - one gene's bootstrap SE of log(mu) and log(size) for the four datasets needed to compute A and B, plus the bootstrap.
 ###     boot_contrasts_one() - one gene's bootstrap contrasts across all modes (the unit of work a cluster worker does).
 ###     permute_contrasts_one() - one gene's permutation null: refits the relabeled groups for every mode and permutation, compares the observed.
@@ -269,6 +267,13 @@ neg_binom_fit_offset <- function(y, exposure) {
   out
 }
 
+# Bounds of the NB size (theta) estimate. The 1-D likelihood search runs over log(theta) in
+# LOG.THETA.RANGE. A fitted theta above THETA.CAP is indistinguishable from Poisson at any count the data
+# can resolve, so it is reported as Inf (the Poisson limit), and gene filters treat DISP >= THETA.CAP as
+# not identifiable.
+THETA.CAP       <- 1e6
+LOG.THETA.RANGE <- c(-4, 15)
+
 # The pipeline's single NB estimator: mu = sum(y)/sum(exposure), and disp = the NB size
 # from a 1-D likelihood maximization over log(theta) given that mu, after a Poisson-vs-NB
 # pre-check (Pearson chi-square / df <= 1 gives disp = Inf). neg_binom_fit_offset() uses it
@@ -291,11 +296,11 @@ neg_binom_fit_offset <- function(y, exposure) {
   opt <- tryCatch(optimize(function(ltheta) {
     th <- exp(ltheta)
     sum(lgamma(y + th) - lgamma(th) + th*log(th) - (th + y)*log(th + mu_i) + y*log(mu_i))
-  }, c(-4, 15), maximum = TRUE), error = function(e) NULL)
+  }, LOG.THETA.RANGE, maximum = TRUE), error = function(e) NULL)
   if (is.null(opt)) return(c(mu = mu_hat, disp = NA_real_))
 
   theta <- exp(opt$maximum)
-  c(mu = mu_hat, disp = if (theta > 1e6) Inf else theta)
+  c(mu = mu_hat, disp = if (theta > THETA.CAP) Inf else theta)
 }
 
 # Splits a pooled sample at position n1 of a pre-drawn index permutation and fits each
@@ -547,7 +552,7 @@ make_draws <- function(ncells, B, seed = 1) {
 ## both on the log2 scale, with propagated SEs, to the finished bootstrap table. bfreq is the NB
 ## dispersion contrast under its biological name. Because bsize is defined by that subtraction,
 ## bfreq and bsize are structurally anti-correlated whenever bfreq varies more than the mean
-## (see bfreq_bsize_structural() in analysis.R Section 3.6). kbal together with the mean carries the same information as
+## (see the structural bfreq-bsize check in analysis.R Section 3.6). kbal together with the mean carries the same information as
 ## bfreq and bsize without that dependence, so kbal against the mean asks whether a gene's overall
 ## change leans toward frequency or size. Fitting code keeps the field name "disp".
 add_burst_contrasts <- function(df) {
@@ -604,8 +609,65 @@ eiv_components <- function(BURST.CONTRASTS, mode = .OUT_MODES) {
 }
 
 ## ============================================================
-## 5. PLOTS (gene-level, square symmetric panels, SE bars)
+## 5. PLOTTING HELPERS AND GENE-LEVEL PLOTS
 ## ============================================================
+
+## ---- Shared plotting helpers: panel layout, color ramps, line panels, UMAP ----
+## The helpers below serve the power-analysis figures (open_grid_pdf, line_colors, plot_lines,
+## legend_page) and the clustering figures (cluster_cols, umap_plot). open_grid_pdf() gives every
+## multi-panel figure the same compact layout.
+
+## Opens a PDF sized to the nr x nc panel grid it is about to hold.
+## Margins and label spacing (mgp) are set tight throughout, so every
+## power-analysis figure shares the same compact panel layout.
+open_grid_pdf <- function(file, nr, nc, panel_w = 2.3, panel_h = 2.3, mar = c(3, 3, 2, 1), mgp = c(1.6, 0.5, 0)) {
+  pdf(file, width = nc * panel_w, height = nr * panel_h, useDingbats = FALSE)
+  par(mfrow = c(nr, nc), mar = mar, mgp = mgp)
+}
+
+## Color ramp with n colors, one per line in a panel.
+line_colors <- function(n) colorRampPalette(POWER.COLOR)(n)
+
+## Cluster colors come from the plum ramp, kept separate from the warm power-curve ramp.
+## On-plot labels in umap_plot() carry identity alongside color.
+cluster_cols <- function(n) colorRampPalette(COLOR.CLUSTER)(n)
+
+## Plots one line per column of `mat` against `xv`, using a color ramp
+## sized to ncol(mat). Reference lines at power 0.05 (nominal false
+## positive rate) and 0.9 (a common target) give every panel the same
+## visual anchor regardless of which quantity is on the x-axis.
+plot_lines <- function(xv, mat, xlab = "", ylab = "Power", main = "", show_axes = TRUE, lwd = 1.4, x_at = NULL, x_labels = NULL) {
+  cols <- line_colors(ncol(mat))
+  plot(xv, mat[, 1], type = "l", lwd = lwd, col = cols[1], ylim = c(0, 1), xlab = if (show_axes && is.null(x_at)) xlab else "", ylab = if (show_axes) ylab else "", xaxt = if (!is.null(x_at) || !show_axes) "n" else "s", yaxt = if (show_axes) "s" else "n", main = main, cex.main = 0.8)
+  abline(h = 0.05, col = COLOR.ACCENT, lty = 2); abline(h = 0.9, col = COLOR.ACCENT, lty = 3)
+  if (ncol(mat) > 1) for (k in 2:ncol(mat)) lines(xv, mat[,k], lwd = lwd, col = cols[k])
+  #x_at/x_labels give exact tick positions and real-valued labels for a
+  #log-scaled axis (e.g. log2(SIZE.RATIO) with SIZE.RATIO as labels)
+  if (!is.null(x_at)) {
+    axis(1, at = x_at, labels = x_labels, cex.axis = 0.55, las = 2)
+    title(xlab = xlab, mgp = c(2.6,1,0), cex.lab = 0.75)
+  }
+  invisible(cols)
+}
+
+## One legend page appended after a grid of panels, mapping each line
+## color to the value it represents.
+legend_page <- function(labels, title) {
+  cols <- line_colors(length(labels))
+  plot.new()
+  legend("center", legend = labels, col = cols, lwd = 2, title = title, ncol = ceiling(length(labels)/15), bty = "n", cex = 0.9)
+}
+
+## UMAP with the shared cluster palette and on-plot labels as a second cue,
+## so identity never depends on color alone. group.by = NULL uses Idents(obj).
+umap_plot <- function(obj, title = NULL, group.by = NULL) {
+  ids  <- if (is.null(group.by)) Idents(obj) else obj[[group.by, drop = TRUE]]
+  lv   <- if (is.factor(ids)) levels(droplevels(ids)) else sort(unique(as.character(ids)))
+  cols <- setNames(cluster_cols(length(lv)), lv)
+  DimPlot(obj, reduction = "umap", group.by = group.by, cols = cols, label = TRUE, repel = TRUE) + ggtitle(title)
+}
+
+## ---- Gene-level scatters and histograms (square symmetric panels, SE bars) ----
 
 ## Symmetric axis limits about zero that cover value +/- error.
 .sym <- function(v, e) { m <- max(abs(c(v + e, v - e)), na.rm = TRUE); c(-m, m) }
@@ -646,7 +708,7 @@ plot_cis_trans <- function(BURST.CONTRASTS, quantity = c("mean", "bfreq", "bsize
 
 ## Mean vs burst-frequency (NB dispersion) contrast for one mode, with SE bars. Both axes share one
 ## symmetric range. The tilt of the cloud is not the true slope; the attenuation-corrected coupling is
-## in eiv_table().
+## in the errors-in-variables table of analysis.R Section 3.
 plot_mean_bfreq <- function(BURST.CONTRASTS, mode = .OUT_MODES, main = NULL, bar_col = adjustcolor(COLOR.GREY[["dark"]], 0.33), pt_col = "black") {
   mode <- match.arg(mode)
   if (is.null(main)) main <- paste0("mean vs noise: ", mode)
@@ -775,7 +837,7 @@ shrink_cor <- function(Z) {
 ## no HYB.COMB, so the dpar terms are optional.
 ## Ploidy. Summing two alleles lowers each gene's latent variance and leaves the between-gene
 ## covariance unchanged, which raises the hybrid's residual correlations above a haploid genome's.
-## ploidy_f (one named factor per gene, from ploidy_coexpr_factor()) rescales the shrunken Rhyb to
+## ploidy_f (one named factor per gene, PLOIDY.F in analysis.R) rescales the shrunken Rhyb to
 ## R_ij * f_i * f_j, the per-genome scale of the haploid parents, before the dpar contrasts. The
 ## default reads attr(resid, "ploidy_f"), which RESID carries into the cluster jobs. Total, cis
 ## and trans never use HYB.COMB and are unaffected.
@@ -847,7 +909,7 @@ gene_reliability <- function(fits, genes) {
 ## Before choosing a reliability floor for the allele-pair correlation (a gene's within-hybrid-cell
 ## correlation between its Sc- and Se-allele NB Pearson residuals), this checks how the correlation's
 ## bootstrap SE varies with the predicted attenuation sqrt(rho_Sc * rho_Se), the same diagnostic as
-## check_coexpr_reliability(). There is one correlation per gene rather than a p x p matrix, so every
+## the co-expression reliability check in analysis.R Section 4. There is one correlation per gene rather than a p x p matrix, so every
 ## gene can be checked on its own. Because the intended use divides the correlation by
 ## sqrt(rho_Sc * rho_Se) (disattenuation), a second effect is examined: at low reliability the
 ## division inflates estimation noise on top of the attenuation. Raw and disattenuated SE are plotted
@@ -942,7 +1004,7 @@ plot_coexpr_scatter <- function(CT, type = c("cis_trans", "dominance"), main = N
 ## reports whether the SE has converged: a scatter against the y = x
 ## line, the seed-to-seed Spearman correlation, and the median and IQR
 ## of the SE ratio. Used by both gene_seed_compare() (per-gene) and
-## coexpr_seed_compare() (per-pair), which differ only in how they
+## coexpr_seed_check() (per-pair), which differ only in how they
 ## extract and align se1/se2 before calling this.
 seed_compare_core <- function(se1, se2, main, count_label) {
   ok  <- is.finite(se1) & is.finite(se2)
@@ -959,7 +1021,7 @@ seed_compare_core <- function(se1, se2, main, count_label) {
 }
 
 ## Two-seed adequacy check for the per-gene bootstrap (BURST.CONTRASTS), the per-gene counterpart of
-## coexpr_seed_compare(). If N.BOOT has not converged, a gene's SE changes between bootstrap runs,
+## coexpr_seed_check(). If N.BOOT has not converged, a gene's SE changes between bootstrap runs,
 ## seen as a low seed-to-seed correlation or a wide SE-ratio spread. bc1, bc2: two
 ## add_burst_contrasts()-style data frames at the same N.BOOT and gene set that differ only in
 ## SEED.BOOT. Genes are matched by name, so row order need not agree.
@@ -1034,7 +1096,7 @@ classify_reg <- function(p_cis, p_trans, est_cis, est_trans, sig = 0.05, colors 
 ## places an additive gene at the midparent, so the calls need no ploidy correction. On
 ## the noise axis HYB.COMB averages the intrinsic noise of two alleles, which raises DISP
 ## in the hybrid relative to both parents; noise-axis calls therefore use the
-## ploidy-adjusted estimates from ploidy_adjust_dpar() and the _q_ploidy q-values
+## ploidy-adjusted estimates (the BURST.CONTRASTS block in analysis.R) and the _q_ploidy q-values
 ## (bfreq, bsize, kbal, cv2; dom_class_vec selects them), while the mean axis uses _q.
 ## The inh contrasts carry a -1 log2 mean-axis baseline, so they stay descriptive and
 ## outside this classifier. DOM.CLASS is defined in the main script.
@@ -1438,8 +1500,8 @@ print_enrich_brief <- function(e, q = 0.2, n_top = 10) {
   print(tab, row.names = FALSE)
 }
 
-## plot_cluster_marker_enrichment: writes cluster_marker_enrichment()'s up/down enrichment for
-## every cluster to one pdf via barplot_enrich_pair(); each page set is labeled with its
+## plot_cluster_marker_enrichment: writes the up/down marker enrichment of every cluster (from
+## cluster_stability.R's dataset_marker_enrichment()) to one pdf; each page set is labeled with its
 ## "up" cluster so pages are identifiable out of context.
 plot_cluster_marker_enrichment <- function(res, label, pdf_path, width = 7, height = 5) {
   if (is.null(res)) return(invisible(NULL))
@@ -1770,7 +1832,7 @@ plot_dom_class <- function(BURST.CONTRASTS, PR, quantity = c("mean", "bfreq", "b
 ## a_i/(e_i^2 ma^2), and intr is clipped at zero because a variance estimate that falls
 ## below zero is sampling noise. Returns gene, intr, extr and a `good` flag (both allele
 ## means positive), so the components can also be used directly as a ratio
-## (Section 12) as well as through intrinsic_fraction().
+## (Section 12) as well as through the intrinsic fraction in analysis.R.
 intrinsic_extrinsic_components <- function(mats, expos) {
   e_vec <- c(expos$HYC, expos$HYT)
   a_raw <- cbind(mats$HYC.SC, mats$HYT.SC)
@@ -2555,8 +2617,8 @@ plot_resolution_sweep <- function(sweep, label, fig_dir, min_cells) {
 ## ARI, n_ok = completed replicates); final_res is the candidate with the
 ## highest mean ARI (ties go to the first row, the sweep's chosen
 ## resolution); final_obj is obj relabelled with the reference partition at
-## final_res; ari keeps the raw vectors. report_bootstrap_compare() and the
-## downstream code read this list.
+## final_res; ari keeps the raw vectors. The comparison report in analysis.R
+## Section 7.3 and the downstream code read this list.
 assemble_cluster_stability <- function(inputs, ari, dataset, obj) {
   rows <- inputs$tasks[inputs$tasks$dataset == dataset, ]
   a    <- ari[rows$task]
@@ -2766,60 +2828,7 @@ report_within_between_by_class <- function(wb_a, wb_b, class, gene_ref, class_le
 }
 
 ## ============================================================
-## 13. POWER-ANALYSIS PLOTS AND SHARED PLOTTING HELPERS
-## ============================================================
-## Opens a PDF sized to the nr x nc panel grid it is about to hold.
-## Margins and label spacing (mgp) are set tight throughout, so every
-## power-analysis figure shares the same compact panel layout.
-open_grid_pdf <- function(file, nr, nc, panel_w = 2.3, panel_h = 2.3, mar = c(3, 3, 2, 1), mgp = c(1.6, 0.5, 0)) {
-  pdf(file, width = nc * panel_w, height = nr * panel_h, useDingbats = FALSE)
-  par(mfrow = c(nr, nc), mar = mar, mgp = mgp)
-}
-
-## Cluster colors come from the plum ramp, kept separate from the warm power-curve ramp.
-## On-plot labels in umap_plot() carry identity alongside color.
-cluster_cols <- function(n) colorRampPalette(COLOR.CLUSTER)(n)
-
-## UMAP with the shared cluster palette and on-plot labels as a second cue,
-## so identity never depends on color alone. group.by = NULL uses Idents(obj).
-umap_plot <- function(obj, title = NULL, group.by = NULL) {
-  ids  <- if (is.null(group.by)) Idents(obj) else obj[[group.by, drop = TRUE]]
-  lv   <- if (is.factor(ids)) levels(droplevels(ids)) else sort(unique(as.character(ids)))
-  cols <- setNames(cluster_cols(length(lv)), lv)
-  DimPlot(obj, reduction = "umap", group.by = group.by, cols = cols, label = TRUE, repel = TRUE) + ggtitle(title)
-}
-
-## Color ramp with n colors, one per line in a panel.
-line_colors <- function(n) colorRampPalette(POWER.COLOR)(n)
-
-## Plots one line per column of `mat` against `xv`, using a color ramp
-## sized to ncol(mat). Reference lines at power 0.05 (nominal false
-## positive rate) and 0.9 (a common target) give every panel the same
-## visual anchor regardless of which quantity is on the x-axis.
-plot_lines <- function(xv, mat, xlab = "", ylab = "Power", main = "", show_axes = TRUE, lwd = 1.4, x_at = NULL, x_labels = NULL) {
-  cols <- line_colors(ncol(mat))
-  plot(xv, mat[, 1], type = "l", lwd = lwd, col = cols[1], ylim = c(0, 1), xlab = if (show_axes && is.null(x_at)) xlab else "", ylab = if (show_axes) ylab else "", xaxt = if (!is.null(x_at) || !show_axes) "n" else "s", yaxt = if (show_axes) "s" else "n", main = main, cex.main = 0.8)
-  abline(h = 0.05, col = COLOR.ACCENT, lty = 2); abline(h = 0.9, col = COLOR.ACCENT, lty = 3)
-  if (ncol(mat) > 1) for (k in 2:ncol(mat)) lines(xv, mat[,k], lwd = lwd, col = cols[k])
-  #x_at/x_labels give exact tick positions and real-valued labels for a
-  #log-scaled axis (e.g. log2(SIZE.RATIO) with SIZE.RATIO as labels)
-  if (!is.null(x_at)) {
-    axis(1, at = x_at, labels = x_labels, cex.axis = 0.55, las = 2)
-    title(xlab = xlab, mgp = c(2.6,1,0), cex.lab = 0.75)
-  }
-  invisible(cols)
-}
-
-## One legend page appended after a grid of panels, mapping each line
-## color to the value it represents.
-legend_page <- function(labels, title) {
-  cols <- line_colors(length(labels))
-  plot.new()
-  legend("center", legend = labels, col = cols, lwd = 2, title = title, ncol = ceiling(length(labels)/15), bty = "n", cex = 0.9)
-}
-
-## ============================================================
-## 14. EXTERNAL NOISE VALIDATION
+## 13. EXTERNAL NOISE VALIDATION
 ## ============================================================
 ## Validation of the MIX.SC NB fit (mean, CV^2, burst frequency, burst size)
 ## against published yeast noise data. Summary-statistic sources (Newman, Keren,
@@ -2915,17 +2924,6 @@ fread_matrix <- function(path, keep = NULL, sep = "\t", skip = 0, ...) {
   mat
 }
 
-## qc_filter_counts() drops cells whose library size is below min.cell.count,
-## then genes detected in fewer than min.cells.expr of the remaining cells.
-## The thresholds are arguments because the four sources differ widely in
-## depth and cell number; each is set per source in analysis.R Section 9.3.
-qc_filter_counts <- function(mat, min.cell.count = 1, min.cells.expr = 1) {
-  keep.cells <- colSums(mat) >= min.cell.count
-  mat <- mat[, keep.cells, drop = FALSE]
-  keep.genes <- rowSums(mat > 0) >= min.cells.expr
-  mat[keep.genes, , drop = FALSE]
-}
-
 ## to_numeric_matrix() coerces a table to a numeric matrix. One non-numeric
 ## column (a metadata field, a stray total-count column, a blank trailing
 ## column) would otherwise turn the whole as.matrix() result into character.
@@ -2987,38 +2985,32 @@ map_to_orf <- function(ids, label = "") {
   out
 }
 
-## collapse_to_orf() sums counts across any duplicate rows sharing the
-## same resolved ORF (isoform- or TSS-level rows in Nadal-Ribelles collapse
-## to one gene-level row this way) and drops rows that never mapped to
-## an ORF at all.
-collapse_to_orf <- function(mat, raw.ids, label = "") {
-  orf <- map_to_orf(raw.ids, label)
+## fit_scrna_source: takes the raw genes-by-cells count matrix of one published single-cell source to a
+## data.frame keyed by ORF, with the Mean/CV2/Fano/BFREQ/BSIZE content NB.SC carries, so every source
+## merges against NB.SC the same way.
+##   1. Row names raw_ids resolve to systematic ORFs (map_to_orf); rows that never map are dropped and rows
+##      sharing an ORF are summed (TSS- or isoform-level rows collapse to one gene-level row).
+##   2. QC drops cells whose library size is below min_cell_count, then genes detected in fewer than
+##      min_cells_expr of the remaining cells. The thresholds are arguments because the sources differ
+##      widely in depth and cell number.
+##   3. Exposure is each cell's library size divided by the source's mean library size, so MU is in
+##      counts per typical cell (the unit MIX.SC uses) and CV2 = 1/MU + 1/DISP is at this dataset's own
+##      depth. BFREQ = DISP and BSIZE = MU/DISP, the definitions documented for NB.SC.
+## cl is optional and passed to fit_counts_offset(): NULL fits on one core; a PSOCK cluster from
+## parallel::makeCluster() splits genes across workers (the driver reuses one cluster for all sources).
+fit_scrna_source <- function(mat, raw_ids, label, min_cell_count, min_cells_expr, cl = NULL) {
+  stopifnot(is.numeric(min_cell_count), length(min_cell_count) == 1, min_cell_count >= 0,
+            is.numeric(min_cells_expr), length(min_cells_expr) == 1, min_cells_expr >= 0)
+  orf <- map_to_orf(raw_ids, label)
   mat <- mat[!is.na(orf), , drop = FALSE]
   orf <- orf[!is.na(orf)]
-  rowsum(mat, group = orf)
-}
+  mat <- rowsum(mat, group = orf)
 
-## fit_source() takes a QC'd genes-by-cells count matrix to a data.frame keyed
-## by ORF with the MU/CV2/BFREQ/BSIZE content NB.SC carries, so every source
-## merges against NB.SC the same way.
-##
-## Exposure is each cell's library size divided by the source's mean library
-## size. MU is then in counts per typical cell, the unit MIX.SC uses, so
-## 1/MU and 1/DISP contribute to CV2 = 1/MU + 1/DISP at this dataset's own
-## depth.
-##
-## cl is optional and passed to fit_counts_offset(): NULL fits on one core; a PSOCK cluster from
-## parallel::makeCluster() splits genes across workers. The driver creates one cluster and
-## reuses it for all four sources (Section 9.3 of analysis.R).
-fit_source <- function(mat, cl = NULL) {
+  mat <- mat[, colSums(mat) >= min_cell_count, drop = FALSE]
+  mat <- mat[rowSums(mat > 0) >= min_cells_expr, , drop = FALSE]
 
   exposure <- colSums(mat) / mean(colSums(mat))
   fit <- fit_counts_offset(mat, exposure, cl = cl)
-
-  # BFREQ and BSIZE are read straight from fit_counts_offset()'s own
-  # BFREQ and BSIZE columns, the same DISP-based definition documented
-  # for NB.SC in Section 9.2 of the driver script (burst frequency =
-  # DISP, burst size = MU / DISP).
   data.frame(
     ORF   = rownames(fit),
     Mean  = fit$MU,
@@ -3048,7 +3040,7 @@ mean_adjusted_noise <- function(mean, cv2, span = 0.3) {
 }
 
 ## ============================================================
-## 14b. FUNCTIONS APPLIED ACROSS ITEMS BY analysis.R
+## 13b. FUNCTIONS APPLIED ACROSS ITEMS BY analysis.R
 ## ============================================================
 ## Each function below runs the same code once per element of a vector or list in analysis.R (through
 ## lapply, sapply, vapply, mapply or apply). It takes the element first and the objects it reads as named
@@ -3078,7 +3070,7 @@ fstar_from_r <- function(r) {
 ## over the rows of fits[[g]].
 gene_pass_group <- function(g, fits, floor_mean, n_min) {
   fit <- fits[[g]]
-  is.finite(fit$DISP) & fit$DISP < 1e6 & fit$MEAN_CT >= floor_mean[[g]] & fit$N_EXPR >= n_min
+  is.finite(fit$DISP) & fit$DISP < THETA.CAP & fit$MEAN_CT >= floor_mean[[g]] & fit$N_EXPR >= n_min
 }
 
 ## perm_label_draw: one permutation's relabelings for every mode. total, trans, dpar and inh shuffle
@@ -3384,7 +3376,7 @@ diet_for_markers <- function(obj) {
 }
 
 ## ============================================================
-## 14c. FUNCTIONS THE CLUSTER SCRIPTS RUN
+## 13c. FUNCTIONS THE CLUSTER SCRIPTS RUN
 ## ============================================================
 ## The per-item work that the cluster scripts distribute with parLapply or mclapply, and the helpers they share. Each function takes the
 ## item first and the loaded inputs as named arguments, so the scripts hold only loading, chunking, progress and saving.
@@ -3657,7 +3649,7 @@ coexpr_part_table <- function(nm, point, acc, base) {
 }
 
 ## coexpr_perm_one: one permutation draw of the five null spectra, for rank-matched testing of every candidate axis. draw: one element of
-## make_coexpr_perm_draws(). resid: the RESID list (including HYB.COMB). nSC, nSE: parent cell counts, used to split each pooled, reshuffled
+## DRAWS.PERM.COEXPR in analysis.R. resid: the RESID list (including HYB.COMB). nSC, nSE: parent cell counts, used to split each pooled, reshuffled
 ## pool back into groups of the original sizes. n_keep: ranks retained per decomposition. Returns the top n_keep squared eigenvalues by
 ## magnitude, descending, for all five decompositions.
 coexpr_perm_one <- function(draw, n_keep, nSC, nSE, resid) {
@@ -3697,7 +3689,7 @@ coexpr_perm_one <- function(draw, n_keep, nSC, nSE, resid) {
 ## promoter occupancy track. Rounds of windows run until every window is
 ## scored or reaches min_core_bp. Minus-strand slices are reversed so the
 ## promoter-proximal end sits at the end of every vector, matching
-## tata_box_score() and poly_at_tract() on the same gene's sequence. The
+## the TATA and poly(dA:dT) scores in score_promoters() on the same gene's sequence. The
 ## coords the tracks came from travel with the result, so
 ## score_promoters_nupop() can confirm they match the current promoters.
 nupop_occupancy_cluster <- function(inputs, species = 7, model = 4,
@@ -3990,7 +3982,7 @@ gse_job_set <- function(q, ranks_lists) {
 ## ============================================================
 ## Each function below has no caller in analysis.R or cluster/scripts/ and none
 ## in any function those reach. The section separates the code the pipeline
-## runs (Sections 1-14) from code available for interactive use.
+## runs (Sections 1-13) from code available for interactive use.
 ##
 ## 15a. Gene-fit calibration helpers for the Poisson/NB boundary and for
 ## convergence and precision by mean-count bin: refine_by_boundary(),
@@ -4026,7 +4018,7 @@ refine_by_boundary <- function(mats, expos, candidates, max_boundary = 0.10, B =
 ## BURST.CONTRASTS (e.g. bsize_*_se) give the definitive precision.
 chk <- function(fit) {
   b <- cut(fit$MEAN_CT, c(0, 0.5, 1, 2, 4, 8, Inf))
-  round(tapply(is.finite(fit$DISP) & fit$DISP < 1e6, b, mean), 2)
+  round(tapply(is.finite(fit$DISP) & fit$DISP < THETA.CAP, b, mean), 2)
 }
 chk_prec <- function(fit) {
   b <- cut(fit$MEAN_CT, c(0, 0.5, 1, 2, 4, 8, Inf))
@@ -4053,7 +4045,7 @@ coexpr_raw_cor <- function(resid) {
 ## matches Figure 11 exactly rather than re-deriving significance. Genes
 ## with high degree_any are candidates for being actual rewiring hubs
 ## rather than one member of a single divergent pair.
-## class_table: coexpr_class_table() output. genes: CO.GENES, so genes
+## class_table: the CB.CLASS table of analysis.R Section 4.5. genes: CO.GENES, so genes
 ## with zero hits still appear with degree 0 rather than being dropped.
 coexpr_gene_degree <- function(class_table, genes, sig = 0.05) {
   count_for <- function(hit) {
@@ -4089,7 +4081,7 @@ plot_coexpr_pair <- function(resid, gi, gj, main = NULL) {
 ## terms via print_enrich_brief() (Description, p.adjust, Count), so the
 ## results are readable without opening the pdf and remain available
 ## even for a term set whose barplot failed to render (see
-## barplot_enrich_pair()'s per-plot tryCatch).
+## the per-plot tryCatch in plot_cluster_marker_enrichment()).
 report_cluster_marker_enrichment <- function(res, label, q = 0.2) {
   if (is.null(res)) return(invisible(NULL))
   for (cc in res$cluster_ids) {

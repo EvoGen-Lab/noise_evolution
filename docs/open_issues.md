@@ -6,11 +6,11 @@ Source: `docs/function_review.md` (item numbers refer to its section 3), re-chec
 
 | Review # | Where | Issue | Rerun if fixed |
 |---|---|---|---|
-| 3 | `boot_contrasts_one` (14c), `add_burst_contrasts`, `eiv_components` | `cor_<mode>` is NA for cis and trans on the premise that the mean and bfreq contrasts share no resampled cells. The trans contrasts share parental draws (`.MODES`). NA enters as r = 0, biasing the trans burst-size and kinetic-balance SEs. | 2.3 bootstrap (`gene_boot`) |
-| 4 | `permute_contrasts_one` (14c), the `PERMS` block in analysis.R | The trans null shuffles the SC and SE sides independently and breaks the within-cell pairing that the cis null keeps. This bears on the trans versus cis power asymmetry (project_context.md). | 2.3 permutation (`gene_perm`) |
-| 5 | `coexpr_perm_one` (functions.R 14c) | dpar nulls pool raw hybrid cells while the observed dpar matrices carry the ploidy rescale. Bias direction not quantified. | Section 4 (`coexpr_perm`) |
-| 7 | `power_grid_row` (functions.R 14c) | The grid simulates one two-group contrast. It has no paired-allele (cis) or difference-of-ratios (trans) contrast, so it cannot show the asymmetry (open work item 4). | Section 10, additive |
-| 8 | `pilot_split_se_one` (14c) | Per-gene seed `seed + sum(utf8ToInt(gene))` yields about 37 distinct seeds for 8000 genes. Marginal SEs unaffected. | Same cascade as the pilot; fix with any pilot rerun |
+| 3 | `boot_contrasts_one` (13c), `add_burst_contrasts`, `eiv_components` | `cor_<mode>` is NA for cis and trans on the premise that the mean and bfreq contrasts share no resampled cells. The trans contrasts share parental draws (`.MODES`). NA enters as r = 0, biasing the trans burst-size and kinetic-balance SEs. | 2.3 bootstrap (`gene_boot`) |
+| 4 | `permute_contrasts_one` (13c), the `PERMS` block in analysis.R | The trans null shuffles the SC and SE sides independently and breaks the within-cell pairing that the cis null keeps. This bears on the trans versus cis power asymmetry (project_context.md). | 2.3 permutation (`gene_perm`) |
+| 5 | `coexpr_perm_one` (functions.R 13c) | dpar nulls pool raw hybrid cells while the observed dpar matrices carry the ploidy rescale. Bias direction not quantified. | Section 4 (`coexpr_perm`) |
+| 7 | `power_grid_row` (functions.R 13c) | The grid simulates one two-group contrast. It has no paired-allele (cis) or difference-of-ratios (trans) contrast, so it cannot show the asymmetry (open work item 4). | Section 10, additive |
+| 8 | `pilot_split_se_one` (13c) | Per-gene seed `seed + sum(utf8ToInt(gene))` yields about 37 distinct seeds for 8000 genes. Marginal SEs unaffected. | Same cascade as the pilot; fix with any pilot rerun |
 | 9 | `extract_promoters` | Neighbour bound uses the adjacent gene, not the running maximum end. Rare in yeast. | 6.1 NuPoP |
 
 ## B. Local-only changes that alter reported numbers
@@ -36,7 +36,7 @@ Source: `docs/function_review.md` (item numbers refer to its section 3), re-chec
 - `.fit_split`, `fit_split_nb_mm`, `fit_split_nb`: `perm[(n1 + 1):length(perm)]` misbehaves when `n1 == length(perm)`.
 - Edge cases in `class_overlap_heatmap`, `se_alpha_col`, `shrink_cor`, `class_anova`, `gene_reliability`, `cor_row`, `to_numeric_matrix`, `read_header_line`.
 - `set.seed()` on the global RNG in `class_identity_overlap`, `check_intrinsic_reliability`, `boot_resample_matrix`, `eiv_mode_ci_row` and `pilot_split_se_one`. `make_coexpr_draws` and `make_coexpr_perm_draws` share `SEED.COEXPR`.
-- Missing entry validation for most numeric arguments (`fit_source`, `qc_filter_counts`, `mean_adjusted_noise`, `nupop_occupancy_cluster` (14c) with `cores = 1` has no crash isolation).
+- Missing entry validation for most numeric arguments (`fit_source`, `qc_filter_counts`, `mean_adjusted_noise`, `nupop_occupancy_cluster` (13c) with `cores = 1` has no crash isolation).
 - `NOISE.CL` leaks if an error occurs between creation and `stopCluster`; several `pdf()` blocks lack `on.exit(dev.off())`.
 
 ## D. Project-level open work (CLAUDE.md)
@@ -48,9 +48,7 @@ Source: `docs/function_review.md` (item numbers refer to its section 3), re-chec
 
 ## E. Structure and housekeeping
 
-- The Section 15 serial wrappers were deleted. The functions the cluster scripts run are in `functions.R` Section 14c, and the functions `analysis.R` applies across items are in Section 14b; neither kind of script defines functions.
-- Remaining merge candidates: plot bodies shared by `plot_cis_trans`, `plot_mean_bfreq`, `plot_burst_kinetics`; `seed_compare_core` wrappers; `.cohen_kappa` versus the inline kappa; the per-dataset blocks in `analysis.R` around the external-source correlations that could be a loop.
-- Hoist repeated constants (theta cap `1e6`, `optimize` interval `c(-4, 15)`, axis count 15).
-- Group the shared plotting helpers (`line_colors`, `cluster_cols`, `umap_plot`, `plot_lines`, `legend_page`, `open_grid_pdf`) into their own section.
-- Doc comments on some inlined blocks in `analysis.R` still read as the former function signature; reword them to describe the step.
+- Section 7 of `analysis.R` repeats the same steps for each of the seven Seurat datasets (normalize and variable features, PCA elbow, resolution sweep, UMAP, and in 7.5 to 7.8 the within/between, cell-cycle and metabolic steps). Turning them into one list-valued pipeline over `DS.NAMES` changes every downstream object name (`YSC.*`, `HVG.*`, `PCS.*`, `RES.SWEEP.*`, `BOOT.*`, `WB.*`, `AXIS.*`, `STATE.*`) and cannot be checked without Seurat here, so it was left.
+- The `plot_cis_trans_class` / `plot_mean_bfreq_class` pair and `plot_coexpr_scatter` still draw their own axes and legends; they could share `.se_scatter` once their class colouring is a parameter.
+- Some `analysis.R` comments quote the algebra of a step in prose that now sits beside inline code; keep them in step with the code when it changes.
 - One-line function literals remain inside `R/functions.R` functions (accessors, small `sapply` bodies, `tryCatch` handlers). The scripts keep none except `tryCatch(error = function(e) NULL)` in `analysis.R`.
