@@ -190,7 +190,7 @@ MIX.MINORITY.FRAC <- pmin(MIX.SC.SHARED.SUM, MIX.SE.SHARED.SUM) / (MIX.SC.SHARED
 # Sweep of minority-read-fraction thresholds
 MIX.FRAC.SWEEP <- 10^seq(log10(0.001), log10(0.5), length.out = 200)
 MINORITY.FRAC.THRESHOLD <- 0.005
-MIX.FRAC.SWEEP.N.EXCEED <- sapply(MIX.FRAC.SWEEP, n_exceeding, x = MIX.MINORITY.FRAC)
+MIX.FRAC.SWEEP.N.EXCEED <- sapply(MIX.FRAC.SWEEP, function(t) sum(MIX.MINORITY.FRAC > t))
 pdf(file.path(FIGURE.DIR, "extra/S_mix_shared_cell_contamination_sweep.pdf"), width = 6, height = 5, useDingbats = FALSE)
 plot(MIX.FRAC.SWEEP * 100, MIX.FRAC.SWEEP.N.EXCEED, log = "x", type = "l",
      xlab = "Minority-species read fraction threshold (%, log scale)",
@@ -472,7 +472,7 @@ NCELLS <- c(MIX.SC = ncol(MIX.SC), MIX.SE = ncol(MIX.SE), HYC.SC = ncol(HYC.SC),
 # dispersion estimate, a mean count above a floor that scales with dataset
 # depth, and detection in an absolute number of cells set from the smallest
 # dataset, in every one of the 13 datasets
-SPLIT.DEPTH <- vapply(SPLIT.FIT.MATS, depth_per_cell, numeric(1))
+SPLIT.DEPTH <- vapply(SPLIT.FIT.MATS, function(m) sum(m) / ncol(m), numeric(1))
 GENES <- local({
   fits <- SPLIT.FITS
   ncells <- NCELLS
@@ -605,9 +605,10 @@ local({
 # trans)
 pdf(file.path(FIGURE.DIR, "extra/contrasts_panels.pdf"), width = 13, height = 13)
 par(mfrow = c(3, 3), mar = c(4, 4, 3, 1))
-plot_cis_trans(BURST.CONTRASTS, "mean");      plot_cis_trans(BURST.CONTRASTS, "bfreq");      plot_cis_trans(BURST.CONTRASTS, "bsize")
-plot_mean_bfreq(BURST.CONTRASTS, "total");     plot_mean_bfreq(BURST.CONTRASTS, "cis");       plot_mean_bfreq(BURST.CONTRASTS, "trans")
-plot_burst_kinetics(BURST.CONTRASTS, "total"); plot_burst_kinetics(BURST.CONTRASTS, "cis"); plot_burst_kinetics(BURST.CONTRASTS, "trans")
+for (panel in list(c("cis_trans", "mean"), c("cis_trans", "bfreq"), c("cis_trans", "bsize"),
+                   c("mean_bfreq", "total"), c("mean_bfreq", "cis"), c("mean_bfreq", "trans"),
+                   c("burst_kinetics", "total"), c("burst_kinetics", "cis"), c("burst_kinetics", "trans")))
+  plot_contrast_scatter(BURST.CONTRASTS, panel[1], panel[2])
 dev.off()
 
 ## 2.4 Bootstrap adequacy check
@@ -620,7 +621,7 @@ SEED.CHECK <- setNames(lapply(c("total", "cis", "trans"), gene_seed_check, bc1 =
 dev.off()
 
 # Expect correlation 0.9+ and a tight SE ratio 
-do.call(rbind, lapply(names(SEED.CHECK), gene_seed_check_rows, checks = SEED.CHECK))
+do.call(rbind, lapply(names(SEED.CHECK), seed_check_rows, checks = SEED.CHECK, count_label = "n_genes"))
 
 # Checkpoint: the fitted NB models, per-gene contrasts, and every Section 2
 # object that later sections read.
@@ -1087,7 +1088,7 @@ SEED.CHECK <- setNames(lapply(c("total", "cis", "trans", "dpar_sc", "dpar_se"), 
 dev.off()
 
 # expect correlation 0.9+ and a tight SE ratio
-do.call(rbind, lapply(names(SEED.CHECK), seed_check_row, checks = SEED.CHECK))
+do.call(rbind, lapply(names(SEED.CHECK), seed_check_rows, checks = SEED.CHECK, count_label = "n_pairs"))
 
 ## 4.5 Pair-level classification
 
@@ -1211,7 +1212,7 @@ for (ax in COEXPR.AXES) {
     n_candidate <- min(n_candidate, length(rank_check$values) - 1)
     axis_order  <- order(abs(rank_check$values), decreasing = TRUE)[1:n_candidate]
     axis_var    <- setNames(rank_check$values[axis_order]^2 / sum(rank_check$values^2), axis_order)
-    axis_pr     <- setNames(sapply(axis_order, axis_participation_ratio, vectors = rank_check$vectors), axis_order)
+    axis_pr     <- setNames(sapply(axis_order, function(k) 1 / sum(rank_check$vectors[, k]^4)), axis_order)
 
     sig_axes <- as.integer(names(axis_var)[axis_var >= var_floor])
     dropped  <- sig_axes[axis_pr[as.character(sig_axes)] < eff_genes_min]
@@ -1227,12 +1228,6 @@ for (ax in COEXPR.AXES) {
 cat(sprintf("%s: axes clearing the variance and participation-ratio floors: %s\n", ax, paste(CANDIDATE.LIST[[ax]]$sig_axes, collapse = ", ")))
 }
 
-# Split RANK.CHECK into individual components
-RANK.CHECK         <- RANK.CHECK.LIST$total
-RANK.CHECK.CIS     <- RANK.CHECK.LIST$cis
-RANK.CHECK.TRANS   <- RANK.CHECK.LIST$trans
-RANK.CHECK.DPAR.SC <- RANK.CHECK.LIST$dpar_sc
-RANK.CHECK.DPAR.SE <- RANK.CHECK.LIST$dpar_se
 
 ## 4.8 Mixture model and GO enrichment for candidate axes 
 # Fits a two-component mixture to each axis's loading vector, splits
@@ -1318,7 +1313,7 @@ for (ax in COEXPR.AXES) {
     ## draws: without it, mean(null >= obs) reports an exact 0 that
     ## overstates precision no finite permutation count can support,
     ## rather than the true floor of 1 / (n_perm + 1)
-    candidate_p    <- sapply(seq_along(candidate_raw), rank_null_p, observed = candidate_raw, null_ranks = null_ranks)
+    candidate_p    <- sapply(seq_along(candidate_raw), function(k) (1 + sum(null_ranks[, k] >= candidate_raw[k])) / (1 + nrow(null_ranks)))
 
     ## Benjamini-Hochberg FDR across the candidate axes of this matrix.
     ## Rank-matched nulls make the axis tests positively related, the
@@ -1542,7 +1537,7 @@ INTR.REL.CHECK <- local({
     ok    <- is.finite(attn)
     bins  <- cut(attn[ok], breaks = quantile(attn[ok], seq(0, 1, length.out = n_bins + 1)), include.lowest = TRUE)
     genes <- names(attn)[ok]
-    unname(unlist(tapply(genes, bins, sample_bin_genes, n_per_bin = n_per_bin)))
+    unname(unlist(tapply(genes, bins, function(g) sample(g, min(n_per_bin, length(g))))))
   })
 
   rho_obs <- row_cor(sc[samp, , drop = FALSE], se[samp, , drop = FALSE])
@@ -1591,8 +1586,8 @@ INTR.REL.CHECK$floor_summary
 DEPTH.CELL <- EXPO.HYB
 INTR.SAMP  <- INTR.REL.CHECK$genes
 
-DEPTH.COR.SC <- sapply(INTR.SAMP, depth_cor, resid = RESID.ALLELE$HYB.SC, depth = DEPTH.CELL)
-DEPTH.COR.SE <- sapply(INTR.SAMP, depth_cor, resid = RESID.ALLELE$HYB.SE, depth = DEPTH.CELL)
+DEPTH.COR.SC <- sapply(INTR.SAMP, function(g) cor(RESID.ALLELE$HYB.SC[g, ], DEPTH.CELL))
+DEPTH.COR.SE <- sapply(INTR.SAMP, function(g) cor(RESID.ALLELE$HYB.SE[g, ], DEPTH.CELL))
 
 summary(DEPTH.COR.SC); summary(DEPTH.COR.SE)   # expect both centered near 0, no strong depth bias left in the residuals
 mean(DEPTH.COR.SC > 0); mean(DEPTH.COR.SE > 0)   # expect close to 0.5 if depth bias is not systematic in one direction
@@ -1720,8 +1715,8 @@ ANOVA.BY.CLASS.CLEAN <- list(
   DOM.KBAL  = class_anova(NOISE.DECOMP.CLEAN.NOAMBIG$extrinsic_frac, DOM.KBAL.CLASS[class_idx_clean_noambig]))
 
 # Omnibus F, p, and eta-squared per classification
-t(sapply(ANOVA.BY.CLASS,       anova_summary_row))
-t(sapply(ANOVA.BY.CLASS.CLEAN, anova_summary_row))
+t(sapply(ANOVA.BY.CLASS,       function(a) c(F = a$f, df1 = a$df1, df2 = a$df2, p = a$p, eta_sq = a$eta_sq)))
+t(sapply(ANOVA.BY.CLASS.CLEAN, function(a) c(F = a$f, df1 = a$df1, df2 = a$df2, p = a$p, eta_sq = a$eta_sq)))
 
 # Pairwise Tukey tables
 lapply(ANOVA.BY.CLASS,       `[[`, "tukey")
@@ -2373,18 +2368,16 @@ if (length(SE.PAR.CLUSTERS) == 1 && length(SC.PAR.VS.SE.COR) > 0) {
 # cells most often carry, kept as a pair only if that agreement runs
 # both ways.
 HYB.CROSSTAB <- table(Sc = YSC.IDENTS[SC.HYB.ID], Se = YSC.IDENTS[SE.HYB.ID])
-sc_best_se <- apply(HYB.CROSSTAB, 1, best_partner)
-se_best_sc <- apply(HYB.CROSSTAB, 2, best_partner)
+sc_best_se <- apply(HYB.CROSSTAB, 1, function(row) as.integer(names(which.max(row))))
+se_best_sc <- apply(HYB.CROSSTAB, 2, function(col) as.integer(names(which.max(col))))
 CONSISTENT.PAIRS <- do.call(rbind, lapply(names(sc_best_se), consistent_pair_row, sc_best_se = sc_best_se, se_best_sc = se_best_sc))
 N.CONSISTENT.PAIRS <- nrow(CONSISTENT.PAIRS)
 cat(sprintf("%d mutually-consistent hybrid cluster pair(s) found. Sc-by-Se hybrid cluster crosstab:\n", N.CONSISTENT.PAIRS))
 print(HYB.CROSSTAB)
 print(CONSISTENT.PAIRS)
 
-HYBRID.CONSISTENT.CLUSTER.CELLS <- which(mapply(is_consistent_pair, YSC.IDENTS[SC.HYB.ID], YSC.IDENTS[SE.HYB.ID], MoreArgs = list(pairs = CONSISTENT.PAIRS)))
+HYBRID.CONSISTENT.CLUSTER.CELLS <- which(mapply(function(sc, se) any(CONSISTENT.PAIRS$sc == sc & CONSISTENT.PAIRS$se == se), YSC.IDENTS[SC.HYB.ID], YSC.IDENTS[SE.HYB.ID]))
 cat(sprintf("%d / %d hybrid cells (%.1f%%) fall in a consistent cluster pair\n", length(HYBRID.CONSISTENT.CLUSTER.CELLS), length(SC.HYB.ID), 100*length(HYBRID.CONSISTENT.CLUSTER.CELLS)/length(SC.HYB.ID)))
-HYB.SC.CONSISTENT <- HYB.SC[,HYBRID.CONSISTENT.CLUSTER.CELLS]
-HYB.SE.CONSISTENT <- HYB.SE[,HYBRID.CONSISTENT.CLUSTER.CELLS]
 
 ## 7.5 Within/between-cluster noise partitioning
 # Partitions each gene's variance into within- and between-cluster
@@ -2685,8 +2678,8 @@ list2env(GO.GSE, envir = environment())
 # Low, average, and high intrinsic-fraction sets,
 # enriched by go_enrich.R
 
-sapply(INTR.GO,       n_sig_by_set, q = GO.QVAL)
-sapply(INTR.GO.CLEAN, n_sig_by_set, q = GO.QVAL)
+sapply(INTR.GO,       function(s) sapply(s, n_sig_terms, q = GO.QVAL))
+sapply(INTR.GO.CLEAN, function(s) sapply(s, n_sig_terms, q = GO.QVAL))
 
 # Checkpoint
 save(GO.SETS, GO.ENRICH, GO.SUMMARY,
@@ -2851,7 +2844,7 @@ NEW.MERGE   <- lapply(NEW.SOURCES, merge, x = NB.SC, by = "ORF")
 
 ## 9.4 Correlations against MIX.SC and among external sources
 # Mean-vs-mean and noise-vs-noise, each source against MIX.SC
-EXT.CORR <- do.call(rbind, lapply(names(EXT.MERGE), source_vs_mix_corr, merged = EXT.MERGE))
+EXT.CORR <- do.call(rbind, lapply(names(EXT.MERGE), noise_corr_rows, tables = EXT.MERGE, kind = "vs_mix"))
 EXT.CORR <- EXT.CORR[, c("source", "statistic", "n", "rho", "p")]
 
 # Newman's DM is a mean-corrected residual rather than a raw CV^2, so it
@@ -2864,7 +2857,7 @@ print(EXT.CORR, row.names = FALSE)
 print(NEWMAN.DM.CORR[, c("source", "statistic", "n", "rho", "p")], row.names = FALSE)
 
 # Each single-cell RNA-seq source against MIX.SC
-NEW.CORR <- do.call(rbind, lapply(names(NEW.MERGE), source_vs_mix_corr, merged = NEW.MERGE))
+NEW.CORR <- do.call(rbind, lapply(names(NEW.MERGE), noise_corr_rows, tables = NEW.MERGE, kind = "vs_mix"))
 NEW.CORR <- NEW.CORR[, c("source", "statistic", "n", "rho", "p")]
 print(NEW.CORR, row.names = FALSE)
 
@@ -2877,7 +2870,7 @@ ALL.RAW <- c(EXT.RAW, NEW.RAW)
 
 ALL.PAIRS <- combn(names(ALL.RAW), 2, simplify = FALSE)
 
-ALL.CORR.PAIRWISE <- do.call(rbind, lapply(ALL.PAIRS, pairwise_source_corr, all_raw = ALL.RAW))
+ALL.CORR.PAIRWISE <- do.call(rbind, lapply(ALL.PAIRS, noise_corr_rows, tables = ALL.RAW, kind = "pairwise"))
 ALL.CORR.PAIRWISE <- ALL.CORR.PAIRWISE[, c("comparison", "statistic", "n", "rho", "p")]
 print(ALL.CORR.PAIRWISE, row.names = FALSE)
 
@@ -2891,7 +2884,7 @@ ALL.RAW <- lapply(ALL.RAW, add_cv2_adj)
 # How much of each source's raw CV^2 variation follows from abundance
 # alone.
 MEAN.CV2.LINK <- sapply(c(list(MIX.SC = transform(NB.SC, Mean = MU)), ALL.RAW),
-  mean_cv2_spearman)
+  function(d) cor(log(d$Mean), log(d$CV2), method = "spearman", use = "complete.obs"))
 print(round(MEAN.CV2.LINK, 2))
 
 # Agreement with MIX.SC in gene-specific noise, independent of agreement

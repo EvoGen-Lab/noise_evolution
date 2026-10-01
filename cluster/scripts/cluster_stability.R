@@ -41,7 +41,7 @@ cat(sprintf("stability bootstrap start: %d tasks x B=%d = %d fits, %d cores\n", 
 ari <- numeric(0); t0 <- Sys.time()
 for (ch in chunks) {
   r   <- mclapply(ch, bootstrap_ari_job, mc.cores = NUM.CORES, mc.preschedule = FALSE, inputs = CSTAB.INPUTS, jobs = JOBS, tasks = TASKS)
-  ari <- c(ari, vapply(r, scalar_or_na, numeric(1)))   # a lost worker stays an NA slot
+  ari <- c(ari, vapply(r, function(x) if (is.numeric(x) && length(x) == 1) x else NA_real_, numeric(1)))   # a lost worker stays an NA slot
   el  <- as.numeric(difftime(Sys.time(), t0, units = "mins"))
   cat(sprintf("[%s] %d / %d fits  elapsed %.1f min  eta %.1f min\n", format(Sys.time(), "%H:%M:%S"),
               length(ari), nrow(JOBS), el, (nrow(JOBS) - length(ari)) * el / length(ari))); flush.console()

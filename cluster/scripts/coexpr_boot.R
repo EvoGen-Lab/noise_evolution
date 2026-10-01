@@ -72,7 +72,7 @@ ACC <- local({
   p <- nrow(RESID$MIX.SC)
   up <- which(upper.tri(matrix(0, p, p)))
   z  <- numeric(length(up))
-  sums <- unlist(lapply(.COEXPR_PARTS, acc_slots, z = z), recursive = FALSE)
+  sums <- unlist(lapply(.COEXPR_PARTS, function(nm) setNames(list(z, z), paste0(c("sum_", "sumsq_"), nm))), recursive = FALSE)
   c(list(up = up, n = 0L), sums)
 })
 
