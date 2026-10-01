@@ -19,9 +19,9 @@ Noise and mean expression diverge through distinct regulatory mechanisms between
 - Hybrids are diploid and parents are haploid. This can inflate parental noise and contribute to the trans signal. Keep it stated as a caveat.
 
 ## Open analytical issue: power asymmetry between trans and cis
-The trans contrast carries an extra variance term that scales with 1/N_parental (var_trans = var_cis + 4/N_p). Trans is therefore easier to detect than cis at finite depth, and the gap grows with the parent to hybrid depth ratio.
+The trans contrast carries an extra variance term that scales with 1/N_parental (var_trans = var_cis + 4/N_p). Trans is therefore less powerful than cis at finite depth: its larger variance makes a given effect harder to detect, and the extra term grows as the parental sample shrinks.
 Depth-equalizing downsampling does not remove this for noise. Thinning a negative binomial compresses noise toward the Poisson floor unevenly across genes (Fano after thinning = 1 + p x (Fano before - 1)).
-Any code that reports the trans-dominant noise result must include a power analysis, a simulation, or an explicit statement of the asymmetry and its direction.
+Any code that reports the cis versus trans balance of noise divergence must include a power analysis, a simulation, or an explicit statement of the asymmetry and its direction. Trans is the harder contrast to detect, so a cis-dominant or trans-null call is the one the asymmetry can inflate.
 
 ## Open analytical question: RP and Ribi genes
 Ribosomal protein and Ribi genes show higher mean and higher noise in S. eubayanus. This fits burst size driven divergence. A planned check is to run the burst decomposition on this gene set alone. If burst size dominates, one trans regulatory difference in this regulon links the mean, noise, and kinetic results.
