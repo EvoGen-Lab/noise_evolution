@@ -2,8 +2,8 @@
 ### functions.R
 ### Function library for the cis/trans mean and noise analysis,
 ### sourced by analysis.R and by the SLURM cluster
-### scripts (gene_pilot.R, gene_split.R, gene_boot.R,
-### gene_perm.R, coexpr_boot.R, coexpr_perm.R, nupop_occupancy.R,
+### scripts (gene_pilot.R, gene_boot.R, gene_perm.R,
+### coexpr_boot.R, coexpr_perm.R, nupop_occupancy.R,
 ### cluster_stability.R, go_enrich.R, power_grid.R)
 ###
 ### Outline (function name - purpose), grouped by section:
@@ -46,7 +46,6 @@
 ###     eiv_components() - Errors-in-variables mean-bfreq coupling for one mode: attenuation-corrected variances, covariance and correlation, plus the raw correlation.
 ###     eiv_boot_ci() - Bootstrap confidence interval for one of eiv_components()'s statistics.
 ###     eiv_table() - Table of disattenuated mean-size coupling across a set of modes.
-###     bfreq_bsize_structural() - Correlation between bfreq and bsize implied by bsize = mean - bfreq alone, compared with the observed one.
 ###   5. PLOTS (gene-level, square symmetric panels, SE bars)
 ###     .sym() - Symmetric axis limits spanning a vector of values plus their SE.
 ###     plot_cis_trans() - Cis vs trans scatter for one quantity (mean/bfreq/bsize/kbal/cv2) on a shared symmetric range, with SE bars.
@@ -818,7 +817,7 @@ boot_contrasts_one <- function(g, mats, expos, fits, draws) {
 ## both on the log2 scale, with propagated SEs, to the finished bootstrap table. bfreq is the NB
 ## dispersion contrast under its biological name. Because bsize is defined by that subtraction,
 ## bfreq and bsize are structurally anti-correlated whenever bfreq varies more than the mean
-## (see bfreq_bsize_structural()). kbal together with the mean carries the same information as
+## (see bfreq_bsize_structural() in analysis.R Section 3.6). kbal together with the mean carries the same information as
 ## bfreq and bsize without that dependence, so kbal against the mean asks whether a gene's overall
 ## change leans toward frequency or size. Fitting code keeps the field name "disp".
 add_burst_contrasts <- function(df) {
@@ -898,24 +897,6 @@ eiv_table <- function(BURST.CONTRASTS, modes = c("total","cis","trans","dom","dp
       ms_lo = round(b$ci[1], 3), ms_hi = round(b$ci[2], 3),
       ms_na = round(b$na_frac, 3), row.names = NULL)
   }))
-}
-
-## For one mode, compares the observed bfreq-vs-bsize correlation with the one forced by bsize = mean - bfreq.
-## Algebra gives Cov(bfreq, bsize) = Cov(bfreq, mean) - Var(bfreq). Setting Cov(bfreq, mean) = 0 yields
-## the correlation expected with no biological coupling, rho_null = -Var(bfreq) / sqrt(Var(bfreq) * Var(bsize)).
-## Vm, Vs and Cms come from eiv_components(), so the corrected observed correlation is compared with
-## that null on the same scale.
-bfreq_bsize_structural <- function(BURST.CONTRASTS, mode) {
-  e <- eiv_components(BURST.CONTRASTS, mode)
-  Vm <- e["Vm"]; Vf <- e["Vs"]; Cmf <- e["Cms"]           # Vs/Cms here are bfreq's, not bsize's
-  Vs_bsize   <- Vm + Vf - 2 * Cmf
-  Cov_obs    <- Cmf - Vf
-  Cov_null   <- -Vf
-  rho_obs    <- suppressWarnings(Cov_obs  / sqrt(Vf * Vs_bsize))
-  rho_null   <- suppressWarnings(Cov_null / sqrt(Vf * Vs_bsize))
-  c(n = e["n"], Vm = Vm, Vf = Vf, Vs_bsize = Vs_bsize,
-    rho_bfreq_bsize_observed = rho_obs, rho_bfreq_bsize_null = rho_null,
-    excess_over_null = rho_obs - rho_null)
 }
 
 ## ============================================================
@@ -1661,7 +1642,7 @@ coexpr_dom_class_table <- function(CB, sig = 0.05) {
 }
 
 ## ============================================================
-## Fig 11 : co-expression cis vs trans (per gene pair)
+## Figure 11 : co-expression cis vs trans (per gene pair)
 ## ============================================================
 ## CT is coexpr_class_table(CB), so the class shown is the BH-adjusted call used for the pair lists
 ## and gene degree.
@@ -2110,7 +2091,7 @@ summarize_class_overlap <- function(ov, label = NULL) {
 }
 
 ## ============================================================
-## Figs 1 & 2 : cis vs trans, coloured by regulatory class
+## Figure 1 : cis vs trans, coloured by regulatory class
 ## ============================================================
 ## se_alpha_col: maps a vector of SEs to per-point bar colors. Precise (small-SE) estimates get
 ## a more opaque bar and imprecise (large-SE) ones fade toward the background. lo/hi are the
@@ -2153,7 +2134,7 @@ plot_cis_trans_class <- function(BURST.CONTRASTS, PR, quantity = c("mean", "bfre
 }
 
 ## ============================================================
-## Fig 4 : mean vs noise per gene, per-class slopes
+## Figure 3 (supplement) : mean vs noise per gene, per-class slopes
 ## ============================================================
 ## plot_mean_bfreq_class: mean divergence (x) vs a burst-parameter divergence (y) at one mode,
 ## with per-class regression lines. Points are neutral grey; regulatory slopes are solid and
@@ -2613,7 +2594,7 @@ species_composition_report <- function(cc1, cc2, met1, met2, diag1, diag2, label
 ## DOM.CLASS
 
 ## ============================================================
-## Mean-class x size-class enrichment heatmap
+## Figures 2 and 6 : mean-class x size-class enrichment heatmaps (regulatory classes; dominance classes)
 ## ============================================================
 ## Cell colour encodes log2(obs/exp) for all cells. Cell text shows
 ## obs/exp as fold enrichment (2^lor), with a trailing "*" where the
@@ -2664,7 +2645,7 @@ kbal_sig <- function(BURST.CONTRASTS, mode = "total", sig = 0.05) {
              stringsAsFactors=FALSE)
 }
 
-## plot_burst_kinetics_sig(): scatter of net mean change (x = bfreq + bsize)
+## plot_burst_kinetics_sig() (Figure 4): scatter of net mean change (x = bfreq + bsize)
 ## against kinetic balance (y = bfreq - bsize) with SE bars. The rotation
 ## separates the two burst kinetics: movement along x is a change in total
 ## mean, movement along y is a shift between frequency and size. Points
@@ -2700,6 +2681,7 @@ plot_burst_kinetics_sig <- function(BURST.CONTRASTS, mode = "total", sig = 0.05,
 ## ============================================================
 ## Dominance scatter: parent frame (primary) or A/D rotation (supplement)
 ## ============================================================
+## plot_dom_class(): dominance scatter of the hybrid against each parent (Figure 5, frame = "parent").
 ## frame="parent" (x = hybrid - Sc, y = hybrid - Se) plots exactly the two
 ## contrasts classify_dom() tests, with no midparent construction. Additive
 ## needs only that the two contrasts have opposite sign (the hybrid lies
@@ -2752,7 +2734,7 @@ plot_dom_class <- function(BURST.CONTRASTS, PR, quantity = c("mean", "bfreq", "b
 }
 
 ## ============================================================
-## Violins of a burst quantity by regulatory class (left) and dominance class (right), ggplot2
+## Figure 7 (supplement) : violins of a burst quantity by regulatory class (left) and dominance class (right), ggplot2
 ## ============================================================
 plot_violins <- function(value, reg_class, dom_class, ylab = "kinetic balance (burst frequency - amplitude)") {
   stopifnot(requireNamespace("ggplot2", quietly=TRUE))
@@ -2782,7 +2764,8 @@ plot_violins <- function(value, reg_class, dom_class, ylab = "kinetic balance (b
 ## two alleles share extrinsic fluctuations and differ by intrinsic ones, so
 ## extr = mean(a'b') - 1 (allele covariance) and intr = 0.5 mean((a'-b')^2).
 ## Poisson shot noise is subtracted from intr: Var_Poisson(a'_i) =
-## a_i/(e_i^2 ma^2). Returns gene, intr, extr and a `good` flag (both allele
+## a_i/(e_i^2 ma^2), and intr is clipped at zero because a variance estimate that falls
+## below zero is sampling noise. Returns gene, intr, extr and a `good` flag (both allele
 ## means positive), so the components can also be used directly as a ratio
 ## (Section 12) as well as through intrinsic_fraction().
 intrinsic_extrinsic_components <- function(mats, expos) {
@@ -2798,13 +2781,16 @@ intrinsic_extrinsic_components <- function(mats, expos) {
   extr     <- rowMeans(ap*bp) - 1
   shot_a <- rowMeans(sweep(a_raw, 2, e_vec^2, "/")) / pmax(ma^2, 1e-10)
   shot_b <- rowMeans(sweep(b_raw, 2, e_vec^2, "/")) / pmax(mb^2, 1e-10)
-  intr <- intr_raw - 0.5*(shot_a+shot_b)
+  ## A variance cannot be negative. Where the Poisson term exceeds the measured allele difference the
+  ## estimate is sampling noise, so intr is set to zero.
+  intr <- pmax(intr_raw - 0.5*(shot_a+shot_b), 0)
   data.frame(gene = rownames(mats$HYC.SC), intr = intr, extr = extr, good = good, row.names = NULL)
 }
 
 ## intrinsic_fraction(mats, expos): intr / (intr + max(extr, 0)) per gene,
-## the share of allele-pair noise that is private to each allele. Genes
-## without positive allele means or without a finite fraction are NA.
+## the share of allele-pair noise that is private to each allele. A gene with no
+## measurable intrinsic noise has fraction 0. Genes without positive allele means,
+## or with no intrinsic and no extrinsic noise, are NA. Returns a numeric vector named by gene.
 ## Returns a numeric vector named by gene.
 intrinsic_fraction <- function(mats, expos) {
   ie   <- intrinsic_extrinsic_components(mats, expos)
@@ -2845,7 +2831,7 @@ ploidy_shift <- function(mats, expos) {
   mb <- rowMeans(sweep(cbind(mats$HYC.SE, mats$HYT.SE), 2, e_vec, "/"))   # Se allele mean rate
   w1   <- ma / (ma + mb)
   wsq  <- w1^2 + (1 - w1)^2                          # weight on the private noise of the sum
-  intr <- pmax(ie$intr, 0); extr <- pmax(ie$extr, 0) # clips sampling noise below zero
+  intr <- ie$intr; extr <- pmax(ie$extr, 0)           # intr is already clipped at zero
   phi  <- intr / (intr + extr)
   s    <- -log2(1 - (1 - wsq) * phi)
   s[!ie$good | !is.finite(s)] <- NA_real_
@@ -2904,7 +2890,7 @@ ploidy_adjust_dpar <- function(df, fits, shift) {
   df
 }
 
-## plot_intrinsic_hist(): histogram of the intrinsic fraction (genes with a
+## plot_intrinsic_hist() (Figure 8): histogram of the intrinsic fraction (genes with a
 ## fraction in [0, 1]), with regulatory-class medians (triangles above) and
 ## dominance-class medians (inverted triangles below). The legend sits at
 ## topleft, clear of the tall bars on the right.

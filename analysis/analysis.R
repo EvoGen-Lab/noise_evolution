@@ -620,8 +620,8 @@ table(own = DOM.BFREQ.CLASS, ind = DOM.BFREQ.CLASS.IND)
 # directly. The noise axis of dpar plots the ploidy-adjusted bfreq and bsize
 # estimates from Section 3.3, so the hybrid panels sit on the same per-genome
 # scale as the parental panel.
-# Figure 3 below reuses this same plot_mean_bfreq_class() call for the
-# total contrast only, as the two main-text panels
+# Figure 3 (supplement) below reuses this same plot_mean_bfreq_class() call for
+# the total contrast only, as its two panels
 pdf(file.path(FIGURE.DIR, "extra/S_mean_vs_bfreq_bsize_all_modes.pdf"), width = 13, height = 18, useDingbats = FALSE)
 par(mfrow = c(3, 2), mar = c(4.5, 4.5, 2, 1))
 plot_mean_bfreq_class(BURST.CONTRASTS, PR, "total",   reg_class = REG.MEAN.CLASS, dom_class = DOM.MEAN.CLASS, y_quantity = "bfreq", main = "mean vs burst frequency: parents")
@@ -735,7 +735,26 @@ REG.OVERLAP.MEAN.BFREQ  <- class_identity_overlap(clean_reg(REG.MEAN.CLASS),  cl
 REG.OVERLAP.MEAN.BSIZE  <- class_identity_overlap(clean_reg(REG.MEAN.CLASS),  clean_reg(REG.BSIZE.CLASS), levels = REG.CLASS, nperm = 2000)
 REG.OVERLAP.BFREQ.BSIZE <- class_identity_overlap(clean_reg(REG.BFREQ.CLASS), clean_reg(REG.BSIZE.CLASS), levels = REG.CLASS, nperm = 2000)
 REG.OVERLAP.MEAN.KBAL   <- class_identity_overlap(clean_reg(REG.MEAN.CLASS),  clean_reg(REG.KBAL.CLASS),  levels = REG.CLASS, nperm = 2000)
+# bfreq_bsize_structural(): for one mode, compares the observed bfreq-vs-bsize correlation with the
+# one forced by bsize = mean - bfreq. Algebra gives Cov(bfreq, bsize) = Cov(bfreq, mean) - Var(bfreq).
+# Setting Cov(bfreq, mean) = 0 yields the correlation expected with no biological coupling,
+# rho_null = -Var(bfreq) / sqrt(Var(bfreq) * Var(bsize)). Vm, Vs and Cms come from eiv_components(),
+# so the attenuation-corrected observed correlation is compared with that null on the same scale.
+# Returns a flat list with the fixed fields listed in STRUCT.FIELDS below.
+bfreq_bsize_structural <- function(BURST.CONTRASTS, mode) {
+  e <- eiv_components(BURST.CONTRASTS, mode)
+  Vm <- unname(e["Vm"]); Vf <- unname(e["Vs"]); Cmf <- unname(e["Cms"])   # Vs/Cms here are bfreq's, not bsize's
+  Vs_bsize <- Vm + Vf - 2 * Cmf
+  rho_obs  <- suppressWarnings((Cmf - Vf) / sqrt(Vf * Vs_bsize))
+  rho_null <- suppressWarnings(-Vf / sqrt(Vf * Vs_bsize))
+  list(n = unname(e["n"]), Vm = Vm, Vf = Vf, Vs_bsize = Vs_bsize,
+       rho_bfreq_bsize_observed = rho_obs, rho_bfreq_bsize_null = rho_null,
+       excess_over_null = rho_obs - rho_null)
+}
+STRUCT.FIELDS <- c("n", "Vm", "Vf", "Vs_bsize", "rho_bfreq_bsize_observed", "rho_bfreq_bsize_null", "excess_over_null")
 STRUCT.BFREQ.BSIZE      <- bfreq_bsize_structural(BURST.CONTRASTS, "total")
+stopifnot("bfreq_bsize_structural() fields differ from STRUCT.FIELDS; update the function and the call sites together" =
+          identical(names(STRUCT.BFREQ.BSIZE), STRUCT.FIELDS))
 
 REG.OVERLAP.SUMMARY <- rbind(
   summarize_class_overlap(REG.OVERLAP.MEAN.BFREQ,  label = "Mean vs burst frequency"),
@@ -744,7 +763,7 @@ REG.OVERLAP.SUMMARY <- rbind(
   summarize_class_overlap(REG.OVERLAP.MEAN.KBAL,   label = "Mean vs frequency-size balance"))
 print(REG.OVERLAP.SUMMARY)
 cat(sprintf("Bfreq-vs-bsize correlation: observed (attenuation-corrected) rho = %.3f, expected from the mean/bfreq variance imbalance alone (Cov(mean,bfreq) = 0) rho = %.3f, excess over that null = %.3f\n",
-  STRUCT.BFREQ.BSIZE["rho_bfreq_bsize_observed"], STRUCT.BFREQ.BSIZE["rho_bfreq_bsize_null"], STRUCT.BFREQ.BSIZE["excess_over_null"]))
+  STRUCT.BFREQ.BSIZE[["rho_bfreq_bsize_observed"]], STRUCT.BFREQ.BSIZE[["rho_bfreq_bsize_null"]], STRUCT.BFREQ.BSIZE[["excess_over_null"]]))
 write.csv(REG.OVERLAP.SUMMARY, file.path(TABLE.DIR, "gene_identity_overlap_mean_bfreq_bsize.csv"), row.names = FALSE)
 
 pdf(file.path(FIGURE.DIR, "extra/S_reg_overlap_kappa_null.pdf"), width = 20, height = 5, useDingbats = FALSE)
