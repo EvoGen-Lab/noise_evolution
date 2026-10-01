@@ -4,6 +4,7 @@ Reproducible R pipeline for genome-wide noise evolution in S. cerevisiae (YPS100
 
 ## Files
 - `analysis/analysis.R` main analysis, organized in numbered sections (1, 2.1, 2.3, 4, 6.1 ... 8).
+- `R/setup.R` session setup shared by `analysis.R`, `power_analysis.R` and `external_validation.R`: renv check, project paths and output folders, class names, color palettes, and `R/functions.R`. Each script starts with `library(here); source(here("R", "setup.R"))`. Defines no functions.
 - `R/functions.R` helper functions sourced by the main script.
 - `analysis/power_analysis.R` Section 10 (power analysis) with its functions in `R/functions_power.R`, also sourced by `power_grid.R`. Reads `PR` and `N.PERM` from the Section 2 checkpoint.
 - `analysis/external_validation.R` Section 9 (comparison with published data) with its functions in `R/functions_external.R`. Reads `GENES` and `CONTRAST.FITS` from the Section 2 checkpoint.
@@ -41,7 +42,7 @@ Prefer fixes that avoid cluster reruns. Offer a local recompute path (for exampl
 - R files use Windows CRLF line endings. `.sub` SLURM files use Unix LF line endings. `.gitattributes` enforces both. Keep it intact.
 - Check scalar conditions. Use `&&` and `||` only with length-one logical values. A scan of the full codebase for violations is still unfinished.
 - Write a function only when its code runs more than once: it is called from two or more places, or it is applied across many items (`lapply`, `sapply`, `vapply`, `Map`, `mapply`, `apply`, `parLapply`, `mclapply`). Code that runs once is written inline where it runs, so a reader follows the steps in order.
-  - `analysis/analysis.R`, `analysis/power_analysis.R`, `analysis/external_validation.R` and the cluster scripts define no named functions. A function that is applied across items, or called from two or more places, lives in `R/functions.R`, and is passed to the apply call with its other inputs as named arguments (`lapply(X, name, arg = value)`). A short one-line anonymous function in an apply call (`sapply(x, function(g) cor(a[g], b[g]))`) is fine inline and should not become a separate function. A multi-line body belongs in a named function in `R/functions.R`. Use `[[` for plain accessors.
+  - `analysis/analysis.R`, `analysis/power_analysis.R`, `analysis/external_validation.R`, `R/setup.R` and the cluster scripts define no named functions. A function that is applied across items, or called from two or more places, lives in `R/functions.R`, and is passed to the apply call with its other inputs as named arguments (`lapply(X, name, arg = value)`). A short one-line anonymous function in an apply call (`sapply(x, function(g) cor(a[g], b[g]))`) is fine inline and should not become a separate function. A multi-line body belongs in a named function in `R/functions.R`. Use `[[` for plain accessors.
   - A once-used step in `analysis.R` or a cluster script is written inline (a `local({ ... })` block when it needs private variables), with its concept comment above it.
   - A function that PSOCK workers need by name must be a top-level function in `R/functions.R` (`neg_binom_fit_offset`, `.fit_one`); `fit_counts_offset()` finds such dependencies from the code.
   - Before adding a function, check that it will run more than once; inline it if not.

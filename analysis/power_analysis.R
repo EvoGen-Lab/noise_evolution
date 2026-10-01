@@ -14,35 +14,12 @@
 ### power_output_<k>of<K>.rda files.
 ###############################################################
 
-# renv pins every package to the version recorded in renv.lock. Run
-# renv::restore() once on a new machine
-if (!requireNamespace("renv", quietly = TRUE)) install.packages("renv")
-renv::status()
-
-# here() anchors every path to the project root so that functions and data load correctly
+# here() anchors every path to the project root, so R/setup.R loads from any working
+# directory. setup.R checks renv, defines the project paths, class names and color
+# palettes, and sources R/functions.R.
 library(here)
-stopifnot(file.exists(here("R", "functions.R")))
-source(here("R", "functions.R"))
+source(here("R", "setup.R"))
 source(here("R", "functions_power.R"))
-
-# cluster_inputs and cluster_outputs carry power_inputs.rda and
-# power_output_<k>of<K>.rda to and from the cluster; results/ and figures/ hold
-# what this script writes (same layout as analysis.R)
-INPUT.DIR      <- here("data", "cluster_inputs")
-OUTPUT.DIR     <- here("data", "cluster_outputs")
-CHECKPOINT.DIR <- here("results", "checkpoints")
-CONSOLE.DIR    <- here("results", "console")
-FIGURE.DIR     <- here("figures")
-for (d in c(INPUT.DIR, OUTPUT.DIR, CHECKPOINT.DIR, CONSOLE.DIR, file.path(FIGURE.DIR, "extended"))) {
-  dir.create(d, recursive = TRUE, showWarnings = FALSE)
-}
-
-# Colors used by the power figures (same values as analysis.R). The power-curve
-# lines follow the warm sequential anchors, minus the cream end that vanishes on white
-SEQ.ANCHORS  <- c("#F6F1E4","#E8C77A","#C98A3A","#8A4A3A","#33384A")
-COLOR.SEQ    <- colorRampPalette(SEQ.ANCHORS)(100)
-POWER.COLOR  <- SEQ.ANCHORS[-1]
-COLOR.ACCENT <- "#3A3A3A"
 
 # PR (per-gene permutation results with BH q-values) and N.PERM come from the
 # Section 2 checkpoint

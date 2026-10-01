@@ -11,26 +11,12 @@
 ### Writes the Section 9 checkpoint and the validation figures.
 ###############################################################
 
-# renv pins every package to the version recorded in renv.lock. Run
-# renv::restore() once on a new machine
-if (!requireNamespace("renv", quietly = TRUE)) install.packages("renv")
-renv::status()
-
-# here() anchors every path to the project root so that functions and data load correctly
+# here() anchors every path to the project root, so R/setup.R loads from any working
+# directory. setup.R checks renv, defines the project paths, class names and color
+# palettes, and sources R/functions.R.
 library(here)
-stopifnot(file.exists(here("R", "functions.R")))
-source(here("R", "functions.R"))
+source(here("R", "setup.R"))
 source(here("R", "functions_external.R"))
-
-# data/ holds the published datasets read from disk; results/ and figures/ hold
-# what this script writes (same layout as analysis.R)
-EXTERNAL.DIR   <- here("data", "external")
-CHECKPOINT.DIR <- here("results", "checkpoints")
-CONSOLE.DIR    <- here("results", "console")
-FIGURE.DIR     <- here("figures")
-for (d in c(CHECKPOINT.DIR, CONSOLE.DIR, file.path(FIGURE.DIR, "extra"))) {
-  dir.create(d, recursive = TRUE, showWarnings = FALSE)
-}
 
 suppressWarnings(suppressPackageStartupMessages({
   library(MASS)
@@ -38,9 +24,6 @@ suppressWarnings(suppressPackageStartupMessages({
   library(readxl)
   library(data.table)
 }))
-
-# Neutral grey used by the diagnostic plots (same value as analysis.R)
-COLOR.GREY <- c(light = "#DADAD5", mid = "#B0B0AB", dark = "#6E6E6A")
 
 # GENES (the genes with contrasts) and CONTRAST.FITS (per-dataset NB mean and
 # dispersion) come from the Section 2 checkpoint
