@@ -30,7 +30,7 @@
 ###   2. GENE FILTER (marginal information only; never on a contrast)
 ###     qc_gene_keep() - Cross-dataset gene QC with one relative abundance floor anchored to the shallowest dataset and an absolute detection floor, and sets the pilot gene pool.
 ###   3. PAIRED PER-GENE BOOTSTRAP OF CONTRASTS
-###     make_draws() - Builds the resampling index draws used by the paired per-gene bootstrap.
+###     make_draws() - Builds the resampling index draws used by the paired per-gene bootstrap: parents resampled whole, hybrid cells resampled within the four strata of the mean-split by noise-split overlap and every hybrid dataset assembled from the same resampled cell IDs.
 ###     add_burst_contrasts() - Derives burst-frequency, burst-size, and kinetic-balance contrasts from the mean and size contrasts already in a data frame.
 ###     .contrast_value() - Log2 contrast for one mode (total, cis, trans, dom, dpar, inh) from a named list of per-group fitted values.
 ###     .cv2_of() - CV2 (1/mu + 1/disp) of one fitted group; NA unless mu and disp are finite and positive.
@@ -375,19 +375,48 @@ qc_gene_keep <- function(mats, lambda0 = 0.20, cell_frac = 0.10) {
 ## ============================================================
 
 ## Draws all B sets of bootstrap resampling indices up front, from one seeded stream, so the
-## replicates are independent of any RNG use inside the fitting code. Datasets cut from the
-## same cells (e.g. the SC and SE allele of one hybrid split) share one index vector, which
-## keeps the allele pairing intact inside each replicate.
-make_draws <- function(ncells, B, seed = 1) {
+## replicates are independent of any RNG use inside the fitting code. The two parents are
+## resampled as whole datasets (MIX.SC, MIX.SE).
+##
+## The hybrid cells are cut into four strata, the 2 x 2 overlap of the mean split (HYC / HYT, cells
+## hyc and the rest) with the noise split (HYC.N / HYT.N, cells hyc_n and the rest). Each replicate
+## resamples the cells of every stratum with replacement and keeps the stratum size, then builds every
+## hybrid dataset from those same resampled cell IDs: HYC = strata (C, C.N) + (C, T.N), HYT =
+## (T, C.N) + (T, T.N), HYC.N = (C, C.N) + (T, C.N), HYT.N = (C, T.N) + (T, T.N), and HYB = all four.
+## Group sizes stay fixed, the SC and SE alleles of a cell stay paired (one index vector serves both),
+## and every overlap between the splits is preserved, so the mean-split and noise-split contrasts of a
+## mode are resampled from the same cells and their bootstrap correlation is measured. The strata are
+## depth matched (split_indices_by_depth), so the marginal SEs differ little from resampling each
+## group on its own.
+##
+## hyc and hyc_n are the hybrid-cell positions (columns of HYB.SC) of the HYC and HYC.N groups.
+## Each returned hybrid index vector gives positions within its own dataset's columns, the layout
+## boot_contrasts_one() expects; HYB indexes the full hybrid column order.
+make_draws <- function(ncells, B, seed = 1, hyc, hyc_n) {
+  n_h <- ncells[["HYB.COMB"]]
+  stopifnot(is.numeric(B), length(B) == 1, B >= 1,
+            is.numeric(hyc), is.numeric(hyc_n),
+            !anyDuplicated(hyc), !anyDuplicated(hyc_n),
+            all(hyc %in% seq_len(n_h)), all(hyc_n %in% seq_len(n_h)),
+            length(hyc) < n_h, length(hyc_n) < n_h)
+  ## Group membership in the dataset's own column order (the order the splits were cut in)
+  members <- list(HYC = sort(hyc), HYT = setdiff(seq_len(n_h), hyc),
+                  HYC.N = sort(hyc_n), HYT.N = setdiff(seq_len(n_h), hyc_n))
+  ## Stratum code: 1 = (C, C.N), 2 = (T, C.N), 3 = (C, T.N), 4 = (T, T.N)
+  code   <- 1L + as.integer(!(seq_len(n_h) %in% hyc)) + 2L * as.integer(!(seq_len(n_h) %in% hyc_n))
+  strata <- split(seq_len(n_h), factor(code, levels = 1:4))
+  of     <- list(HYC = c(1, 3), HYT = c(2, 4), HYC.N = c(1, 2), HYT.N = c(3, 4))
   set.seed(seed)
-  lapply(seq_len(B), function(b) list(
-    MIX.SC = sample.int(ncells[["MIX.SC"]], ncells[["MIX.SC"]], replace = TRUE),
-    MIX.SE = sample.int(ncells[["MIX.SE"]], ncells[["MIX.SE"]], replace = TRUE),
-    HYC    = sample.int(ncells[["HYC.SC"]], ncells[["HYC.SC"]], replace = TRUE),
-    HYT    = sample.int(ncells[["HYT.SC"]], ncells[["HYT.SC"]], replace = TRUE),
-    HYC.N  = sample.int(ncells[["HYC.SC.N"]], ncells[["HYC.SC.N"]], replace = TRUE),
-    HYT.N  = sample.int(ncells[["HYT.SC.N"]], ncells[["HYT.SC.N"]], replace = TRUE),
-    HYB    = sample.int(ncells[["HYB.COMB"]], ncells[["HYB.COMB"]], replace = TRUE)))
+  lapply(seq_len(B), function(b) {
+    ## Resampled cell IDs per stratum; an empty stratum stays empty
+    res <- lapply(strata, function(s) s[sample.int(length(s), length(s), replace = TRUE)])
+    d <- list(
+      MIX.SC = sample.int(ncells[["MIX.SC"]], ncells[["MIX.SC"]], replace = TRUE),
+      MIX.SE = sample.int(ncells[["MIX.SE"]], ncells[["MIX.SE"]], replace = TRUE))
+    for (k in names(of)) d[[k]] <- match(unlist(res[of[[k]]], use.names = FALSE), members[[k]])
+    d$HYB <- unlist(res, use.names = FALSE)
+    d
+  })
 }
 
 ## Contrast definitions. Each mode lists the groups it needs (for the
@@ -470,8 +499,9 @@ make_draws <- function(ncells, B, seed = 1) {
 ## what the HYC/HYT split (f_mean) was chosen to balance.
 .BFREQ_SOURCE <- c(total = "total", cis = "cis_n", trans = "trans_n", dom = "dom", dpar_sc = "dpar_sc", dpar_se = "dpar_se", inh_sc = "inh_sc", inh_se = "inh_se")
 
-## Maps each dataset to the draws-list element (see make_draws()) that resamples it. Two modes
-## share resampled cells exactly when their sets of draw keys match.
+## Maps each dataset to the draws-list element (see make_draws()) that resamples it. The four hybrid
+## keys (HYC, HYT, HYC.N, HYT.N) and HYB are built from the same resampled hybrid cell IDs, so every
+## mode shares its resampled cells with every other mode that uses the same cells.
 .DRAW.KEY <- c(MIX.SC = "MIX.SC", MIX.SE = "MIX.SE",
                HYC.SC = "HYC", HYC.SE = "HYC", HYT.SC = "HYT", HYT.SE = "HYT",
                HYC.SC.N = "HYC.N", HYC.SE.N = "HYC.N", HYT.SC.N = "HYT.N", HYT.SE.N = "HYT.N",
@@ -522,8 +552,8 @@ add_burst_contrasts <- function(df) {
     m  <- df[[paste0("mean_",ct,"_est")]];  sm <- df[[paste0("mean_",ct,"_se")]]
     s  <- df[[paste0("bfreq_",ct,"_est")]]; ss <- df[[paste0("bfreq_",ct,"_se")]]
     r  <- df[[paste0("cor_",ct)]]
-    ## cor_<ct> is NA for cis and trans, where mean and bfreq are drawn from different splits;
-    ## it enters the SE propagation as a zero covariance.
+    ## cor_<ct> is measured from the bootstrap draws for every mode; a gene with too few finite draws
+    ## (NA) enters the SE propagation as a zero covariance.
     r[!is.finite(r)] <- 0
     bs    <- m - s
     bs_se <- sqrt(pmax(0, sm^2 + ss^2 - 2 * r * sm * ss))
@@ -554,8 +584,8 @@ eiv_components <- function(BURST.CONTRASTS, mode = .OUT_MODES) {
   X  <- BURST.CONTRASTS[[paste0("mean_",mode,"_est")]]; sx <- BURST.CONTRASTS[[paste0("mean_",mode,"_se")]]
   Y  <- BURST.CONTRASTS[[paste0("bfreq_",mode,"_est")]]; sy <- BURST.CONTRASTS[[paste0("bfreq_",mode,"_se")]]
   r  <- BURST.CONTRASTS[[paste0("cor_",mode)]]
-  ## cor_<mode> is NA for cis and trans (mean and bfreq come from different splits); it enters as a
-  ## zero covariance so those genes stay in the summary.
+  ## cor_<mode> is measured from the bootstrap draws; a gene with too few finite draws (NA) enters as a
+  ## zero covariance so it stays in the summary.
   r[!is.finite(r)] <- 0
   ok <- is.finite(X) & is.finite(Y) & is.finite(sx) & is.finite(sy)
   X <- X[ok]; Y <- Y[ok]; sx <- sx[ok]; sy <- sy[ok]; r <- r[ok]
@@ -3223,18 +3253,13 @@ boot_contrasts_one <- function(g, expos, fits, mats, draws) {
     out[[paste0("bfreq_", md, "_bdry")]] <- unname(bdry[smd])
     out[[paste0("cv2_", md, "_est")]]    <- unname(pc[smd])
     out[[paste0("cv2_", md, "_se")]]     <- unname(se[paste0("c.", smd)])
-    ## cor_<md>: correlation of the mean and bfreq bootstrap draws, defined when both contrasts are
-    ## built from the same resampled datasets (matching draw keys). For cis and trans the bfreq
-    ## value comes from the noise split (HYC.N/HYT.N) and the mean from the mean split (HYC/HYT),
-    ## which are resampled with separate index vectors, so cor is NA and downstream code uses 0.
-    ## A mode's draw keys are the draws-list elements its contrast is built from, e.g. "trans" touches the
-    ## MIX.SC/MIX.SE and HYT draws and "trans_n" the MIX.SC/MIX.SE and HYT.N draws.
-    keys_md  <- sort(unique(unname(.DRAW.KEY[.MODES[[md]]])))
-    keys_smd <- sort(unique(unname(.DRAW.KEY[.MODES[[smd]]])))
-    out[[paste0("cor_", md)]] <- if (identical(keys_md, keys_smd)) {
-      x <- M[, paste0("m.", md)]; y <- M[, paste0("s.", md)]; ok <- is.finite(x) & is.finite(y)
-      if (sum(ok) > 2) cor(x[ok], y[ok]) else NA_real_
-    } else NA_real_
+    ## cor_<md>: correlation of the mean and bfreq bootstrap draws. Every hybrid dataset of a replicate
+    ## is built from the same resampled cell IDs (make_draws()), and the parents are shared, so the
+    ## mean contrast (m.<md>) and the bfreq contrast of its source mode (s.<smd>; the noise split for cis
+    ## and trans) are measured on the same cells for every mode. NA only when fewer than three draws
+    ## give finite values for both.
+    x <- M[, paste0("m.", md)]; y <- M[, paste0("s.", smd)]; ok <- is.finite(x) & is.finite(y)
+    out[[paste0("cor_", md)]] <- if (sum(ok) > 2) cor(x[ok], y[ok]) else NA_real_
   }
   .r2 <- function(c1, c2) {
 	x <- M[, c1]; y <- M[, c2]; ok <- is.finite(x) & is.finite(y)
