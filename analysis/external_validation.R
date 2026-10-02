@@ -131,60 +131,60 @@ JARIANI.MIN.CELL.COUNT <- 500;   JARIANI.MIN.CELLS.EXPR <- 10
 # One PSOCK cluster for NB fits
 N.CORES  <- 4
 NOISE.CL <- parallel::makeCluster(N.CORES)
+# The cluster is stopped whether or not a source fails to load or fit
+tryCatch({
+  # Gasch et al. 2017 (Fluidigm C1, unstressed BY4741, ~80 cells)
+  # The Unstressed columns are selected from the header. Values
+  # are spike-in normalized rather than raw counts, so they are rounded to
+  # integers before fitting, and the ERCC spike-in rows are dropped. 
+  GASCH.FILE   <- file.path(EXTERNAL.DIR, "Gasch.2017.GSE102475_GASCH_NaCl-scRNAseq_NormData.txt")
+  GASCH.HEADER <- get_data_header(GASCH.FILE)
+  GASCH.KEEP   <- grepl("_Unstressed_", GASCH.HEADER)
+  GASCH.RAW    <- fread_matrix(GASCH.FILE, keep = GASCH.KEEP)
+  GASCH.RAW    <- GASCH.RAW[!grepl("^ERCC-", rownames(GASCH.RAW)), , drop = FALSE]
+  GASCH.MAT    <- to_numeric_matrix(GASCH.RAW, "Gasch")
+  GASCH.MAT    <- round(GASCH.MAT)
+  GASCH <- fit_scrna_source(GASCH.MAT, rownames(GASCH.MAT), "Gasch", GASCH.MIN.CELL.COUNT, GASCH.MIN.CELLS.EXPR, NOISE.CL)
 
-# Gasch et al. 2017 (Fluidigm C1, unstressed BY4741, ~80 cells)
-# The Unstressed columns are selected from the header. Values
-# are spike-in normalized rather than raw counts, so they are rounded to
-# integers before fitting, and the ERCC spike-in rows are dropped. 
-GASCH.FILE   <- file.path(EXTERNAL.DIR, "Gasch.2017.GSE102475_GASCH_NaCl-scRNAseq_NormData.txt")
-GASCH.HEADER <- get_data_header(GASCH.FILE)
-GASCH.KEEP   <- grepl("_Unstressed_", GASCH.HEADER)
-GASCH.RAW    <- fread_matrix(GASCH.FILE, keep = GASCH.KEEP)
-GASCH.RAW    <- GASCH.RAW[!grepl("^ERCC-", rownames(GASCH.RAW)), , drop = FALSE]
-GASCH.MAT    <- to_numeric_matrix(GASCH.RAW, "Gasch")
-GASCH.MAT    <- round(GASCH.MAT)
-GASCH <- fit_scrna_source(GASCH.MAT, rownames(GASCH.MAT), "Gasch", GASCH.MIN.CELL.COUNT, GASCH.MIN.CELLS.EXPR, NOISE.CL)
+  # Nadal-Ribelles et al. 2019 (yscRNA-seq, unstressed BY4741, ~127 cells)
+  # Rows are TSS-level, so several rows can share one ORF and
+  # collapse_to_orf() sums them. 
+  NADAL.FILE   <- file.path(EXTERNAL.DIR, "Nadal-Ribelles.2019.41564_2018_346_MOESM3_ESM.txt")
+  NADAL.HEADER <- read_header_line(NADAL.FILE, skip = 1)
+  NADAL.RAW    <- fread(file = NADAL.FILE, sep = "\t", select = setdiff(NADAL.HEADER, "comGeneName"), skip = 1, header = TRUE)
+  NADAL.IDS    <- NADAL.RAW$geneName
+  NADAL.MAT    <- to_numeric_matrix(as.data.frame(NADAL.RAW[, setdiff(colnames(NADAL.RAW), "geneName"), with = FALSE]), "Nadal-Ribelles")
+  NADAL <- fit_scrna_source(NADAL.MAT, NADAL.IDS, "Nadal-Ribelles", NADAL.MIN.CELL.COUNT, NADAL.MIN.CELLS.EXPR, NOISE.CL)
 
-# Nadal-Ribelles et al. 2019 (yscRNA-seq, unstressed BY4741, ~127 cells)
-# Rows are TSS-level, so several rows can share one ORF and
-# collapse_to_orf() sums them. 
-NADAL.FILE   <- file.path(EXTERNAL.DIR, "Nadal-Ribelles.2019.41564_2018_346_MOESM3_ESM.txt")
-NADAL.HEADER <- read_header_line(NADAL.FILE, skip = 1)
-NADAL.RAW    <- fread(file = NADAL.FILE, sep = "\t", select = setdiff(NADAL.HEADER, "comGeneName"), skip = 1, header = TRUE)
-NADAL.IDS    <- NADAL.RAW$geneName
-NADAL.MAT    <- to_numeric_matrix(as.data.frame(NADAL.RAW[, setdiff(colnames(NADAL.RAW), "geneName"), with = FALSE]), "Nadal-Ribelles")
-NADAL <- fit_scrna_source(NADAL.MAT, NADAL.IDS, "Nadal-Ribelles", NADAL.MIN.CELL.COUNT, NADAL.MIN.CELLS.EXPR, NOISE.CL)
+  # Jackson et al. 2020 (10x droplet, pooled genotypes, one condition, ~11,000 cells)
+  # Cells pool all 12
+  # genotypes (11 TF deletions plus wild type), so between-genotype
+  # differences in mean expression enter alongside cell-to-cell noise and
+  # these estimates are an upper bound.
+  JACKSON.COND   <- "YPD"
+  JACKSON.FILE   <- file.path(EXTERNAL.DIR, "Jackson.2020.GSE125162_ALL-fastqTomat0-Counts.tsv")
+  JACKSON.HEADER <- get_data_header(JACKSON.FILE)
+  JACKSON.HEADER.CLEAN <- trimws(gsub('^"|"$', "", JACKSON.HEADER))
+  JACKSON.ORF.KEEP <- !is.na(suppressMessages(map_to_orf(JACKSON.HEADER.CLEAN)))
+  if (!any(JACKSON.ORF.KEEP))
+    message("No Jackson gene columns resolved to an ORF; first few raw column names: ",
+            paste(head(JACKSON.HEADER, 5), collapse = ", "))
 
-# Jackson et al. 2020 (10x droplet, pooled genotypes, one condition, ~11,000 cells)
-# Cells pool all 12
-# genotypes (11 TF deletions plus wild type), so between-genotype
-# differences in mean expression enter alongside cell-to-cell noise and
-# these estimates are an upper bound.
-JACKSON.COND   <- "YPD"
-JACKSON.FILE   <- file.path(EXTERNAL.DIR, "Jackson.2020.GSE125162_ALL-fastqTomat0-Counts.tsv")
-JACKSON.HEADER <- get_data_header(JACKSON.FILE)
-JACKSON.HEADER.CLEAN <- trimws(gsub('^"|"$', "", JACKSON.HEADER))
-JACKSON.ORF.KEEP <- !is.na(suppressMessages(map_to_orf(JACKSON.HEADER.CLEAN)))
-if (!any(JACKSON.ORF.KEEP))
-  message("No Jackson gene columns resolved to an ORF; first few raw column names: ",
-          paste(head(JACKSON.HEADER, 5), collapse = ", "))
+  JACKSON.MAT <- fread_matrix(JACKSON.FILE, keep = JACKSON.ORF.KEEP)
+  message("Jackson conditions present: ",
+          paste(unique(sub("^[0-9]+_", "", rownames(JACKSON.MAT))), collapse = ", "))
+  JACKSON.MAT <- JACKSON.MAT[grepl(paste0("_", JACKSON.COND, "$"), rownames(JACKSON.MAT)), , drop = FALSE]
+  JACKSON.MAT <- t(to_numeric_matrix(JACKSON.MAT, "Jackson"))
+  JACKSON <- fit_scrna_source(JACKSON.MAT, rownames(JACKSON.MAT), "Jackson", JACKSON.MIN.CELL.COUNT, JACKSON.MIN.CELLS.EXPR, NOISE.CL)
 
-JACKSON.MAT <- fread_matrix(JACKSON.FILE, keep = JACKSON.ORF.KEEP)
-message("Jackson conditions present: ",
-        paste(unique(sub("^[0-9]+_", "", rownames(JACKSON.MAT))), collapse = ", "))
-JACKSON.MAT <- JACKSON.MAT[grepl(paste0("_", JACKSON.COND, "$"), rownames(JACKSON.MAT)), , drop = FALSE]
-JACKSON.MAT <- t(to_numeric_matrix(JACKSON.MAT, "Jackson"))
-JACKSON <- fit_scrna_source(JACKSON.MAT, rownames(JACKSON.MAT), "Jackson", JACKSON.MIN.CELL.COUNT, JACKSON.MIN.CELLS.EXPR, NOISE.CL)
-
-# Jariani et al. 2020 (10x droplet, continuous glucose growth, ~1,000 cells)
-# Genes-by-cells, blank first header field, standard 10x barcode column
-# names. Glucose 12h file
-JARIANI.FILE <- file.path(EXTERNAL.DIR, "Jariani.2020.GSM4297055_processed_counts_glu_12h.txt")
-JARIANI.MAT  <- fread_matrix(JARIANI.FILE)
-JARIANI.MAT  <- to_numeric_matrix(JARIANI.MAT, "Jariani")
-JARIANI <- fit_scrna_source(JARIANI.MAT, rownames(JARIANI.MAT), "Jariani", JARIANI.MIN.CELL.COUNT, JARIANI.MIN.CELLS.EXPR, NOISE.CL)
-
-parallel::stopCluster(NOISE.CL)
+  # Jariani et al. 2020 (10x droplet, continuous glucose growth, ~1,000 cells)
+  # Genes-by-cells, blank first header field, standard 10x barcode column
+  # names. Glucose 12h file
+  JARIANI.FILE <- file.path(EXTERNAL.DIR, "Jariani.2020.GSM4297055_processed_counts_glu_12h.txt")
+  JARIANI.MAT  <- fread_matrix(JARIANI.FILE)
+  JARIANI.MAT  <- to_numeric_matrix(JARIANI.MAT, "Jariani")
+  JARIANI <- fit_scrna_source(JARIANI.MAT, rownames(JARIANI.MAT), "Jariani", JARIANI.MIN.CELL.COUNT, JARIANI.MIN.CELLS.EXPR, NOISE.CL)
+}, finally = parallel::stopCluster(NOISE.CL))
 
 NEW.SOURCES <- list(Gasch = GASCH, NadalRibelles = NADAL, Jackson = JACKSON, Jariani = JARIANI)
 NEW.MERGE   <- lapply(NEW.SOURCES, merge, x = NB.SC, by = "ORF")

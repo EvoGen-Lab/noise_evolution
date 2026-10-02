@@ -451,10 +451,9 @@ PERMS <- local({
   ncells <- NCELLS
   NPERM <- N.PERM
   seed <- SEED.PERM
-  set.seed(seed)
-  lapply(seq_len(NPERM), perm_label_draw, hyc = SPLIT.IDX.MEAN$c, hyc_n = SPLIT.IDX.DISP$c,
+  with_local_seed(seed, lapply(seq_len(NPERM), perm_label_draw, hyc = SPLIT.IDX.MEAN$c, hyc_n = SPLIT.IDX.DISP$c,
          hyt = SPLIT.IDX.MEAN$t, hyt_n = SPLIT.IDX.DISP$t,
-         nHYB = ncells[["HYB.COMB"]], nSC = ncells[["MIX.SC"]], nSE = ncells[["MIX.SE"]])
+         nHYB = ncells[["HYB.COMB"]], nSC = ncells[["MIX.SC"]], nSE = ncells[["MIX.SE"]]))
 })
 
 ## ---- Cluster round trip: Rscript gene_boot.R (job array, one task per replicate) / gene_perm.R ----
@@ -1034,15 +1033,13 @@ DRAWS.PERM.COEXPR <- local({
   nH <- N.HYB
   B <- N.PERM.COEXPR
   seed <- SEED.COEXPR.PERM
-  set.seed(seed)
   n_tot <- nSC + nSE
-  lapply(seq_len(B), coexpr_perm_draw, nH = nH, nSC = nSC, nSE = nSE, n_tot = n_tot)
+  with_local_seed(seed, lapply(seq_len(B), coexpr_perm_draw, nH = nH, nSC = nSC, nSE = nSE, n_tot = n_tot))
 })
 DRAWS.NULL.COEXPR <- local({
   B <- N.PERM.COEXPR
   seed <- SEED.COEXPR.NULL
-  set.seed(seed)
-  lapply(seq_len(B), coexpr_null_draw, nSC = N.SC, nSE = N.SE, nH = N.HYB)
+  with_local_seed(seed, lapply(seq_len(B), coexpr_null_draw, nSC = N.SC, nSE = N.SE, nH = N.HYB))
 })
 ## ---- Cluster round trip: Rscript coexpr_perm.R ----
 ## Reads coexpr_perm_inputs.rda (saved below; PLOIDY.F sets the dpar rescale), writes coexpr_perm_output.rda
@@ -1402,11 +1399,10 @@ INTR.REL.CHECK <- local({
   genes <- intersect(rownames(sc), rownames(se))
   attn  <- sqrt(rho_sc[genes] * rho_se[genes])
   samp  <- local({
-    set.seed(seed)
     ok    <- is.finite(attn)
     bins  <- cut(attn[ok], breaks = quantile(attn[ok], seq(0, 1, length.out = n_bins + 1)), include.lowest = TRUE)
     genes <- names(attn)[ok]
-    unname(unlist(tapply(genes, bins, function(g) sample(g, min(n_per_bin, length(g))))))
+    with_local_seed(seed, unname(unlist(tapply(genes, bins, function(g) sample(g, min(n_per_bin, length(g)))))))
   })
 
   rho_obs <- row_cor(sc[samp, , drop = FALSE], se[samp, , drop = FALSE])
@@ -1416,9 +1412,8 @@ INTR.REL.CHECK <- local({
   se_obs  <- local({
     sc <- sc[samp, , drop = FALSE]
     se <- se[samp, , drop = FALSE]
-    set.seed(seed)
     n <- ncol(sc)
-    vapply(seq_len(nrow(sc)), allele_cor_boot_se_row, numeric(1), B = B, n = n, sc = sc, se = se)
+    with_local_seed(seed, vapply(seq_len(nrow(sc)), allele_cor_boot_se_row, numeric(1), B = B, n = n, sc = sc, se = se))
   })
   a       <- attn[samp]
   rho_true <- rho_obs / a

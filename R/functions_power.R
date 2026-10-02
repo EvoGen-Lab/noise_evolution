@@ -75,6 +75,7 @@ power_line_figure <- function(file, power, grid, outer, inner, x, series, main_f
                               log_x = TRUE, xlab = "", ticks = FALSE, styled = NULL, mar = c(3, 3, 2, 1)) {
   dim_ix <- c(M = 1, N = 2, P = 3, Q = 4)
   open_grid_pdf(file.path(FIGURE.DIR, "extended", file), nr = length(grid[[outer]]), nc = length(grid[[inner]]), mar = mar)
+  on.exit(dev.off(), add = TRUE)
   xv <- if (log_x) log2(grid[[x]]) else grid[[x]]
   for (o in seq_along(grid[[outer]])) {
     for (i in seq_along(grid[[inner]])) {
@@ -97,7 +98,6 @@ power_line_figure <- function(file, power, grid, outer, inner, x, series, main_f
     }
   }
   legend_page(legend_labels, legend_title)
-  dev.off()
 }
 
 ## ============================================================

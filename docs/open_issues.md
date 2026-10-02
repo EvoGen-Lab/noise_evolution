@@ -16,14 +16,12 @@ Source: `docs/function_review.md` (item numbers refer to its section 3), re-chec
 
 ## C. Robustness, no numeric change
 
-- `sig_hist` errors if a contrast is Inf (restrict `range()` to finite values).
-- `kegg_local` selects the pathway-name column by position (`KEGGPATHID2NAME[[2]]`), against the select-by-name rule.
-- `refine_by_boundary` (unused) draws two independent index vectors for counts and exposures in its bootstrap, pairing one cell's count with another cell's library size.
-- `.fit_split`, `fit_split_nb_mm`, `fit_split_nb`: `perm[(n1 + 1):length(perm)]` misbehaves when `n1 == length(perm)`.
-- Edge cases in `class_overlap_heatmap`, `se_alpha_col`, `shrink_cor`, `class_anova`, `gene_reliability`, `cor_row`, `to_numeric_matrix`, `read_header_line`.
-- `set.seed()` on the global RNG in `class_identity_overlap`, `check_intrinsic_reliability`, `boot_resample_matrix`, `eiv_mode_ci_row` and `pilot_split_se_one`.
-- Missing entry validation for most numeric arguments (`fit_source`, `qc_filter_counts`, `mean_adjusted_noise`, `nupop_occupancy_cluster` (13c) with `cores = 1` has no crash isolation).
-- `NOISE.CL` leaks if an error occurs between creation and `stopCluster`; several `pdf()` blocks lack `on.exit(dev.off())`.
+All items in this section were fixed. Open decisions raised while fixing them:
+
+- Unseeded random steps downstream of the seeded functions. Seeded functions now restore the caller's random number state (`with_local_seed`), so a later unseeded random step no longer inherits a stream that an earlier `set.seed` call happened to leave behind. The script-level `set.seed` calls were audited (Sections 2.3, 4.6 and 5.1 now use `with_local_seed`), and Seurat steps carry their own seeds. A top-level `set.seed()` at the start of each section would pin any remaining unseeded step.
+- Script-level `pdf()` ... `dev.off()` blocks in `analysis.R` cannot use `on.exit()`; an error inside one leaves a device open until the session is reset. `on.exit(dev.off())` is in place in every function that opens a device. A `graphics.off()` in `console_start()` would close stale devices at each section start.
+- `kegg_local()` selects the pathway-name column by its name, `to`, from `clusterProfiler::download_KEGG()`; it stops with the column names it found when `to` is absent. It was not run against the installed `clusterProfiler`.
+- Entry validation was added to the functions named in the old list and the other functions with scalar tuning arguments that the pipeline's inputs flow through (`qc_cell_cutoff`, `qc_gene_keep`, `split_indices_by_depth`, `make_coexpr_draws`, `class_overlap_heatmap`, `se_alpha_col`, `shrink_cor`, `gene_reliability`, `mean_adjusted_noise`, `nupop_occupancy_cluster`). Other numeric arguments are still unchecked.
 
 ## D. Project-level open work (CLAUDE.md)
 

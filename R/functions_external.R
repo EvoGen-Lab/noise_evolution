@@ -80,7 +80,9 @@ add_burst_terms <- function(d, scale = c("count", "relative")) {
 ## data rows (the row-id column is unnamed), a layout fread() cannot
 ## reconcile on its own. Surrounding quotes are stripped from each field.
 read_header_line <- function(path, sep = "\t", skip = 0) {
+  stopifnot(is.character(path), length(path) == 1, file.exists(path), is.numeric(skip), length(skip) == 1, skip >= 0)
   lines  <- readLines(path, n = skip + 1)
+  if (length(lines) < skip + 1) stop("read_header_line(): ", path, " has only ", length(lines), " line(s), fewer than the header at line ", skip + 1)
   fields <- strsplit(lines[skip + 1], sep, fixed = TRUE)[[1]]
   gsub('^"|"$', "", fields)
 }
@@ -94,8 +96,9 @@ read_header_line <- function(path, sep = "\t", skip = 0) {
 ## fread_matrix() always receives names for the data columns only.
 get_data_header <- function(path, sep = "\t", skip = 0) {
   header.raw <- read_header_line(path, sep = sep, skip = skip)
-  data.line  <- readLines(path, n = skip + 2)[skip + 2]
-  n.data     <- length(strsplit(data.line, sep, fixed = TRUE)[[1]])
+  lines      <- readLines(path, n = skip + 2)
+  if (length(lines) < skip + 2) stop("get_data_header(): ", path, " has a header but no data row")
+  n.data     <- length(strsplit(lines[skip + 2], sep, fixed = TRUE)[[1]])
   if (length(header.raw) == n.data - 1) {
     header.raw            # header already omits the row-id field
   } else if (length(header.raw) == n.data) {
@@ -134,7 +137,8 @@ fread_matrix <- function(path, keep = NULL, sep = "\t", skip = 0, ...) {
 to_numeric_matrix <- function(df, label) {
   mat <- as.matrix(df)
   if (is.character(mat)) {
-    num <- suppressWarnings(apply(mat, 2, as.numeric))
+    ## as.numeric() on the whole matrix keeps the matrix shape, also for one row or one column
+    num <- matrix(suppressWarnings(as.numeric(mat)), nrow(mat), ncol(mat), dimnames = dimnames(mat))
     # a column is genuinely non-numeric if it produced an NA somewhere
     # that was not already a blank entry in the original character data
     bad <- colSums(is.na(num) & mat != "", na.rm = TRUE) > 0
@@ -143,6 +147,7 @@ to_numeric_matrix <- function(df, label) {
               paste(head(colnames(mat)[bad], 10), collapse = ", "))
     mat <- num[, !bad, drop = FALSE]
     rownames(mat) <- rownames(df)
+    if (ncol(mat) == 0) stop(label, ": no numeric columns remain after dropping non-numeric ones")
   }
   storage.mode(mat) <- "numeric"
   mat
@@ -226,10 +231,14 @@ fit_scrna_source <- function(mat, raw_ids, label, min_cell_count, min_cells_expr
 ## be compared across datasets. Genes with non-positive or non-finite mean or
 ## CV^2 return NA.
 mean_adjusted_noise <- function(mean, cv2, span = 0.3) {
+  stopifnot(is.numeric(mean), is.numeric(cv2), length(mean) == length(cv2),
+            is.numeric(span), length(span) == 1, span > 0, span <= 1)
   lm_ <- log(mean)
   lc  <- log(cv2)
   ok  <- is.finite(lm_) & is.finite(lc)
   res <- rep(NA_real_, length(mean))
+  ## loess needs enough genes to place a smooth trend; fewer than 10 usable genes give NA
+  if (sum(ok) < 10) { warning("mean_adjusted_noise(): fewer than 10 genes with a positive finite mean and CV^2; returning NA"); return(res) }
   fit <- loess(lc[ok] ~ lm_[ok], span = span)   # smooth abundance trend, as in Newman's DM
   res[ok] <- lc[ok] - predict(fit)              # residual = noise beyond the expected level at that abundance
   res

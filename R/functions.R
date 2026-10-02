@@ -20,6 +20,7 @@
 ###   0. SESSION HELPERS
 ###     ckpt_path() - Path of a section's checkpoint file (section{N}_checkpoint.rda).
 ###     console_start() / console_stop() - Per-section console transcript (section{N}_console.txt).
+###     with_local_seed() - Evaluates an expression on its own seeded random stream and restores the caller's random number state.
 ###   1. OFFSET NEGATIVE-BINOMIAL FIT
 ###     neg_binom_fit_offset() - Offset NB fit for one gene: rate (mu) and NB size (disp) from .fit_one(), with glm.nb asymptotic log-scale SEs; disp = Inf when a Poisson-vs-NB pre-check finds no overdispersion.
 ###     fit_counts_offset() - Matrix version: one neg_binom_fit_offset() fit per gene (row) against its exposure vector; optionally splits genes across a PSOCK cluster, shipping the functions the fit needs.
@@ -185,6 +186,21 @@ console_start <- function(n, dir = CONSOLE.DIR, append = FALSE) {
   sink(file.path(dir, sprintf("section%d_console.txt", n)), append = append, split = TRUE)
 }
 
+## with_local_seed(seed, expr): evaluates expr after set.seed(seed) and gives the caller's random number state
+## back afterwards (or removes the state when none existed). A function that needs a reproducible stream
+## draws it through here, so it neither depends on nor moves any other random draw. The values drawn
+## are those of set.seed(seed) followed by expr.
+with_local_seed <- function(seed, expr) {
+  stopifnot(is.numeric(seed), length(seed) == 1, is.finite(seed))
+  had_seed <- exists(".Random.seed", envir = globalenv(), inherits = FALSE)
+  if (had_seed) old_seed <- get(".Random.seed", envir = globalenv())
+  on.exit(if (had_seed) assign(".Random.seed", old_seed, envir = globalenv())
+          else if (exists(".Random.seed", envir = globalenv(), inherits = FALSE)) rm(".Random.seed", envir = globalenv()),
+          add = TRUE)
+  set.seed(seed)
+  expr
+}
+
 ## console_stop(): closes any open console file.
 console_stop <- function() {
   while (sink.number() > 0) sink()
@@ -267,7 +283,8 @@ LOG.THETA.RANGE <- c(-4, 15)
 # are exchangeable under H0). Used by the gene-level null and the power grid. Returns
 # list(a = first n1 cells, b = remaining cells).
 .fit_split <- function(counts, expo, perm, n1) {
-  g1 <- perm[seq_len(n1)]; g0 <- perm[(n1 + 1):length(perm)]
+  stopifnot(n1 >= 1, n1 <= length(perm))
+  g1 <- perm[seq_len(n1)]; g0 <- perm[seq_along(perm) > n1]   # empty second group when n1 == length(perm)
   list(a = .fit_one(counts[g1], expo[g1]), b = .fit_one(counts[g0], expo[g0]))
 }
 
@@ -338,6 +355,7 @@ fit_counts_offset <- function(mat, exposure, cl = NULL) {
 ## strict every-other-cell alternation). Contiguous blocks of a depth-sorted order
 ## would confound the split with depth. Returns list(c, t) of cell positions.
 split_indices_by_depth <- function(n, f) {
+  stopifnot(is.numeric(n), length(n) == 1, n >= 2, is.numeric(f), length(f) == 1, f > 0, f < 1)
   n_c <- max(1, round(f * n))
   c_pos <- unique(round(seq(1, n, length.out = n_c)))
   list(c = c_pos, t = setdiff(seq_len(n), c_pos))
@@ -359,6 +377,8 @@ split_indices_by_depth <- function(n, f) {
 ## The detection floor is an absolute number of cells because the precision
 ## of a dispersion fit depends on informative cells, not on their fraction.
 qc_gene_keep <- function(mats, lambda0 = 0.20, cell_frac = 0.10) {
+  stopifnot(is.list(mats), length(mats) >= 1, is.numeric(lambda0), length(lambda0) == 1, lambda0 > 0,
+            is.numeric(cell_frac), length(cell_frac) == 1, cell_frac > 0, cell_frac <= 1)
   genes <- Reduce(intersect, lapply(mats, rownames))
   mats  <- lapply(mats, `[`, genes, , drop = FALSE)
   depth <- vapply(mats, sum, numeric(1)) / vapply(mats, ncol, integer(1))
@@ -406,8 +426,7 @@ make_draws <- function(ncells, B, seed = 1, hyc, hyc_n) {
   code   <- 1L + as.integer(!(seq_len(n_h) %in% hyc)) + 2L * as.integer(!(seq_len(n_h) %in% hyc_n))
   strata <- split(seq_len(n_h), factor(code, levels = 1:4))
   of     <- list(HYC = c(1, 3), HYT = c(2, 4), HYC.N = c(1, 2), HYT.N = c(3, 4))
-  set.seed(seed)
-  lapply(seq_len(B), function(b) {
+  with_local_seed(seed, lapply(seq_len(B), function(b) {
     ## Resampled cell IDs per stratum; an empty stratum stays empty
     res <- lapply(strata, function(s) s[sample.int(length(s), length(s), replace = TRUE)])
     d <- list(
@@ -416,7 +435,7 @@ make_draws <- function(ncells, B, seed = 1, hyc, hyc_n) {
     for (k in names(of)) d[[k]] <- match(unlist(res[of[[k]]], use.names = FALSE), members[[k]])
     d$HYB <- unlist(res, use.names = FALSE)
     d
-  })
+  }))
 }
 
 ## Contrast definitions. Each mode lists the groups it needs (for the
@@ -639,11 +658,11 @@ class_overlap_triptych <- function(path, classes, levels, width, height, mar) {
   for (i in seq_along(others)) pairs[[i]] <- list(classes$mean, classes[[others[i]]])
   rng <- shared_overlap_rng(pairs, levels)
   fig_pdf(path, width, height)
+  on.exit(dev.off(), add = TRUE)
   par(mfrow = c(1, 3), mar = mar)
   for (o in others)
     class_overlap_heatmap(classes$mean, classes[[o]], levels_a = levels, levels_b = levels,
                           xlab = paste(QUANTITY.LABEL[[o]], "class"), ylab = "mean class", rng = rng)
-  dev.off()
 }
 
 ## class_heatmap_grid: figure of class-overlap heatmaps for the pairs of class vectors listed in panels
@@ -653,6 +672,7 @@ class_overlap_triptych <- function(path, classes, levels, width, height, mar) {
 class_heatmap_grid <- function(path, panels, classes, fdr, width, height, mfrow,
                                kind_words = c(REG = "regulatory", DOM = "dominance"), suffix = "") {
   fig_pdf(path, width, height)
+  on.exit(dev.off(), add = TRUE)
   par(mfrow = mfrow)
   for (i in seq_len(nrow(panels))) {
     pn <- panels[i, ]
@@ -666,7 +686,6 @@ class_heatmap_grid <- function(path, panels, classes, fdr, width, height, mfrow,
     }
     class_overlap_heatmap(side$y$vec, side$x$vec, fdr = fdr, ylab = side$y$lab, xlab = side$x$lab)
   }
-  dev.off()
 }
 
 ## ---- Gene-level scatters and histograms (square symmetric panels, SE bars) ----
@@ -757,7 +776,8 @@ sig_hist_panel <- function(contrasts, pr, mode, quantity, ymax, sig = 0.05, up =
   xlim <- if (fine) c(-2.5, 2.5) else c(-5, 5)
   ylim <- c(0, ymax)
   xlab <- paste0(c(total = "parents", cis = "cis", trans = "trans")[[mode]], " log2(Sc/Se) ", QUANTITY.LABEL[[quantity]])
-  rng <- range(x, na.rm = TRUE)
+  stopifnot(any(is.finite(x)))
+  rng <- range(x[is.finite(x)])    # an Inf contrast must not set the bin range
   lo  <- floor((rng[1] - 1e-9) / brk) * brk
   hi  <- ceiling((rng[2] + 1e-9) / brk) * brk
   b   <- seq(lo, hi, by = brk)
@@ -832,8 +852,10 @@ nb_residuals <- function(mat, exposure, fit) {
 ## Schaefer-Strimmer optimal intensity clipped to [0, 1]: noisier correlations contract more.
 ## The diagonal stays 1 and lambda is returned as attr(, "lambda").
 shrink_cor <- function(Z) {
+  stopifnot(is.matrix(Z), is.numeric(Z))
   Z <- Z[stats::complete.cases(Z), , drop = FALSE]
   n <- nrow(Z); p <- ncol(Z)
+  if (p < 2 || n < 3) stop(sprintf("shrink_cor(): needs at least 2 genes and 3 complete cells, got %d genes and %d cells", p, n))
   Zs <- scale(Z); Zs[!is.finite(Zs)] <- 0
   R  <- crossprod(Zs) / (n - 1)
   num <- 0; den <- 0
@@ -902,11 +924,11 @@ coexpr_axis_cis_trans <- function(v, PT) {
 ## SC, SE and H resample the Sc-parent, Se-parent and hybrid cells; HYB.SC, HYB.SE and HYB.COMB share
 ## the one H resample per draw (paired alleles of the same cells), as in make_draws().
 make_coexpr_draws <- function(nSC, nSE, nH, B, seed = 1) {
-  set.seed(seed)
-  lapply(seq_len(B), function(b) list(
+  stopifnot(all(c(nSC, nSE, nH) >= 1), is.numeric(B), length(B) == 1, B >= 1)
+  with_local_seed(seed, lapply(seq_len(B), function(b) list(
     SC = sample.int(nSC, nSC, replace = TRUE),
     SE = sample.int(nSE, nSE, replace = TRUE),
-    H  = sample.int(nH,  nH,  replace = TRUE)))
+    H  = sample.int(nH,  nH,  replace = TRUE))))
 }
 
 ## Per-gene reliability: the fraction of a gene's total NB variance (mu + mu^2/k) that is biological
@@ -917,11 +939,15 @@ make_coexpr_draws <- function(nSC, nSE, nH, B, seed = 1) {
 ## is the minimum across datasets, since a gene used in every dataset is only as reliable as its
 ## worst context. Returns a named vector over genes.
 gene_reliability <- function(fits, genes) {
-  rho_mat <- sapply(fits, function(fr) {
+  stopifnot(is.list(fits), length(fits) >= 1, is.character(genes), length(genes) >= 1,
+            all(vapply(fits, function(fr) all(c("MU", "DISP") %in% names(fr)), logical(1))))
+  ## One column per dataset (a matrix also for a single gene). A gene absent from a fit gets NA there.
+  rho_mat <- do.call(cbind, lapply(fits, function(fr) {
     mu <- fr[genes, "MU"]; k <- fr[genes, "DISP"]
     mu / (mu + k)     # DISP = Inf (Poisson limit) correctly gives rho = 0
-  })
-  setNames(apply(rho_mat, 1, min, na.rm = TRUE), genes)
+  }))
+  ## A gene with no value in any dataset is NA rather than Inf from min() of nothing
+  setNames(apply(rho_mat, 1, function(r) if (all(is.na(r))) NA_real_ else min(r, na.rm = TRUE)), genes)
 }
 
 ## ============================================================
@@ -980,6 +1006,10 @@ frac_group_sets <- function(genes, score, probs = c(0.25, 0.75)) {
 class_anova <- function(x, class, sig = 0.05) {
   ok  <- !is.na(class) & !is.na(x)
   df  <- data.frame(x = x[ok], class = factor(class[ok]))
+  ## One class, or no residual degrees of freedom (every class holds a single value): no test to run
+  if (nlevels(df$class) < 2 || nrow(df) <= nlevels(df$class))
+    return(list(f = NA_real_, df1 = max(nlevels(df$class) - 1L, 0L), df2 = max(nrow(df) - nlevels(df$class), 0L),
+                p = NA_real_, eta_sq = NA_real_, tukey = NULL))
   fit <- aov(x ~ class, data = df)
   ov  <- summary(fit)[[1]]
   f_stat  <- ov["class", "F value"]; p_val <- ov["class", "Pr(>F)"]
@@ -1206,6 +1236,8 @@ class_stats <- function(fun, values, classes, idx) {
 ## same rng to related panels (e.g. the three regulatory overlap panels of Figure 2) makes a
 ## given color mean the same fold enrichment in all of them.
 class_overlap_heatmap <- function(class_a, class_b, levels_a = NULL, levels_b = NULL, brk = length(cols), fdr = 0.01, cols = COLOR.LIST.3, cex_axis = 0.75, cex_cell = NULL, fmt = NULL, star_frac = NULL, xlab = NULL, ylab = NULL, rng = NULL) {
+  stopifnot(is.numeric(fdr), length(fdr) == 1, fdr > 0, fdr < 1, is.numeric(brk), length(brk) == 1, brk >= 1,
+            is.null(rng) || (is.numeric(rng) && length(rng) == 1 && rng > 0))
   explicit_levels <- !is.null(levels_a) || !is.null(levels_b)
   if (is.null(cex_cell))  cex_cell  <- if (explicit_levels) 0.7   else 0.65
   if (is.null(fmt))       fmt       <- if (explicit_levels) "%.1f" else "%.2g"
@@ -1216,6 +1248,8 @@ class_overlap_heatmap <- function(class_a, class_b, levels_a = NULL, levels_b = 
   a <- if (is.null(levels_a)) factor(class_a[keep]) else factor(class_a[keep], levels = levels_a)
   b <- if (is.null(levels_b)) factor(class_b[keep]) else factor(class_b[keep], levels = levels_b)
   tab <- table(a, b); n <- sum(tab)
+  if (n == 0 || nrow(tab) < 2 || ncol(tab) < 2)
+    stop(sprintf("class_overlap_heatmap(): needs genes classified in both vectors and at least 2 levels on each axis (got %d genes, %d x %d levels)", n, nrow(tab), ncol(tab)))
   lor <- .overlap_lor(tab)
   pv  <- matrix(NA_real_, nrow(tab), ncol(tab))
   for (i in seq_len(nrow(tab))) for (j in seq_len(ncol(tab))) {
@@ -1290,6 +1324,7 @@ class_overlap_heatmap <- function(class_a, class_b, levels_a = NULL, levels_b = 
 ## marginal class-size distributions, and kappa = (po - pe) / (1 - pe) is 0 at chance agreement and 1
 ## for identical labelling.
 class_identity_overlap <- function(class_a, class_b, levels = REG.CLASS, nperm = 2000, seed = 1) {
+  stopifnot(length(class_a) == length(class_b), is.numeric(nperm), length(nperm) == 1, nperm >= 1)
   keep <- !is.na(class_a) & !is.na(class_b)
   a <- factor(class_a[keep], levels = levels)
   b <- factor(class_b[keep], levels = levels)
@@ -1312,15 +1347,14 @@ class_identity_overlap <- function(class_a, class_b, levels = REG.CLASS, nperm =
     jacc[k] <- if (uni > 0) sum(inA & inB) / uni else NA_real_
   }
 
-  set.seed(seed)
   ai <- as.integer(a); bi <- as.integer(b)
   kappa_null <- numeric(nperm)
-  for (i in seq_len(nperm)) {
+  with_local_seed(seed, for (i in seq_len(nperm)) {
     bp   <- bi[sample.int(n, n)]
     tabp <- matrix(tabulate((bp - 1L) * K + ai, K * K), K, K)
     po_p <- sum(diag(tabp)) / n
     kappa_null[i] <- (po_p - pe) / (1 - pe)
-  }
+  })
   ## One-sided test: does observed agreement exceed what reshuffled labels produce? A small
   ## p means the two classifications share gene identity beyond what their class sizes
   ## alone predict. The add-one correction keeps p > 0.
@@ -1346,8 +1380,13 @@ summarize_class_overlap <- function(ov, label = NULL) {
 ## a more opaque bar and imprecise (large-SE) ones fade toward the background. lo/hi are the
 ## SE quantiles anchoring the high- and low-opacity ends of the ramp.
 se_alpha_col <- function(se, base_col = COLOR.GREY[["dark"]], lo = 0.05, hi = 0.9, alpha_range = c(0.08, 0.4)) {
-  rng <- quantile(se, c(lo, hi), na.rm = TRUE)
-  w   <- 1 - pmin(pmax((se - rng[1]) / (rng[2] - rng[1]), 0), 1)   # w = 1 for precise, 0 for noisy
+  stopifnot(is.numeric(lo), is.numeric(hi), lo >= 0, hi <= 1, lo < hi,
+            is.numeric(alpha_range), length(alpha_range) == 2, all(alpha_range >= 0 & alpha_range <= 1))
+  rng <- if (any(is.finite(se))) quantile(se[is.finite(se)], c(lo, hi)) else c(0, 0)
+  width <- rng[2] - rng[1]
+  ## SEs with no spread (all equal) are all equally precise; a missing SE gets the faintest bar
+  w   <- if (width > 0) 1 - pmin(pmax((se - rng[1]) / width, 0), 1) else rep(1, length(se))   # w = 1 for precise, 0 for noisy
+  w[!is.finite(w)] <- 0
   a   <- alpha_range[1] + diff(alpha_range) * w
   # col2rgb()/rgb() are vectorized, so building the RGBA color directly gives every point
   # its own opacity (adjustcolor() accepts a single alpha value).
@@ -1547,13 +1586,14 @@ print_enrich_brief <- function(e, q = 0.2, n_top = 10) {
 plot_cluster_marker_enrichment <- function(res, label, pdf_path, width = 7, height = 5) {
   if (is.null(res)) return(invisible(NULL))
   pdf(pdf_path, width = width, height = height, useDingbats = FALSE)
+  on.exit(dev.off(), add = TRUE)
   for (cc in res$cluster_ids) {
     ## barplot_enrich_pair: barplots each ontology (BP, MF, CC, KEGG) from a pair of
     ## run_enrichment()-style lists (UP and DOWN gene sets), skipping any ontology that is NULL
     ## or empty. Each plot is built and print()ed inside one tryCatch, because ggplot2 defers
     ## scale training and stat transforms (where enrichplot's barplot() can fail on a
     ## very-few-row enrichResult) until print(). A failed plot is reported to the console and
-    ## skipped, so the enclosing pdf() block still reaches dev.off() and later clusters are drawn.
+    ## skipped, so the enclosing pdf() block stays open until the function closes it on exit and later clusters are drawn.
     ## label names the comparison (e.g. "Sc major vs minor cluster"), since "up"/"down" means
     ## ident.1 vs ident.2 of the FindMarkers() call and that pairing differs across call sites.
     local({
@@ -1579,7 +1619,6 @@ plot_cluster_marker_enrichment <- function(res, label, pdf_path, width = 7, heig
       }
     })
   }
-  dev.off()
 }
 
 ## score_cell_cycle_by_cluster: cell-cycle phase scoring on a dataset's own validated
@@ -1594,6 +1633,7 @@ score_cell_cycle_by_cluster <- function(obj, label, pdf_path, s_genes = S.GENES,
   obj <- suppressWarnings(suppressMessages(AddModuleScore(obj, features = list(mg1_genes), name = "MG1.Score")))
 
   pdf(pdf_path, width = width, height = height, useDingbats = FALSE)
+  on.exit(dev.off(), add = TRUE)
   par(mfrow = c(1, 1))
   print(suppressWarnings(VlnPlot(obj, features = c("S.Score", "G2M.Score", "MG1.Score1"), ncol = 1, pt.size = 0, cols = colorRampPalette(COLOR.CLUSTER)(nlevels(Idents(obj))))))
 
@@ -1601,7 +1641,6 @@ score_cell_cycle_by_cluster <- function(obj, label, pdf_path, s_genes = S.GENES,
   barplot(t(phase_by_cluster), col = COLOR.PHASE[colnames(phase_by_cluster)],
           legend.text = TRUE, args.legend = list(x = "topright", bty = "n"),
           las = 2, ylab = "fraction of cells", main = sprintf("%s: cell-cycle phase composition by cluster", label))
-  dev.off()
 
   cat(sprintf("%s: cell-cycle phase composition by cluster\n", label)); print(round(phase_by_cluster, 3))
   obj
@@ -1628,6 +1667,7 @@ score_modules_by_cluster <- function(obj, gene_sets, label, pdf_path, width = 9,
   for (i in seq_along(gene_sets)) obj <- suppressWarnings(suppressMessages(AddModuleScore(obj, features = list(gene_sets[[i]]), name = names(gene_sets)[i])))
 
   pdf(pdf_path, width = width, height = height, useDingbats = FALSE)
+  on.exit(dev.off(), add = TRUE)
   par(mfrow = c(1, 1))
   print(suppressWarnings(VlnPlot(obj, features = score_names, ncol = 1, pt.size = 0, cols = colorRampPalette(COLOR.CLUSTER)(nlevels(Idents(obj))))))
 
@@ -1642,7 +1682,6 @@ score_modules_by_cluster <- function(obj, gene_sets, label, pdf_path, width = 9,
                  main = sprintf("%s: %s", label, names(gene_sets)[i]), ylab = "mean module score", las = 2)
     arrows(b, means[, i] - ses[, i], b, means[, i] + ses[, i], angle = 90, code = 3, length = 0.05)
   }
-  dev.off()
 
   cat(sprintf("%s: mean module score by cluster\n", label)); print(round(means, 3))
   obj
@@ -1701,13 +1740,8 @@ metabolic_state_cluster <- function(obj, score_names = c("Glycolysis1", "OXPHOS1
   scores <- scale(as.matrix(obj[[score_names]]))
   stopifnot(is.numeric(seed), length(seed) == 1, is.finite(seed),
             is.numeric(k_range), length(k_range) >= 1, all(k_range >= 2), all(k_range < nrow(scores)))
-  ## Own RNG stream: seed here, give the caller's state back on exit (no state to give back when none existed)
-  had_seed <- exists(".Random.seed", envir = globalenv(), inherits = FALSE)
-  if (had_seed) old_seed <- get(".Random.seed", envir = globalenv())
-  on.exit(if (had_seed) assign(".Random.seed", old_seed, envir = globalenv()) else if (exists(".Random.seed", envir = globalenv(), inherits = FALSE)) rm(".Random.seed", envir = globalenv()), add = TRUE)
-  set.seed(seed)
   d    <- dist(scores)
-  fits <- lapply(k_range, function(k) kmeans(scores, centers = k, nstart = 10))
+  fits <- with_local_seed(seed, lapply(k_range, function(k) kmeans(scores, centers = k, nstart = 10)))
   sil  <- vapply(fits, function(fit) mean(silhouette(fit$cluster, d)[, 3]), numeric(1))
   km   <- fits[[which.max(sil)]]
   setNames(factor(km$cluster), rownames(scores))
@@ -2647,12 +2681,12 @@ hvg_elbow <- function(obj, drop_frac = 0.001, floor = 1) {
 ## names the output file (extra/S_hvg_elbow_<label>.pdf) and plot title.
 plot_hvg_elbow <- function(hvg, label, fig_dir) {
   pdf(file.path(fig_dir, sprintf("extra/S_hvg_elbow_%s.pdf", label)), width = 6, height = 5, useDingbats = FALSE)
+  on.exit(dev.off(), add = TRUE)
   plot(hvg$curve, pch = 16, cex = 0.4, col = ifelse(seq_along(hvg$curve) <= hvg$n_features, "black", COLOR.GREY[["mid"]]),
        xlab = "gene rank (by standardized variance)", ylab = "standardized variance", main = sprintf("%s: HVG elbow at %d genes", label, hvg$n_features))
   abline(v = hvg$n_features, lty = 2, col = COLOR.ACCENT)
   abline(h = hvg$floor, lty = 3, col = COLOR.ACCENT)
   legend("topright", legend = c("chosen cutoff", sprintf("floor (%.1f)", hvg$floor)), lty = c(2, 3), col = c(COLOR.ACCENT, COLOR.ACCENT), bty = "n")
-  dev.off()
 }
 
 ## sweep_cluster_resolution: chooses the Louvain resolution for one dataset.
@@ -2705,12 +2739,12 @@ plot_resolution_sweep <- function(sweep, label, fig_dir, min_cells) {
   g  <- sweep$grid
   ok <- g$ok
   pdf(file.path(fig_dir, sprintf("extra/S_resolution_sweep_%s.pdf", label)), width = 6, height = 5, useDingbats = FALSE)
+  on.exit(dev.off(), add = TRUE)
   plot(g$res[ok], g$sil[ok], type = "b", pch = 16, xlab = "resolution", ylab = "mean silhouette width",
        main = sprintf("%s: resolution sweep", label), ylim = range(g$sil[ok], na.rm = TRUE))
   if (any(!ok)) points(g$res[!ok], rep(min(g$sil[ok], na.rm = TRUE), sum(!ok)), pch = 4, col = COLOR.GREY[["mid"]])
   abline(v = sweep$chosen_res, lty = 2, col = COLOR.ACCENT)
   legend("bottomright", legend = c("silhouette", sprintf("below %d cells/cluster", min_cells), "chosen"), pch = c(16, 4, NA), lty = c(NA, NA, 2), col = c("black", COLOR.GREY[["mid"]], COLOR.ACCENT), bty = "n")
-  dev.off()
 }
 
 ## prepare_dataset: normalization, variable features and PCA for one Seurat dataset. Counts are
@@ -2787,7 +2821,9 @@ assemble_cluster_stability <- function(inputs, ari, dataset, obj) {
 ## the same pathway release used everywhere in the run.
 kegg_local <- function(org = "sce") {
   kg <- download_KEGG(org)
-  kg$KEGGPATHID2NAME[[2]] <- sub(" - Saccharomyces cerevisiae \\(budding yeast\\)$", "", kg$KEGGPATHID2NAME[[2]])
+  if (!"to" %in% names(kg$KEGGPATHID2NAME))
+    stop("kegg_local(): KEGGPATHID2NAME has no 'to' (pathway name) column; found: ", paste(names(kg$KEGGPATHID2NAME), collapse = ", "))
+  kg$KEGGPATHID2NAME[["to"]] <- sub(" - Saccharomyces cerevisiae \\(budding yeast\\)$", "", kg$KEGGPATHID2NAME[["to"]])
   kg
 }
 
@@ -2998,10 +3034,10 @@ report_within_between_by_class <- function(wb_a, wb_b, class, gene_ref, class_le
   cls_b <- class[match(wb_b$table$gene, gene_ref)]
 
   pdf(pdf_path, width = width, height = height, useDingbats = FALSE)
+  on.exit(dev.off(), add = TRUE)
   par(mfrow = c(1, 2), mar = c(7, 4.5, 3, 1))
   res_a <- plot_within_between_by_class(wb_a, cls_a, class_levels, colors, main = lab_a)
   res_b <- plot_within_between_by_class(wb_b, cls_b, class_levels, colors, main = lab_b)
-  dev.off()
 
   cat(sprintf("%s: within/between by %s, F(%d,%d) = %.2f, p = %.3g, eta^2 = %.3f\n",
               lab_a, axis_label, res_a$df1, res_a$df2, res_a$f, res_a$p, res_a$eta_sq))
@@ -3035,6 +3071,8 @@ ORF.PATTERN <- "^Y[A-P][LR][0-9]{3}[CW]([.-][A-Z])?$"
 ## sizes). Cells below the larger of min_reads and the log10-scale median - k*MAD cutoff are dropped.
 ## Working in logs makes the rule scale-free, so one setting adapts to any sequencing depth.
 qc_cell_cutoff <- function(s, k, min_reads = 500) {
+  stopifnot(is.list(s), is.numeric(s$lib), any(s$lib > 0), is.numeric(k), length(k) == 1, k >= 0,
+            is.numeric(min_reads), length(min_reads) == 1, min_reads >= 0)
   lib <- s$lib
   lx <- log10(lib[lib > 0])
   lib_cut <- max(min_reads, 10^(median(lx) - k * mad(lx)))
@@ -3161,8 +3199,8 @@ null_trans_axes <- function(par_sc, par_se, hyb_sc, hyb_se, expo_par_sc, expo_pa
 ## reported as NA.
 eiv_mode_ci_row <- function(m, contrasts, B) {
   e <- eiv_components(contrasts, m)
-  set.seed(1); n <- nrow(contrasts)
-  draws <- replicate(B, eiv_components(contrasts[sample.int(n, n, TRUE), , drop = FALSE], m)["rho_mean_disp"])
+  n <- nrow(contrasts)
+  draws <- with_local_seed(1, replicate(B, eiv_components(contrasts[sample.int(n, n, TRUE), , drop = FALSE], m)["rho_mean_disp"]))
   na_frac <- mean(!is.finite(draws))
   ci <- quantile(draws, probs = c(0.025, 0.975), na.rm = TRUE)
   if (na_frac > 0.5) ci[] <- NA_real_
@@ -3293,8 +3331,7 @@ stability_dataset_inputs <- function(d, counts, dims_n, metric, nfeatures, sweep
 ## on identical draws.
 boot_resample_matrix <- function(d, counts, B, seed) {
   n <- ncol(counts[[d]])
-  set.seed(seed)
-  matrix(replicate(B, sample.int(n, n, replace = TRUE)), nrow = n)
+  with_local_seed(seed, matrix(replicate(B, sample.int(n, n, replace = TRUE)), nrow = n))
 }
 
 ## metric_clusters: clusters of a Seurat object at one resolution using the annoy distance metric m on the
@@ -3348,11 +3385,11 @@ pilot_split_se_one <- function(g, B, expos, mats, seed) {
   stopifnot(is.character(g), length(g) == 1, nzchar(g), is.numeric(seed), length(seed) == 1, is.finite(seed))
   h <- 0
   for (code in utf8ToInt(g)) h <- (131 * h + code) %% 2147483647
-  set.seed((seed + h) %% 2147483647)
+  seed_g <- (seed + h) %% 2147483647
   n.p.sc <- length(expos$MIX.SC); n.p.se <- length(expos$MIX.SE); n.h <- length(expos$HYB)
   logmu <- matrix(NA_real_, B, 4, dimnames = list(NULL, c("MIX.SC", "MIX.SE", "HYB.SC", "HYB.SE")))
   logsz <- logmu
-  for (b in seq_len(B)) {
+  with_local_seed(seed_g, for (b in seq_len(B)) {
     i.p.sc <- sample.int(n.p.sc, n.p.sc, replace = TRUE)
     i.p.se <- sample.int(n.p.se, n.p.se, replace = TRUE)
     i.h    <- sample.int(n.h,    n.h,    replace = TRUE)
@@ -3368,7 +3405,7 @@ pilot_split_se_one <- function(g, B, expos, mats, seed) {
     if (is.finite(f.me["disp"]) && f.me["disp"] > 0) logsz[b, "MIX.SE"] <- log(f.me["disp"])
     if (is.finite(f.hc["disp"]) && f.hc["disp"] > 0) logsz[b, "HYB.SC"] <- log(f.hc["disp"])
     if (is.finite(f.he["disp"]) && f.he["disp"] > 0) logsz[b, "HYB.SE"] <- log(f.he["disp"])
-  }
+  })
   allele_cov <- function(m) {
     ok <- is.finite(m[, "HYB.SC"]) & is.finite(m[, "HYB.SE"])
     if (sum(ok) > 2) cov(m[ok, "HYB.SC"], m[ok, "HYB.SE"]) else NA_real_
@@ -3705,10 +3742,16 @@ coexpr_perm_one <- function(draw, n_keep, nSC, nSE, resid, dpar_setup) {
 nupop_occupancy_cluster <- function(inputs, species = 7, model = 4,
                                     window_bp = 250000, flank = 7000, fallback_flank = 2000,
                                     min_core_bp = 5000, cores = 1) {
+  stopifnot(is.list(inputs), is.numeric(cores), length(cores) == 1, cores >= 1,
+            is.numeric(window_bp), window_bp >= 1, is.numeric(flank), flank >= 0,
+            is.numeric(fallback_flank), fallback_flank >= 0, is.numeric(min_core_bp), min_core_bp >= 1)
   ## Runs a table of core windows (seqid, start, end) with `flank` bp of
   ## context, one forked process per window, and returns one result per
   ## row. A window whose process ends early returns NULL or a try-error,
-  ## which the caller reads as "split and rerun".
+  ## which the caller reads as "split and rerun". NuPoP's compiled code can abort the
+  ## process that hosts it, so every window runs in a forked child even with cores = 1
+  ## (mclapply() with one core would run in this process): a crash then costs one window,
+  ## not the whole job.
   nupop_run_windows <- function(chroms, tasks, flank, species, model, cores, work_root) {
     ## Predicts occupancy for one sequence in the current process and returns
     ## positions core_from to core_to. Each call works in its own temporary
@@ -3719,7 +3762,7 @@ nupop_occupancy_cluster <- function(inputs, species = 7, model = 4,
     ## work_root, which nupop_occupancy_cluster() places beside R's session
     ## temp directory rather than inside it, so each worker's files stay
     ## independent of every other worker.
-    parallel::mclapply(seq_len(nrow(tasks)), function(i) {
+    one_window <- function(i) {
       s  <- chroms[[tasks$seqid[i]]]
       ws <- max(1, tasks$start[i] - flank)
       we <- min(nchar(s), tasks$end[i] + flank)
@@ -3748,7 +3791,15 @@ nupop_occupancy_cluster <- function(inputs, species = 7, model = 4,
         occ[tab[[1]][keep]] <- tab[[3]][keep]
         occ[core_from:core_to]
       })
-    }, mc.cores = cores, mc.preschedule = FALSE)
+    }
+    if (cores >= 2) {
+      parallel::mclapply(seq_len(nrow(tasks)), one_window, mc.cores = cores, mc.preschedule = FALSE)
+    } else {
+      lapply(seq_len(nrow(tasks)), function(i) {
+        res <- parallel::mccollect(parallel::mcparallel(one_window(i)))
+        if (length(res) == 0) NULL else res[[1]]   # a child that died returns nothing
+      })
+    }
   }
 
   chroms <- inputs$chroms
