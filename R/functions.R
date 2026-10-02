@@ -61,7 +61,7 @@
 ###     plot_coexpr_scatter() - Co-expression pair scatter coloured by pair-level class: cis vs trans by regulatory class (Figure 11) or hybrid-vs-parent dominance.
 ###     seed_compare_core() - Shared scatter/correlation/ratio core for the two two-seed adequacy checks below.
 ###     gene_seed_compare() - Two-seed adequacy check for the per-gene bootstrap: compares SE between two independent seeds.
-###     coexpr_rank_check() - Rank-k eigendecomposition of a divergence matrix, with reconstruction R^2 against the observed values.
+###     coexpr_rank_check() - Rank-k eigendecomposition of a divergence matrix, eigenpairs sorted once by |eigenvalue|, with reconstruction R^2 against the observed values.
 ###   8. REGULATORY AND DOMINANCE CLASSIFICATION  (offset level)
 ###     classify_reg() - Five-way regulatory classification (Conserved/Cis/Trans/Cis+Trans/Compensatory) from cis and trans p-values.
 ###     classify_dom() - Six-way dominance classification (hybrid vs each parent) from dpar_sc and dpar_se p-values.
@@ -887,7 +887,7 @@ coexpr_decompose <- function(resid, ploidy_f = attr(resid, "ploidy_f")) {
 ## Cis/trans split of one axis's eigenvalue. Because total = cis + trans elementwise,
 ## v'(total)v = v'(cis)v + v'(trans)v holds exactly for any vector v, so the axis's eigenvalue
 ## partitions into cis and trans parts on the same vector.
-## v: a unit eigenvector (e.g. RANK.CHECK$vectors[, k]). PT: the coexpr_decompose() point estimate
+## v: a unit eigenvector (e.g. RANK.CHECK$vectors[, k], axis k by |eigenvalue|). PT: the coexpr_decompose() point estimate
 ## (COEXPR.POINT) with $cis/$trans/$total. Returns the three quadratic forms, their cis + trans sum
 ## (check_sum, equal to total) and frac_trans = trans / total.
 coexpr_axis_cis_trans <- function(v, PT) {
@@ -1050,12 +1050,18 @@ gene_seed_compare <- function(bc1, bc2, quantity = c("mean", "bfreq", "bsize", "
 ## Rank-k eigendecomposition of a symmetric gene-by-gene divergence matrix (M ~ sum_k lambda_k v_k
 ## v_k^T) and how well that low-rank reconstruction predicts the observed off-diagonal entries.
 ## total_mat: full p x p point-estimate matrix, e.g. COEXPR.POINT$total. k: number of leading
-## components (largest signed eigenvalues, in eigen() order). Plots reconstruction vs observed on the
-## open device. Returns the reconstruction R^2 (squared correlation), all eigenvalues and eigenvectors,
-## and loading1 (the first eigenvector, named by gene).
+## components. A divergence matrix has eigenvalues of both signs, so the eigenpairs are sorted once here by
+## |eigenvalue|, largest first, and every consumer (the rank-k reconstruction, the candidate axes, the
+## axis tests, loading1 and vectors[, j]) reads the same ordering: axis j is the j-th largest in
+## magnitude. Plots reconstruction vs observed on the open device. Returns the reconstruction R^2 (squared
+## correlation), all eigenvalues and eigenvectors in that order, and loading1 (the first eigenvector, named by gene).
 coexpr_rank_check <- function(total_mat, k = 1) {
+  stopifnot(is.numeric(k), length(k) == 1, k >= 1, k <= nrow(total_mat))
   diag(total_mat) <- 0
   eig  <- eigen(total_mat, symmetric = TRUE)
+  by_magnitude <- order(abs(eig$values), decreasing = TRUE)
+  eig$values   <- eig$values[by_magnitude]
+  eig$vectors  <- eig$vectors[, by_magnitude, drop = FALSE]
 
   V     <- eig$vectors[, seq_len(k), drop = FALSE]
   recon <- V %*% diag(eig$values[seq_len(k)], k, k) %*% t(V)

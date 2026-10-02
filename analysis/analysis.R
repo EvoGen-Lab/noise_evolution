@@ -666,9 +666,10 @@ class_overlap_triptych("main/06_overlap_dominance.pdf", DOM.VEC, DOM.CLASS, widt
 ## Figure 4: rotated burst kinetics. Left, net mean change (x) against kinetic balance (y = bfreq - bsize)
 ## with SE bars, read from the mean_ and kbal_ columns add_burst_contrasts() stores. The rotation
 ## separates the two burst kinetics: movement along x is a change in total mean, movement along y is a
-## shift between frequency and size. A gene is significant when its kinetic balance differs from 0 by a
-## two-sided z-test (nominal p < sig); significant points are drawn black over grey n.s. points. KS keeps
-## gene, y, sy, p and direction (sig_pos, sig_neg or ns) for the companion barplot at right.
+## shift between frequency and size. A gene is significant when its kinetic balance has permutation
+## q < sig (PR$kbal_<mode>_q, Benjamini-Hochberg across genes, the q used for every gene call in the pipeline);
+## significant points are drawn black over grey n.s. points. KS keeps gene, y, sy, q and direction
+## (sig_pos, sig_neg or ns) for the companion barplot at right.
 fig_pdf("main/04_burst_kinetics.pdf", 9, 5)
 par(mfrow = c(1, 2), mar = c(5, 4.5, 2, 1))
 KS <- local({
@@ -680,11 +681,12 @@ KS <- local({
   ns_col <- COLOR.GREY[["mid"]]
   x <- BURST.CONTRASTS[[paste0("mean_", mode, "_est")]]; sx <- BURST.CONTRASTS[[paste0("mean_", mode, "_se")]]
   y <- BURST.CONTRASTS[[paste0("kbal_", mode, "_est")]]; sy <- BURST.CONTRASTS[[paste0("kbal_", mode, "_se")]]
+  q <- PR[[paste0("kbal_", mode, "_q")]]    # PR rows follow BURST.CONTRASTS$gene
+  stopifnot(identical(PR$gene, BURST.CONTRASTS$gene), !is.null(q))
   ok <- is.finite(x) & is.finite(y) & is.finite(sx) & is.finite(sy)
-  genes <- BURST.CONTRASTS$gene[ok]; x <- x[ok]; sx <- sx[ok]; y <- y[ok]; sy <- sy[ok]
-  p   <- 2 * pnorm(-abs(y) / sy)
-  dir <- ifelse(!is.finite(p) | p >= sig, "ns", ifelse(y > 0, "sig_pos", "sig_neg"))
-  ks  <- data.frame(gene = genes, y = y, sy = sy, p = p, direction = dir, stringsAsFactors = FALSE)
+  genes <- BURST.CONTRASTS$gene[ok]; x <- x[ok]; sx <- sx[ok]; y <- y[ok]; sy <- sy[ok]; q <- q[ok]
+  dir <- ifelse(!is.finite(q) | q >= sig, "ns", ifelse(y > 0, "sig_pos", "sig_neg"))
+  ks  <- data.frame(gene = genes, y = y, sy = sy, q = q, direction = dir, stringsAsFactors = FALSE)
   sig_idx <- dir != "ns"
   if (is.null(main)) main <- paste0("burst kinetics: ", mode)
   op <- par(pty = "s"); on.exit(par(op))
@@ -694,9 +696,9 @@ KS <- local({
   segments(x, y - sy, x, y + sy, col = bar_col)
   points(x[!sig_idx], y[!sig_idx], pch = 16, cex = 0.5, col = ns_col)  # ns below
   points(x[ sig_idx], y[ sig_idx], pch = 16, cex = 0.5, col = sig_col)  # sig on top
-  legend("topleft", legend = c(paste0("sig (p<", sig, ")"), "n.s."), col = c(sig_col, ns_col), pch = 16, bty = "n", cex = 0.8)
+  legend("topleft", legend = c(paste0("sig (q<", sig, ")"), "n.s."), col = c(sig_col, ns_col), pch = 16, bty = "n", cex = 0.8)
   invisible(ks)
-})   # returns the gene/y/sy/p/direction table
+})   # returns the gene/y/sy/q/direction table
 bp_counts <- table(factor(KS$direction, levels = c("sig_pos","sig_neg","ns")))
 barplot(bp_counts,
         col    = c(sig_pos = "black", sig_neg = COLOR.GREY[["dark"]], ns = COLOR.GREY[["light"]]),
@@ -876,7 +878,9 @@ cat(sprintf("ploidy factor: median f = %.3f, %d of %d genes unadjusted\n", media
 COEXPR.POINT <- coexpr_decompose(RESID)
 
 # Asks if the total correlation matrix is well described by a single shared
-# factor or is pair-specific with no such structure?
+# factor or is pair-specific with no such structure? The rank-1 component is the
+# eigenpair of largest |eigenvalue|, the same ordering as Axis 1 and Axis 2 below
+# (coexpr_rank_check() sorts once).
 fig_pdf("extra/S_coexpr_rank_check.pdf", 5, 5)
 RANK.CHECK <- coexpr_rank_check(COEXPR.POINT$total, k = 1)
 dev.off()
@@ -1051,7 +1055,9 @@ load(file.path(OUTPUT.DIR, "coexpr_perm_output.rda"))   # NULL.TOTAL.RANKS, NULL
 # Runs coexpr_rank_check() on each of the five divergence matrices and
 # identifies candidate axes: the top 40
 # axes by |eigenvalue|, filtered to a 1% variance floor and the
-# MIN.EFFECTIVE.GENES participation-ratio floor
+# MIN.EFFECTIVE.GENES participation-ratio floor. coexpr_rank_check() sorts the
+# eigenpairs by |eigenvalue| once, so axis k means the same axis in the rank check, the
+# candidate table, the mixtures, the null comparison and Axis 1 and 2 below.
 
 ## Figure 11: cis vs trans scatter above class counts
 fig_pdf("main/11_coexpr_cis_trans.pdf", 6, 11)
@@ -1084,7 +1090,7 @@ for (ax in COEXPR.AXES) {
     eff_genes_min <- MIN.EFFECTIVE.GENES
     label <- ax
     n_candidate <- min(n_candidate, length(rank_check$values) - 1)
-    axis_order  <- order(abs(rank_check$values), decreasing = TRUE)[1:n_candidate]
+    axis_order  <- order(abs(rank_check$values), decreasing = TRUE)[1:n_candidate]   # 1:n_candidate, since the values are already sorted
     axis_var    <- setNames(rank_check$values[axis_order]^2 / sum(rank_check$values^2), axis_order)
     axis_pr     <- setNames(sapply(axis_order, function(k) 1 / sum(rank_check$vectors[, k]^4)), axis_order)
 
@@ -1220,6 +1226,7 @@ for (nm in names(EXTRA.AXES)) {
 }
 
 ## 4.10 Total Axis 1
+# Axis 1 is the eigenpair of largest |eigenvalue| of the total matrix (RANK.CHECK$loading1)
 # Add MF, CC, and KEGG enrichment for Total axis 1
 AXIS1 <- EXTRA.AXES$axis1
 NEG.LOAD.GENES <- AXIS1$genes_lo
@@ -1268,6 +1275,7 @@ AXIS1.CT <- coexpr_axis_cis_trans(RANK.CHECK$loading1, COEXPR.POINT)
 AXIS1.CT
 
 ## 4.11 Total Axis 2
+# Axis 2 is the second largest |eigenvalue| (RANK.CHECK$vectors[, 2])
 # RESP.LOAD.GENES is axis 2's smaller pole (cellular respiration,
 # oxidative phosphorylation, ion transport). AXIS2.BULK.GENES is the
 # larger, translation-annotated pole.

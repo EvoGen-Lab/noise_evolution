@@ -13,8 +13,6 @@ Source: `docs/function_review.md` (item numbers refer to its section 3), re-chec
 
 | Review # | Where | Issue |
 |---|---|---|
-| 16 | `coexpr_rank_check` | `eigen()` orders by signed value, `coexpr_candidate_axes` and `coexpr_axis_validate` by absolute value. |
-| 17 | `kbal_sig`, `plot_burst_kinetics_sig` | Gene-level test uses nominal `p < sig`; the rest of the pipeline uses BH q. |
 | 18 | `species_composition_bound` | Label says residual SD, comment says variance fraction; the Wilcoxon p-value is invalid for paired allele cells. |
 | 19 | `within_between_decomp` and plots | No NA check on `clusters`; divisor n instead of n - 1; plots drop genes with ratio <= 0. |
 | 20 | `map_to_orf` | `YAL047C.A` is passed through unchanged while `NB.SC` uses the hyphen form, so those genes drop out of the Jackson merge. |
