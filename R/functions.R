@@ -3244,9 +3244,14 @@ seed_check_rows <- function(m, checks, count_label) {
 ## pilot_split_se_one: one gene's bootstrap SE of log(mu) and log(size) for the four datasets needed to compute A and B, plus the bootstrap
 ## covariance between the two hybrid alleles. HYB.SC and HYB.SE are refit on the SAME resampled cell indices in each replicate because the
 ## two alleles are measured in the same cells. The RNG is seeded from a hash of the gene's own name, so each gene's draws depend only on its
-## name and results are identical for any gene chunking or core count.
+## name and results are identical for any gene chunking or core count. The hash is a rolling polynomial over the character codes
+## (h <- (131 * h + code) mod 2^31 - 1, a prime), so the order of the characters matters and the values spread over the 31-bit seed
+## space; it runs in double precision, where every intermediate stays below 2^53 and is exact.
 pilot_split_se_one <- function(g, B, expos, mats, seed) {
-  set.seed(seed + sum(utf8ToInt(g)))
+  stopifnot(is.character(g), length(g) == 1, nzchar(g), is.numeric(seed), length(seed) == 1, is.finite(seed))
+  h <- 0
+  for (code in utf8ToInt(g)) h <- (131 * h + code) %% 2147483647
+  set.seed((seed + h) %% 2147483647)
   n.p.sc <- length(expos$MIX.SC); n.p.se <- length(expos$MIX.SE); n.h <- length(expos$HYB)
   logmu <- matrix(NA_real_, B, 4, dimnames = list(NULL, c("MIX.SC", "MIX.SE", "HYB.SC", "HYB.SE")))
   logsz <- logmu
