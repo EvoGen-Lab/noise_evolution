@@ -2979,17 +2979,7 @@ gene_pass_group <- function(g, fits, floor_mean, n_min) {
 perm_label_draw <- function(b, hyc, hyc_n, hyt, hyt_n, nHYB, nSC, nSE) {
   stopifnot(is.numeric(nHYB), length(nHYB) == 1, nHYB >= 1,
             all(vapply(list(hyc, hyc_n, hyt, hyt_n), function(x) !is.unsorted(x, strictly = TRUE) && all(x >= 1 & x <= nHYB), logical(1))))
-  ## Hybrid cells of either trans group, each listed once
-  u <- sort(union(hyt, hyt_n))
-  ## One coupled pair of pooled permutations for a parent dataset of nP cells: pooled index 1..nP are
-  ## the parent cells and nP + j the j-th cell of the trans group; NA marks a cell outside the group
-  trans_pair <- function(nP) {
-    ord  <- sample.int(nP + length(u))
-    id_m <- c(seq_len(nP), nP + match(u, hyt))[ord]
-    id_n <- c(seq_len(nP), nP + match(u, hyt_n))[ord]
-    list(m = id_m[!is.na(id_m)], n = id_n[!is.na(id_n)])
-  }
-  sc <- trans_pair(nSC); se <- trans_pair(nSE)
+  sc <- perm_trans_pool(nSC, hyt, hyt_n); se <- perm_trans_pool(nSE, hyt, hyt_n)
   flip <- runif(nHYB) < 0.5
   list(
     total     = sample.int(nSC + nSE),
@@ -3005,6 +2995,67 @@ perm_label_draw <- function(b, hyc, hyc_n, hyt, hyt_n, nHYB, nSC, nSE) {
     dparSE  = sample.int(nHYB + nSE),
     inhSC   = sample.int(nHYB + nSC),
     inhSE   = sample.int(nHYB + nSE))
+}
+
+## perm_trans_pool: the pooled relabeling of the trans null for one allele's parent dataset of nP cells.
+## Pooled index 1..nP are the parent cells and nP + j the j-th cell of a trans group; the group's first nP
+## entries of the returned permutation form the parent-sized group and the rest the hybrid-sized group
+## (.fit_split()). One random ordering of the parent cells plus every hybrid cell of either trans group
+## (hyt, hyt_n: ascending positions of the HYT and HYT.N cells) serves both versions, each keeping the
+## members of its own pool in that order, so each version is an exact uniform pooled shuffle and the
+## two share their parental assignment. Returns list(m = HYT pool, n = HYT.N pool). The grid passes
+## hyt_n = hyt and reads m. Used by perm_label_draw() and the power grid.
+perm_trans_pool <- function(nP, hyt, hyt_n) {
+  u    <- sort(union(hyt, hyt_n))
+  ord  <- sample.int(nP + length(u))
+  id_m <- c(seq_len(nP), nP + match(u, hyt))[ord]
+  id_n <- c(seq_len(nP), nP + match(u, hyt_n))[ord]
+  list(m = id_m[!is.na(id_m)], n = id_n[!is.na(id_n)])
+}
+
+## perm_trans_pool_paired: pairing-preserving version of the trans relabeling for one hybrid group of nHYT
+## cells. The Sc side is shuffled as in perm_trans_pool(). The Se side sends the same hybrid cells to its
+## parent-sized group, with both alleles of a cell moving together as in the cis swap, and fills the rest of that
+## group with random Se parent cells. Returns list(sc, se) permutations for .fit_split(). Each side's
+## marginal null is the pooled shuffle exactly when nSC == nSE; for unequal parent counts the number of
+## hybrid cells in the parent-sized group follows the Sc side's hypergeometric law.
+perm_trans_pool_paired <- function(nSC, nSE, nHYT) {
+  stopifnot(nSC >= 1, nSE >= 1, nHYT >= 1)
+  ord  <- sample.int(nSC + nHYT)
+  a_h  <- ord[seq_len(nSC)]; a_h <- a_h[a_h > nSC] - nSC   # hybrid cells in the parent-sized group
+  stopifnot(length(a_h) <= nSE)
+  par_a <- sample.int(nSE, nSE - length(a_h))
+  list(sc = ord,
+       se = c(par_a, nSE + a_h, setdiff(seq_len(nSE), par_a), nSE + setdiff(seq_len(nHYT), a_h)))
+}
+
+## fit_ratio_axes: the log2 ratio of two .fit_one() results on each axis, as c(mu, disp, cv2); an axis is NA
+## unless both sides are finite and positive. The one definition of a contrast between two groups for the
+## gene-level permutation null and the power grid.
+fit_ratio_axes <- function(fa, fb) {
+  ratio <- function(x, y) if (is.finite(x) && x > 0 && is.finite(y) && y > 0) log2(x) - log2(y) else NA_real_
+  c(mu   = ratio(fa[["mu"]], fb[["mu"]]),
+    disp = ratio(fa[["disp"]], fb[["disp"]]),
+    cv2  = ratio(.cv2_of(fa[["mu"]], fa[["disp"]]), .cv2_of(fb[["mu"]], fb[["disp"]])))
+}
+
+## null_cis_axes: one draw of the cis null for hybrid cells with allele counts sc, se and exposure expo. swap
+## (logical per cell) exchanges the two alleles within a cell, which keeps the allele pairing; the contrast is the
+## swapped Sc allele against the swapped Se allele (fit_ratio_axes()). Shared by permute_contrasts_one()
+## and the power grid.
+null_cis_axes <- function(sc, se, expo, swap) {
+  fit_ratio_axes(.fit_one(ifelse(swap, se, sc), expo), .fit_one(ifelse(swap, sc, se), expo))
+}
+
+## null_trans_axes: one draw of the trans null. For each allele the parent cells and the hybrid cells of the
+## trans group are pooled and relabeled by perm_sc / perm_se (pooled indices: parents first, then hybrid
+## cells; the first length(par) entries form the parent-sized group, .fit_split()). The contrast is the
+## parental ratio minus the hybrid allele ratio of the relabeled groups. Shared by permute_contrasts_one()
+## and the power grid.
+null_trans_axes <- function(par_sc, par_se, hyb_sc, hyb_se, expo_par_sc, expo_par_se, expo_hyb, perm_sc, perm_se) {
+  sSC <- .fit_split(c(par_sc, hyb_sc), c(expo_par_sc, expo_hyb), perm_sc, length(par_sc))
+  sSE <- .fit_split(c(par_se, hyb_se), c(expo_par_se, expo_hyb), perm_se, length(par_se))
+  fit_ratio_axes(sSC$a, sSE$a) - fit_ratio_axes(sSC$b, sSE$b)
 }
 
 ## eiv_mode_ci_row: errors-in-variables correlation for one mode m with a gene-resampling bootstrap CI
@@ -3327,39 +3378,23 @@ permute_contrasts_one <- function(g, expos, fits, mats, perms, ploidy_shift) {
   mp.s <- 0.5 * (l2(gvbf[["MIX.SC"]]) + l2(gvbf[["MIX.SE"]]))
   mp.c <- 0.5 * (l2(gvcv[["MIX.SC"]]) + l2(gvcv[["MIX.SE"]]))
   nSC <- length(cMIXsc); nSE <- length(cMIXse); nHYB <- length(cHYBc)
-  rat <- function(a, b, q) { x <- a[q]; y <- b[q]
-    if (is.finite(x) && x > 0 && is.finite(y) && y > 0) l2(x) - l2(y) else NA_real_ }
-  ## CV2 contrast of two .fit_one()/.fit_split() results
-  ratcv2 <- function(a, b) { x <- .cv2_of(a[["mu"]], a[["disp"]]); y <- .cv2_of(b[["mu"]], b[["disp"]])
-    if (is.finite(x) && x > 0 && is.finite(y) && y > 0) l2(x) - l2(y) else NA_real_ }
+  ## store: one row of the Nm / Ns / Nc null matrices (mean, bfreq and CV2 axes) for mode md, from the
+  ## c(mu, disp, cv2) contrast that fit_ratio_axes() returns
+  store <- function(b, md, ax) { Nm[b, md] <<- ax[["mu"]]; Ns[b, md] <<- ax[["disp"]]; Nc[b, md] <<- ax[["cv2"]] }
   for (b in seq_len(B)) {
     p <- perms[[b]]
     sp <- .fit_split(c(cMIXsc, cMIXse), c(expos$MIX.SC, expos$MIX.SE), p$total, nSC)
-    Nm[b,"total"] <- rat(sp$a, sp$b, "mu"); Ns[b,"total"] <- rat(sp$a, sp$b, "disp"); Nc[b,"total"] <- ratcv2(sp$a, sp$b)
+    store(b, "total", fit_ratio_axes(sp$a, sp$b))
 
-    sc <- ifelse(p$cis, cHYCse, cHYCsc); se <- ifelse(p$cis, cHYCsc, cHYCse)
-    fa <- .fit_one(sc, expos$HYC); fb <- .fit_one(se, expos$HYC)
-    Nm[b,"cis"] <- rat(fa, fb, "mu"); Ns[b,"cis"] <- rat(fa, fb, "disp"); Nc[b,"cis"] <- ratcv2(fa, fb)
-
+    store(b, "cis", null_cis_axes(cHYCsc, cHYCse, expos$HYC, p$cis))
     ## Noise-split (f_disp) version of the cis null, used only for
     ## the bfreq_cis/cv2_cis output columns, mirroring cis_n in .MODES
-    sc.n <- ifelse(p$cis_n, cHYCse.N, cHYCsc.N); se.n <- ifelse(p$cis_n, cHYCsc.N, cHYCse.N)
-    fa.n <- .fit_one(sc.n, expos$HYC.N); fb.n <- .fit_one(se.n, expos$HYC.N)
-    Nm[b,"cis_n"] <- rat(fa.n, fb.n, "mu"); Ns[b,"cis_n"] <- rat(fa.n, fb.n, "disp"); Nc[b,"cis_n"] <- ratcv2(fa.n, fb.n)
+    store(b, "cis_n", null_cis_axes(cHYCsc.N, cHYCse.N, expos$HYC.N, p$cis_n))
 
-    sSC <- .fit_split(c(cMIXsc, cHYTsc), c(expos$MIX.SC, expos$HYT), p$transSC, nSC)
-    sSE <- .fit_split(c(cMIXse, cHYTse), c(expos$MIX.SE, expos$HYT), p$transSE, nSE)
-    Nm[b,"trans"] <- rat(sSC$a, sSE$a, "mu")   - rat(sSC$b, sSE$b, "mu")
-    Ns[b,"trans"] <- rat(sSC$a, sSE$a, "disp") - rat(sSC$b, sSE$b, "disp")
-    Nc[b,"trans"] <- ratcv2(sSC$a, sSE$a)      - ratcv2(sSC$b, sSE$b)
-
+    store(b, "trans", null_trans_axes(cMIXsc, cMIXse, cHYTsc, cHYTse, expos$MIX.SC, expos$MIX.SE, expos$HYT, p$transSC, p$transSE))
     ## Noise-split version of the trans null, used only for the
     ## bfreq_trans/cv2_trans output columns, mirroring trans_n in .MODES
-    sSC.n <- .fit_split(c(cMIXsc, cHYTsc.N), c(expos$MIX.SC, expos$HYT.N), p$transSC_n, nSC)
-    sSE.n <- .fit_split(c(cMIXse, cHYTse.N), c(expos$MIX.SE, expos$HYT.N), p$transSE_n, nSE)
-    Nm[b,"trans_n"] <- rat(sSC.n$a, sSE.n$a, "mu")   - rat(sSC.n$b, sSE.n$b, "mu")
-    Ns[b,"trans_n"] <- rat(sSC.n$a, sSE.n$a, "disp") - rat(sSC.n$b, sSE.n$b, "disp")
-    Nc[b,"trans_n"] <- ratcv2(sSC.n$a, sSE.n$a)      - ratcv2(sSC.n$b, sSE.n$b)
+    store(b, "trans_n", null_trans_axes(cMIXsc, cMIXse, cHYTsc.N, cHYTse.N, expos$MIX.SC, expos$MIX.SE, expos$HYT.N, p$transSC_n, p$transSE_n))
 
     synth <- cMIXsc[p$dom_i] + cMIXse[p$dom_j]
     es    <- expos$MIX.SC[p$dom_i] + expos$MIX.SE[p$dom_j]
@@ -3369,13 +3404,13 @@ permute_contrasts_one <- function(g, expos, fits, mats, perms, ploidy_shift) {
     fs.cv <- .cv2_of(fs[["mu"]], fs[["disp"]])
     if (is.finite(fs.cv) && fs.cv > 0) Nc[b,"dom"] <- l2(fs.cv) - mp.c
     d1 <- .fit_split(c(cHYBc, cMIXsc), c(expos$HYB, expos$MIX.SC), p$dparSC, nHYB)
-    Nm[b,"dpar_sc"] <- rat(d1$a, d1$b, "mu"); Ns[b,"dpar_sc"] <- rat(d1$a, d1$b, "disp"); Nc[b,"dpar_sc"] <- ratcv2(d1$a, d1$b)
+    store(b, "dpar_sc", fit_ratio_axes(d1$a, d1$b))
     d2 <- .fit_split(c(cHYBc, cMIXse), c(expos$HYB, expos$MIX.SE), p$dparSE, nHYB)
-    Nm[b,"dpar_se"] <- rat(d2$a, d2$b, "mu"); Ns[b,"dpar_se"] <- rat(d2$a, d2$b, "disp"); Nc[b,"dpar_se"] <- ratcv2(d2$a, d2$b)
+    store(b, "dpar_se", fit_ratio_axes(d2$a, d2$b))
     i1 <- .fit_split(c(cHYBsc, cMIXsc), c(expos$HYB, expos$MIX.SC), p$inhSC, nHYB)
-    Nm[b,"inh_sc"] <- rat(i1$a, i1$b, "mu"); Ns[b,"inh_sc"] <- rat(i1$a, i1$b, "disp"); Nc[b,"inh_sc"] <- ratcv2(i1$a, i1$b)
+    store(b, "inh_sc", fit_ratio_axes(i1$a, i1$b))
     i2 <- .fit_split(c(cHYBse, cMIXse), c(expos$HYB, expos$MIX.SE), p$inhSE, nHYB)
-    Nm[b,"inh_se"] <- rat(i2$a, i2$b, "mu"); Ns[b,"inh_se"] <- rat(i2$a, i2$b, "disp"); Nc[b,"inh_se"] <- ratcv2(i2$a, i2$b)
+    store(b, "inh_se", fit_ratio_axes(i2$a, i2$b))
   }
   out <- list(gene = g)
   for (md in .OUT_MODES) {

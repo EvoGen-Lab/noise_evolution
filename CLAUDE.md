@@ -6,7 +6,7 @@ Reproducible R pipeline for genome-wide noise evolution in S. cerevisiae (YPS100
 - `analysis/analysis.R` main analysis, organized in numbered sections (1, 2.1, 2.3, 4, 6.1 ... 8).
 - `R/setup.R` session setup shared by `analysis.R`, `power_analysis.R` and `external_validation.R`: renv check, project paths and output folders, class names, color palettes, and `R/functions.R`. Each script starts with `library(here); source(here("R", "setup.R"))`. Defines no functions.
 - `R/functions.R` helper functions sourced by the main script.
-- `analysis/power_analysis.R` Section 10 (power analysis) with its functions in `R/functions_power.R`, also sourced by `power_grid.R`. Reads `PR` and `N.PERM` from the Section 2 checkpoint.
+- `analysis/power_analysis.R` Section 10 (power analysis) with its functions in `R/functions_power.R`, also sourced by `power_grid.R`. Sections 10.1 to 10.8 simulate the total contrast; 10.9 to 10.14 simulate cis and trans on paired-allele data (`power_modes_grid.R`, `power_modes.sub`). Reads `PR`, `N.PERM` and the real design (hybrid and parent cell counts, `SPLIT.FRAC`) from the Section 2 checkpoint.
 - `analysis/external_validation.R` Section 9 (comparison with published data) with its functions in `R/functions_external.R`. Reads `GENES` and `CONTRAST.FITS` from the Section 2 checkpoint.
 - Cluster scripts, each a standalone R script plus a `.sub` SLURM file
 

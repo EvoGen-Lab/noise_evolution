@@ -6,8 +6,8 @@ Source: `docs/function_review.md` (item numbers refer to its section 3), re-chec
 
 | Review # | Where | Issue | Rerun if fixed |
 |---|---|---|---|
-| 4 | `permute_contrasts_one` (13c), `perm_label_draw`, the `PERMS` block in analysis.R | The trans null shuffles the SC and SE allele pools independently, which breaks the within-cell pairing of HYT.SC and HYT.SE that the cis null keeps. This bears on the trans versus cis power asymmetry (project_context.md). The mean-split and noise-split draws of cis and trans are now coupled (shared swap flags, shared pool ordering); only the SC/SE pairing remains. | 2.3 permutation (`gene_perm`) |
-| 7 | `power_grid_row` (functions_power.R) | The grid simulates one two-group contrast. It has no paired-allele (cis) or difference-of-ratios (trans) contrast, so it cannot show the asymmetry (open work item 4). | Section 10, additive |
+| 4 | `permute_contrasts_one` (13c), `perm_label_draw`, the `PERMS` block in analysis.R | The trans null shuffles the SC and SE allele pools independently, which breaks the within-cell pairing of HYT.SC and HYT.SE that the cis null keeps. This bears on the trans versus cis power asymmetry (project_context.md). The mean-split and noise-split draws of cis and trans are now coupled (shared swap flags, shared pool ordering); only the SC/SE pairing remains. The modes grid runs the independent shuffles and a pairing-preserving swap (`perm_trans_pool_paired`) on the same simulated data; its type I error at ratio 1 is the readout for adopting the swap in `perm_label_draw`. | 2.3 permutation (`gene_perm`) |
+| 7 | `power_grid_row` (functions_power.R) | `power_grid_row` simulates one two-group contrast and stays as the total result. The cis (paired alleles) and trans (difference of ratios) contrasts are now simulated by `power_modes_row` with the pipeline's own nulls (Sections 10.9 to 10.14, `power_modes.sub`). Open until that job has run and the MDE ratio, type I and null-SD tables (10.12 to 10.14) are reviewed. | Section 10 modes grid (`power_modes`), additive |
 | 8 | `pilot_split_se_one` (13c) | Per-gene seed `seed + sum(utf8ToInt(gene))` yields about 37 distinct seeds for 8000 genes. Marginal SEs unaffected. | Same cascade as the pilot; fix with any pilot rerun |
 | 9 | `extract_promoters` | Neighbour bound uses the adjacent gene, not the running maximum end. Rare in yeast. | 6.1 NuPoP |
 
@@ -41,7 +41,7 @@ Source: `docs/function_review.md` (item numbers refer to its section 3), re-chec
 
 1. `&&` / `||` scalar scan: partial evidence only (reviewers saw no vector operands); no full scan.
 2. `pkg_versions()` / `check_pkg_versions()` not finalized.
-3. Full pipeline rerun after the R upgrade. Outstanding cluster resubmissions from the earlier estimator, paired-covariance and power-grid changes: `gene_pilot`, `gene_boot` (array of 2), `gene_perm`, `coexpr_boot` (array of 2), `coexpr_perm`, `go_enrich`, `power` (and `cluster_stability` only if its inputs change).
+3. Full pipeline rerun after the R upgrade. Outstanding cluster resubmissions from the earlier estimator, paired-covariance and power-grid changes: `gene_pilot`, `gene_boot` (array of 2), `gene_perm`, `coexpr_boot` (array of 2), `coexpr_perm`, `go_enrich`, `power`, `power_modes` (new, reduced grid first) (and `cluster_stability` only if its inputs change).
 4. Trans versus cis power asymmetry (items 4 and 7 above).
 
 ## E. Structure and housekeeping
