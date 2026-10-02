@@ -22,10 +22,8 @@ All items in this section were fixed. One note remains:
 
 ## D. Project-level open work (CLAUDE.md)
 
-1. `&&` / `||` scalar scan: partial evidence only (reviewers saw no vector operands); no full scan.
-2. `pkg_versions()` / `check_pkg_versions()` not finalized.
-3. Full pipeline rerun after the R upgrade. Outstanding cluster resubmissions from the earlier estimator, paired-covariance and power-grid changes: `gene_pilot`, `gene_boot` (array of 2), `gene_perm`, `coexpr_boot` (array of 2), `coexpr_perm`, `go_enrich`, `power`, `power_modes` (new, reduced grid first) (and `cluster_stability` only if its inputs change).
-4. Trans versus cis power asymmetry (items 4 and 7 above).
+1. Full pipeline rerun after the R upgrade. Outstanding cluster resubmissions from the earlier estimator, paired-covariance and power-grid changes: `gene_pilot`, `gene_boot` (array of 2), `gene_perm`, `coexpr_boot` (array of 2), `coexpr_perm`, `go_enrich`, `power`, `power_modes` (new, reduced grid first) (and `cluster_stability` only if its inputs change). Package versions: each cluster script writes `pkg_versions_<script>.csv`; copy them back with the outputs and `R/setup.R` compares them with the local record.
+2. Trans versus cis power asymmetry (items 4 and 7 above).
 
 ## E. Structure and housekeeping
 

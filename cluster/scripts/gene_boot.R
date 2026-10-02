@@ -19,6 +19,7 @@ library('parallel')
 library('MASS')          # glm.nb ships with base R; set lib= if your cluster needs it
 
 source("functions.R")
+write_pkg_versions("gene_boot")   # R and package versions of this job, compared locally by check_pkg_versions()
 
 load("gene_boot_inputs.rda")     # CONTRAST.MATS, CONTRAST.EXPOS, CONTRAST.FITS, GENES, DRAWS.REPS, N.BOOT
 

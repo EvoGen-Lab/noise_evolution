@@ -73,3 +73,9 @@ COLOR.GREY <- c(light = "#DADAD5", mid = "#B0B0AB", dark = "#6E6E6A")
 # set.seed(SEED.SECTION + n) for section n, so a section gives the same draws whether it runs
 # from the top or is resumed from a checkpoint. Steps with their own seed use with_local_seed().
 SEED.SECTION <- 100
+
+# Record the package versions of this session beside the results and compare them with the records
+# the cluster scripts write (pkg_versions_<script>.csv, copied back with each job's output). A
+# difference is a warning, not a stop: check_pkg_versions(..., strict = TRUE) stops on a major or minor one.
+write_pkg_versions("local", dir = dirname(CHECKPOINT.DIR))
+check_pkg_versions(file.path(dirname(CHECKPOINT.DIR), "pkg_versions_local.csv"), OUTPUT.DIR)

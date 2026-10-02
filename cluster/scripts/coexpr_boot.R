@@ -29,6 +29,7 @@
 library('parallel')
 
 source("functions.R")
+write_pkg_versions("coexpr_boot")   # R and package versions of this job, compared locally by check_pkg_versions()
 
 ## The five decompositions the co-expression bootstrap tracks, in the order each draw returns them.
 .COEXPR_PARTS <- c("total", "cis", "trans", "dpar_sc", "dpar_se")

@@ -19,6 +19,7 @@ library('parallel')
 library('MASS')
 
 source("functions.R")
+write_pkg_versions("gene_pilot")   # R and package versions of this job, compared locally by check_pkg_versions()
 
 load("gene_pilot_inputs.rda")  # PILOT.MATS, PILOT.EXPOS, PILOT.GENES, N.BOOT, SEED.BOOT
 

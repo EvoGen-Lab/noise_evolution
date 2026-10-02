@@ -21,6 +21,7 @@
 ###     ckpt_path() - Path of a section's checkpoint file (section{N}_checkpoint.rda).
 ###     console_start() / console_stop() - Per-section console transcript (section{N}_console.txt).
 ###     with_local_seed() - Evaluates an expression on its own seeded random stream and restores the caller's random number state.
+###     pkg_versions() / write_pkg_versions() / check_pkg_versions() - Record the R and package versions of a run and compare the local and cluster records.
 ###   1. OFFSET NEGATIVE-BINOMIAL FIT
 ###     neg_binom_fit_offset() - Offset NB fit for one gene: rate (mu) and NB size (disp) from .fit_one(), with glm.nb asymptotic log-scale SEs; disp = Inf when a Poisson-vs-NB pre-check finds no overdispersion.
 ###     fit_counts_offset() - Matrix version: one neg_binom_fit_offset() fit per gene (row) against its exposure vector; optionally splits genes across a PSOCK cluster, shipping the functions the fit needs.
@@ -201,6 +202,61 @@ with_local_seed <- function(seed, expr) {
           add = TRUE)
   set.seed(seed)
   expr
+}
+
+## PIPELINE.PACKAGES: every package the pipeline loads, for pkg_versions().
+PIPELINE.PACKAGES <- c("MASS", "parallel", "future", "ggplot2", "Seurat", "Matrix", "clusterProfiler", "org.Sc.sgd.db",
+                       "enrichplot", "BiocParallel", "mixtools", "Biostrings", "rtracklayer", "cluster", "mclust",
+                       "readxl", "data.table", "codetools", "NuPoP", "here", "renv")
+
+## pkg_versions(pkgs): the installed version of R and of each package in pkgs (NA when a package is not
+## installed), read from the package descriptions without loading the packages. Returns a data.frame
+## (package, version). Local and cluster runs each record one, so check_pkg_versions() can compare them.
+pkg_versions <- function(pkgs = PIPELINE.PACKAGES) {
+  stopifnot(is.character(pkgs), length(pkgs) >= 1)
+  v <- vapply(pkgs, function(p) suppressWarnings(as.character(utils::packageDescription(p, fields = "Version"))), character(1))
+  data.frame(package = c("R", pkgs), version = c(paste(R.version$major, R.version$minor, sep = "."), unname(v)),
+             stringsAsFactors = FALSE)
+}
+
+## write_pkg_versions(tag, dir): writes pkg_versions() to dir/pkg_versions_<tag>.csv. The cluster scripts
+## call it with their own name, so the file travels back with the job's output.
+write_pkg_versions <- function(tag, dir = ".") {
+  stopifnot(is.character(tag), length(tag) == 1, nzchar(tag), dir.exists(dir))
+  out <- file.path(dir, sprintf("pkg_versions_%s.csv", tag))
+  utils::write.csv(pkg_versions(), out, row.names = FALSE)
+  invisible(out)
+}
+
+## check_pkg_versions(local_file, cluster_dir, strict): compares the local record with every
+## pkg_versions_*.csv in cluster_dir (one per cluster script). A package whose version differs is listed with
+## the file it came from; a difference in the major or minor number ("major_minor") is a likely change of
+## results, a patch difference a minor one. Warns about any difference (a missing record is a message), and with
+## strict = TRUE stops on a major or minor difference. A package installed on one side only counts as a
+## major_minor difference. Returns the table of differences invisibly.
+check_pkg_versions <- function(local_file, cluster_dir, strict = FALSE) {
+  stopifnot(is.character(local_file), length(local_file) == 1, file.exists(local_file), is.logical(strict), length(strict) == 1)
+  remote_files <- list.files(cluster_dir, pattern = "^pkg_versions_.*\\.csv$", full.names = TRUE)
+  if (length(remote_files) == 0) {
+    message("check_pkg_versions(): no cluster pkg_versions_*.csv in ", cluster_dir, "; nothing to compare yet")
+    return(invisible(NULL))
+  }
+  local <- utils::read.csv(local_file, stringsAsFactors = FALSE)
+  minor_key <- function(v) vapply(strsplit(v, "[.-]"), function(p) paste(head(p, 2), collapse = "."), character(1))
+  diffs <- do.call(rbind, lapply(remote_files, function(fl) {
+    remote <- utils::read.csv(fl, stringsAsFactors = FALSE)
+    m <- merge(local, remote, by = "package", suffixes = c("_local", "_cluster"), all = TRUE)
+    differs <- (is.na(m$version_local) != is.na(m$version_cluster)) | (!is.na(m$version_local) & !is.na(m$version_cluster) & m$version_local != m$version_cluster)
+    m <- m[differs, , drop = FALSE]
+    if (nrow(m) == 0) return(NULL)
+    m$level <- ifelse(is.na(m$version_local) | is.na(m$version_cluster) | minor_key(m$version_local) != minor_key(m$version_cluster), "major_minor", "patch")
+    m$file <- basename(fl)
+    m
+  }))
+  if (is.null(diffs)) { message("check_pkg_versions(): local and cluster package versions agree"); return(invisible(NULL)) }
+  warning("package versions differ between local and cluster:\n", paste(utils::capture.output(print(diffs, row.names = FALSE)), collapse = "\n"), call. = FALSE)
+  if (strict && any(diffs$level == "major_minor")) stop("check_pkg_versions(): major or minor version differences between local and cluster", call. = FALSE)
+  invisible(diffs)
 }
 
 ## console_stop(): closes any open console file.
@@ -2389,7 +2445,7 @@ score_promoters_nupop <- function(seqs, occ_list, window = TATA.WINDOW) {
 ## discordant genes are equally likely. Genes with delta or estimate equal
 ## to 0 are dropped. A non-significant result means the candidate tables
 ## in Section 6.5 should be read with caution.
-promoter_direction_test <- function(BURST.CONTRASTS, PR, ARCH, reg_class, quantity = c("bfreq", "bsize"), cis_classes = .CIS_CLASSES) {
+promoter_direction_test <- function(BURST.CONTRASTS, ARCH, reg_class, quantity = c("bfreq", "bsize"), cis_classes = .CIS_CLASSES) {
   quantity <- match.arg(quantity)
   est <- BURST.CONTRASTS[[paste0(quantity, "_cis_est")]]
   predicted_sign <- .PROMOTER_PREDICTED_SIGN[[quantity]]
@@ -2917,7 +2973,6 @@ within_between_decomp <- function(mat, expo, clusters, min_cells = 2) {
     mat  <- mat[, use, drop = FALSE]; expo <- expo[use]; cl <- cl[use]
   }
   cl_levels <- sort(unique(cl))
-  n_c       <- table(cl)[cl_levels]
   N         <- ncol(mat)
 
   a  <- sweep(mat, 2, expo, "/")
@@ -3236,7 +3291,7 @@ coexpr_seed_check <- function(mode, cb1, cb2) {
 
 ## coexpr_perm_draw: one permutation draw for the co-expression null of total and cis: the pooled-cell order
 ## (n_tot cells) and the per-cell allele swaps for the nH hybrid cells. b is the draw index and is not used.
-coexpr_perm_draw <- function(b, nH, nSC, nSE, n_tot) list(
+coexpr_perm_draw <- function(b, nH, n_tot) list(
   idx  = sample(n_tot),
   swap = sample(c(TRUE, FALSE), nH, replace = TRUE))
 
@@ -3518,7 +3573,7 @@ permute_contrasts_one <- function(g, expos, fits, mats, perms, ploidy_shift) {
   mp.m <- l2((gvmu[["MIX.SC"]] + gvmu[["MIX.SE"]]) / 2)
   mp.s <- 0.5 * (l2(gvbf[["MIX.SC"]]) + l2(gvbf[["MIX.SE"]]))
   mp.c <- 0.5 * (l2(gvcv[["MIX.SC"]]) + l2(gvcv[["MIX.SE"]]))
-  nSC <- length(cMIXsc); nSE <- length(cMIXse); nHYB <- length(cHYBc)
+  nSC <- length(cMIXsc); nHYB <- length(cHYBc)
   ## store: one row of the Nm / Ns / Nc null matrices (mean, bfreq and CV2 axes) for mode md, from the
   ## c(mu, disp, cv2) contrast that fit_ratio_axes() returns
   store <- function(b, md, ax) { Nm[b, md] <<- ax[["mu"]]; Ns[b, md] <<- ax[["disp"]]; Nc[b, md] <<- ax[["cv2"]] }
@@ -3714,13 +3769,13 @@ coexpr_null_dpar_one <- function(setup, idx_p, idx_h, n_keep) {
 
 ## coexpr_perm_one: one draw of the five null spectra, for rank-matched testing of every candidate axis. draw:
 ## list(perm = element of DRAWS.PERM.COEXPR, null = element of DRAWS.NULL.COEXPR). resid: the RESID list.
-## nSC, nSE: parent cell counts, used to split each pooled, reshuffled pool back into groups of the original
+## nSC: Sc-parent cell count, used to split the pooled, reshuffled parent cells back into groups of the original
 ## sizes. n_keep: ranks retained per decomposition. dpar_setup: list(sc, se) of coexpr_null_dpar_setup()
 ## results, built once by the cluster script. total and cis are permutation nulls (pooled parents, per-cell
 ## allele swaps) and trans is their difference. dpar_sc and dpar_se are bootstrap nulls with H0 imposed
 ## by recoloring (coexpr_null_dpar_setup()), on their own within-group resamples. Returns the top n_keep
 ## squared eigenvalues by magnitude, descending, for all five decompositions.
-coexpr_perm_one <- function(draw, n_keep, nSC, nSE, resid, dpar_setup) {
+coexpr_perm_one <- function(draw, n_keep, nSC, resid, dpar_setup) {
   pooled   <- cbind(resid$MIX.SC, resid$MIX.SE)
   perm.sc  <- pooled[, draw$perm$idx[seq_len(nSC)]]
   perm.se  <- pooled[, draw$perm$idx[-seq_len(nSC)]]

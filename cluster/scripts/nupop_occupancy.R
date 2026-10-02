@@ -20,6 +20,7 @@ library('parallel')
 library('NuPoP')
 
 source("functions.R")
+write_pkg_versions("nupop_occupancy")   # R and package versions of this job, compared locally by check_pkg_versions()
 
 load("nupop_inputs.rda")     # NUPOP.INPUTS.SC, NUPOP.INPUTS.SE
 

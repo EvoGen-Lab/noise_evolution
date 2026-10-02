@@ -29,6 +29,7 @@ library('parallel')
 library('MASS')
 
 source("functions.R")
+write_pkg_versions("gene_perm")   # R and package versions of this job, compared locally by check_pkg_versions()
 
 load("gene_perm_inputs.rda")     # CONTRAST.MATS, CONTRAST.EXPOS, CONTRAST.FITS, GENES, PERMS, N.PERM, SEED.PERM, PLOIDY.SHIFT (when present)
 

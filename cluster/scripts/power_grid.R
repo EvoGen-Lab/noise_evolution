@@ -21,6 +21,7 @@ library('parallel')
 
 source("functions.R")
 source("functions_power.R")
+write_pkg_versions("power_grid")   # R and package versions of this job, compared locally by check_pkg_versions()
 
 load("power_inputs.rda")
 ## GRID, MEAN.READS, N.CELLS, SIZE, SIZE.RATIO, EXPOSURE.CV, CELL.RATIO, ALPHA, NJ, NI, PI1, N.MIX, SEED.BASE

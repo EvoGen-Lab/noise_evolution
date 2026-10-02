@@ -1038,7 +1038,7 @@ DRAWS.PERM.COEXPR <- local({
   B <- N.PERM.COEXPR
   seed <- SEED.COEXPR.PERM
   n_tot <- nSC + nSE
-  with_local_seed(seed, lapply(seq_len(B), coexpr_perm_draw, nH = nH, nSC = nSC, nSE = nSE, n_tot = n_tot))
+  with_local_seed(seed, lapply(seq_len(B), coexpr_perm_draw, nH = nH, n_tot = n_tot))
 })
 DRAWS.NULL.COEXPR <- local({
   B <- N.PERM.COEXPR
@@ -1735,8 +1735,8 @@ ARCH <- ARCH[match(BURST.CONTRASTS$gene, ARCH$gene), ]
 # acting through DISP at fixed mean moves BSIZE the other way. The bsize test follows from the
 # bfreq prediction and is read with the mean contrast in mind. Frequency-size balance (kbal) has no independent
 # prediction and is not tested (.PROMOTER_PREDICTED_SIGN).
-PROM.DIRECTION.TEST.BFREQ <- promoter_direction_test(BURST.CONTRASTS, PR, ARCH, REG.VEC$bfreq, quantity = "bfreq")
-PROM.DIRECTION.TEST.BSIZE <- promoter_direction_test(BURST.CONTRASTS, PR, ARCH, REG.VEC$bsize, quantity = "bsize")
+PROM.DIRECTION.TEST.BFREQ <- promoter_direction_test(BURST.CONTRASTS, ARCH, REG.VEC$bfreq, quantity = "bfreq")
+PROM.DIRECTION.TEST.BSIZE <- promoter_direction_test(BURST.CONTRASTS, ARCH, REG.VEC$bsize, quantity = "bsize")
 print(PROM.DIRECTION.TEST.BFREQ)
 print(PROM.DIRECTION.TEST.BSIZE)
 

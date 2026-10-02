@@ -32,6 +32,7 @@
 library('parallel')
 
 source("functions.R")
+write_pkg_versions("coexpr_perm")   # R and package versions of this job, compared locally by check_pkg_versions()
 
 ## Optional args: Rscript coexpr_perm.R [input.rda] [output.rda]
 ARGS        <- commandArgs(trailingOnly = TRUE)
@@ -77,12 +78,12 @@ t0 <- Sys.time(); done <- 0
 for (k in seq_along(chunks)) {
   ## One draw of the five null spectra, for rank-matched testing of every candidate axis (observed rank k
   ## is compared with the null's own rank k). draw: list(perm, null) from DRAWS.PERM.COEXPR and
-  ## DRAWS.NULL.COEXPR. resid: the RESID list (including HYB.COMB). nSC, nSE: parent cell counts, used to
-  ## split each pooled, reshuffled pool back into groups of the original sizes (total, cis). dpar_setup:
+  ## DRAWS.NULL.COEXPR. resid: the RESID list (including HYB.COMB). nSC: Sc-parent cell count, used to
+  ## split the pooled, reshuffled parent cells back into groups of the original sizes (total). dpar_setup:
   ## the recolored cells of the dpar nulls. n_keep: ranks retained per decomposition (15, the top-15
   ## candidate window). Returns the top n_keep squared eigenvalues by magnitude, descending, for all five
   ## decompositions; this is the unit of work a cluster worker does.
-  chunk.results <- parLapply(cl, DRAWS[chunks[[k]]], coexpr_perm_one, n_keep = N.KEEP, nSC = N.SC, nSE = N.SE, resid = RESID, dpar_setup = DPAR.SETUP)
+  chunk.results <- parLapply(cl, DRAWS[chunks[[k]]], coexpr_perm_one, n_keep = N.KEEP, nSC = N.SC, resid = RESID, dpar_setup = DPAR.SETUP)
   RESULTS[chunks[[k]]] <- chunk.results
   rm(chunk.results); gc(FALSE)
 
