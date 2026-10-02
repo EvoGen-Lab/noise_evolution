@@ -7,7 +7,6 @@ Source: `docs/function_review.md` (item numbers refer to its section 3), re-chec
 | Review # | Where | Issue | Rerun if fixed |
 |---|---|---|---|
 | 4 | `permute_contrasts_one` (13c), `perm_label_draw`, the `PERMS` block in analysis.R | The trans null shuffles the SC and SE allele pools independently, which breaks the within-cell pairing of HYT.SC and HYT.SE that the cis null keeps. This bears on the trans versus cis power asymmetry (project_context.md). The mean-split and noise-split draws of cis and trans are now coupled (shared swap flags, shared pool ordering); only the SC/SE pairing remains. | 2.3 permutation (`gene_perm`) |
-| 5 | `coexpr_perm_one` (functions.R 13c) | dpar nulls pool raw hybrid cells while the observed dpar matrices carry the ploidy rescale. Bias direction not quantified. | Section 4 (`coexpr_perm`) |
 | 7 | `power_grid_row` (functions_power.R) | The grid simulates one two-group contrast. It has no paired-allele (cis) or difference-of-ratios (trans) contrast, so it cannot show the asymmetry (open work item 4). | Section 10, additive |
 | 8 | `pilot_split_se_one` (13c) | Per-gene seed `seed + sum(utf8ToInt(gene))` yields about 37 distinct seeds for 8000 genes. Marginal SEs unaffected. | Same cascade as the pilot; fix with any pilot rerun |
 | 9 | `extract_promoters` | Neighbour bound uses the adjacent gene, not the running maximum end. Rare in yeast. | 6.1 NuPoP |
@@ -34,7 +33,7 @@ Source: `docs/function_review.md` (item numbers refer to its section 3), re-chec
 - `refine_by_boundary` (unused) draws two independent index vectors for counts and exposures in its bootstrap, pairing one cell's count with another cell's library size.
 - `.fit_split`, `fit_split_nb_mm`, `fit_split_nb`: `perm[(n1 + 1):length(perm)]` misbehaves when `n1 == length(perm)`.
 - Edge cases in `class_overlap_heatmap`, `se_alpha_col`, `shrink_cor`, `class_anova`, `gene_reliability`, `cor_row`, `to_numeric_matrix`, `read_header_line`.
-- `set.seed()` on the global RNG in `class_identity_overlap`, `check_intrinsic_reliability`, `boot_resample_matrix`, `eiv_mode_ci_row` and `pilot_split_se_one`. `make_coexpr_draws` and `make_coexpr_perm_draws` share `SEED.COEXPR`.
+- `set.seed()` on the global RNG in `class_identity_overlap`, `check_intrinsic_reliability`, `boot_resample_matrix`, `eiv_mode_ci_row` and `pilot_split_se_one`.
 - Missing entry validation for most numeric arguments (`fit_source`, `qc_filter_counts`, `mean_adjusted_noise`, `nupop_occupancy_cluster` (13c) with `cores = 1` has no crash isolation).
 - `NOISE.CL` leaks if an error occurs between creation and `stopCluster`; several `pdf()` blocks lack `on.exit(dev.off())`.
 
