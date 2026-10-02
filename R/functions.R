@@ -34,7 +34,7 @@
 ###   3. PAIRED PER-GENE BOOTSTRAP OF CONTRASTS
 ###     make_draws() - Builds the resampling index draws used by the paired per-gene bootstrap: parents resampled whole, hybrid cells resampled within the four strata of the mean-split by noise-split overlap and every hybrid dataset assembled from the same resampled cell IDs.
 ###     add_burst_contrasts() - Derives burst-frequency, burst-size, and kinetic-balance contrasts from the mean and size contrasts already in a data frame.
-###     .contrast_value() - Log2 contrast for one mode (total, cis, trans, dom, dpar, inh) from a named list of per-group fitted values.
+###     .contrast_value() - Log2 contrast for one mode (total, cis, trans, dom, dpar) from a named list of per-group fitted values.
 ###     .cv2_of() - CV2 (1/mu + 1/disp) of one fitted group; NA unless mu and disp are finite and positive.
 ###   4. DISATTENUATED MEAN-DISP COUPLING (population summary)
 ###     eiv_components() - Errors-in-variables mean-bfreq coupling for one mode: attenuation-corrected variances, covariance and correlation, plus the raw correlation.
@@ -507,8 +507,7 @@ make_draws <- function(ncells, B, seed = 1, hyc, hyc_n) {
 ## finite-input gate) and a formula on a named list of fitted values.
 ## Divergence: total, cis, trans. Dominance, midparent form: dom
 ## (arithmetic midparent for mean, geometric for burst frequency).
-## Classic hybrid-vs-each-parent: dpar_sc, dpar_se. Per-allele
-## inheritance: inh_sc, inh_se. Add an axis by adding one row here.
+## Classic hybrid-vs-each-parent: dpar_sc, dpar_se. Add an axis by adding one row here.
 ##
 ## HAPLOID PARENTS AND THE DIPLOID HYBRID
 ## Every fit offsets by the cell's total library (EXPO), so MU reports a
@@ -525,9 +524,6 @@ make_draws <- function(ncells, B, seed = 1, hyc, hyc_n) {
 ##               library. dom therefore uses the arithmetic midparent, and
 ##               its null sums parent cells and their libraries to mirror
 ##               the hybrid.
-##   inh         One allele against the full diploid library, which places
-##               pure inheritance near -1 log2. inh serves as a descriptive
-##               contrast and no classifier reads it.
 ## Noise axis (DISP is the NB size and has no summing rule)
 ##   total, cis, trans  Ratios again, so a ploidy effect shared by both
 ##               species (cell size, cell-cycle timing) cancels.
@@ -550,8 +546,6 @@ make_draws <- function(ncells, B, seed = 1, hyc, hyc_n) {
 ##               against the zero-centred exchangeability null and reports
 ##               _p_ploidy (own shift) and _p_ind (shift of 1, fully
 ##               independent equal alleles) beside the raw _p.
-##   inh         One allele against one haploid genome, so no averaging
-##               enters and the noise axis of inh compares like with like.
 ##
 ## cis_n and trans_n are internal only, not reported directly. They
 ## are cis and trans computed from the HYC.N/HYT.N split (chosen to
@@ -568,20 +562,18 @@ make_draws <- function(ncells, B, seed = 1, hyc, hyc_n) {
   trans_n = c("MIX.SC","MIX.SE","HYT.SC.N","HYT.SE.N"),
   dom     = c("MIX.SC","MIX.SE","HYB.COMB"),
   dpar_sc = c("HYB.COMB","MIX.SC"),
-  dpar_se = c("HYB.COMB","MIX.SE"),
-  inh_sc  = c("HYB.SC","MIX.SC"),
-  inh_se  = c("HYB.SE","MIX.SE"))
+  dpar_se = c("HYB.COMB","MIX.SE"))
 
-## Only these eight produce columns in BURST.CONTRASTS; cis_n/trans_n are sourced
+## Only these six produce columns in BURST.CONTRASTS; cis_n/trans_n are sourced
 ## from, never reported under their own name
-.OUT_MODES <- c("total","cis","trans","dom","dpar_sc","dpar_se","inh_sc","inh_se")
+.OUT_MODES <- c("total","cis","trans","dom","dpar_sc","dpar_se")
 
 ## Which mode supplies the burst-frequency (noise axis) value for each
 ## reported mode. Identity for everything split-independent; cis and
 ## trans redirect to the noise-split version. mean_* always uses the
 ## mode's own name directly, never remapped, since MU (mean axis) is
 ## what the HYC/HYT split (f_mean) was chosen to balance.
-.BFREQ_SOURCE <- c(total = "total", cis = "cis_n", trans = "trans_n", dom = "dom", dpar_sc = "dpar_sc", dpar_se = "dpar_se", inh_sc = "inh_sc", inh_se = "inh_se")
+.BFREQ_SOURCE <- c(total = "total", cis = "cis_n", trans = "trans_n", dom = "dom", dpar_sc = "dpar_sc", dpar_se = "dpar_se")
 
 ## Maps each dataset to the draws-list element (see make_draws()) that resamples it. The four hybrid
 ## keys (HYC, HYT, HYC.N, HYT.N) and HYB are built from the same resampled hybrid cell IDs, so every
@@ -589,7 +581,7 @@ make_draws <- function(ncells, B, seed = 1, hyc, hyc_n) {
 .DRAW.KEY <- c(MIX.SC = "MIX.SC", MIX.SE = "MIX.SE",
                HYC.SC = "HYC", HYC.SE = "HYC", HYT.SC = "HYT", HYT.SE = "HYT",
                HYC.SC.N = "HYC.N", HYC.SE.N = "HYC.N", HYT.SC.N = "HYT.N", HYT.SE.N = "HYT.N",
-               HYB.COMB = "HYB", HYB.SC = "HYB", HYB.SE = "HYB")
+               HYB.COMB = "HYB")
 
 ## Log2 contrast for one mode from a named list gv of per-group fitted values. q selects the
 ## quantity: "MU" (library share; arithmetic midparent for dom), "BFREQ" (NB size; geometric
@@ -609,9 +601,7 @@ make_draws <- function(ncells, B, seed = 1, hyc, hyc_n) {
               (if (q == "MU") l2((gv[["MIX.SC"]] + gv[["MIX.SE"]]) / 2)
                else           0.5 * (l2(gv[["MIX.SC"]]) + l2(gv[["MIX.SE"]]))),
     dpar_sc = l2(gv[["HYB.COMB"]]) - l2(gv[["MIX.SC"]]),
-    dpar_se = l2(gv[["HYB.COMB"]]) - l2(gv[["MIX.SE"]]),
-    inh_sc  = l2(gv[["HYB.SC"]]) - l2(gv[["MIX.SC"]]),
-    inh_se  = l2(gv[["HYB.SE"]]) - l2(gv[["MIX.SE"]]))
+    dpar_se = l2(gv[["HYB.COMB"]]) - l2(gv[["MIX.SE"]]))
 }
 
 ## CV2 (squared coefficient of variation) of one fitted group: 1/mu + 1/disp, the Poisson plus
@@ -863,7 +853,6 @@ sig_hist_panel <- function(contrasts, pr, mode, quantity, ymax, sig = 0.05, up =
 ##   dom         additive surrogate cells from random parent pairs,
 ##               compared to the observed midparent (additivity null)
 ##   dpar_sc/se  pool combined hybrid with one parent, relabel
-##   inh_sc/se   pool one hybrid allele with its parent, relabel
 ## Centering of each null
 ##   total, cis, trans  Center at zero on both axes.
 ##   dpar        Pools hybrid and parent cells, so it tests exchangeability
@@ -876,9 +865,6 @@ sig_hist_panel <- function(contrasts, pr, mode, quantity, ymax, sig = 0.05, up =
 ##               centers near zero. The noise axis centers near the
 ##               averaging shift (up to +1 log2 for equal parents), so the
 ##               dom p-value is descriptive and the classifiers read dpar.
-##   inh         Pools a half-share hybrid allele with a full-share parent,
-##               so the mean axis carries the -1 log2 baseline and the
-##               p-value is descriptive.
 ## Downstream classifiers read the BH-adjusted _q columns (fdr_columns).
 
 ## perm_pval: two-sided permutation p-value on |statistic| with an add-one correction, so a
@@ -1135,7 +1121,7 @@ seed_compare_core <- function(se1, se2, main, count_label) {
 ## seen as a low seed-to-seed correlation or a wide SE-ratio spread. bc1, bc2: two
 ## add_burst_contrasts()-style data frames at the same N.BOOT and gene set that differ only in
 ## SEED.BOOT. Genes are matched by name, so row order need not agree.
-gene_seed_compare <- function(bc1, bc2, quantity = c("mean", "bfreq", "bsize", "kbal", "cv2"), mode = c("total", "cis", "trans", "dom", "dpar_sc", "dpar_se", "inh_sc", "inh_se")) {
+gene_seed_compare <- function(bc1, bc2, quantity = c("mean", "bfreq", "bsize", "kbal", "cv2"), mode = c("total", "cis", "trans", "dom", "dpar_sc", "dpar_se")) {
   quantity <- match.arg(quantity); mode <- match.arg(mode)
   col <- paste0(quantity, "_", mode, "_se")
   m   <- match(bc1$gene, bc2$gene)
@@ -1214,8 +1200,6 @@ classify_reg <- function(p_cis, p_trans, est_cis, est_trans, sig = 0.05, colors 
 ## in the hybrid relative to both parents; noise-axis calls therefore use the
 ## ploidy-adjusted estimates (the BURST.CONTRASTS block in analysis.R) and the _q_ploidy q-values
 ## (bfreq, bsize, kbal, cv2; dom_class_vec selects them), while the mean axis uses _q.
-## The inh contrasts carry a -1 log2 mean-axis baseline, so they stay descriptive and
-## outside this classifier. DOM.CLASS is defined in the main script.
 
 classify_dom <- function(p_dpar_sc, p_dpar_se, est_dpar_sc, est_dpar_se, sig = 0.05, colors = COLOR.LIST.2) {
   n   <- length(p_dpar_sc)
@@ -3160,7 +3144,7 @@ gene_pass_group <- function(g, fits, floor_mean, n_min) {
   is.finite(fit$DISP) & fit$DISP < THETA.CAP & fit$MEAN_CT >= floor_mean[[g]] & fit$N_EXPR >= n_min
 }
 
-## perm_label_draw: one permutation's relabelings for every mode. total, dpar and inh shuffle pooled
+## perm_label_draw: one permutation's relabelings for every mode. total and dpar shuffle pooled
 ## cell labels, dom pairs random parent cells, and cis and trans are drawn so that the mean-split and
 ## noise-split versions of a contrast (cis and cis_n, trans and trans_n) are relabeled from the same
 ## cells. Each version keeps its exact marginal null, so only the coupling between them is new.
@@ -3191,9 +3175,7 @@ perm_label_draw <- function(b, hyc, hyc_n, hyt, hyt_n, nHYB, nSC, nSE) {
     dom_i   = sample.int(nSC, nHYB, replace = TRUE),
     dom_j   = sample.int(nSE, nHYB, replace = TRUE),
     dparSC  = sample.int(nHYB + nSC),
-    dparSE  = sample.int(nHYB + nSE),
-    inhSC   = sample.int(nHYB + nSC),
-    inhSE   = sample.int(nHYB + nSE))
+    dparSE  = sample.int(nHYB + nSE))
 }
 
 ## perm_trans_pool: the pooled relabeling of the trans null for one allele's parent dataset of nP cells.
@@ -3576,7 +3558,7 @@ permute_contrasts_one <- function(g, expos, fits, mats, perms, ploidy_shift) {
   cHYTsc <- mats$HYT.SC[g, ]; cHYTse <- mats$HYT.SE[g, ]
   cHYCsc.N <- mats$HYC.SC.N[g, ]; cHYCse.N <- mats$HYC.SE.N[g, ]
   cHYTsc.N <- mats$HYT.SC.N[g, ]; cHYTse.N <- mats$HYT.SE.N[g, ]
-  cHYBsc <- mats$HYB.SC[g, ]; cHYBse <- mats$HYB.SE[g, ]; cHYBc <- mats$HYB.COMB[g, ]
+  cHYBc <- mats$HYB.COMB[g, ]
   mp.m <- l2((gvmu[["MIX.SC"]] + gvmu[["MIX.SE"]]) / 2)
   mp.s <- 0.5 * (l2(gvbf[["MIX.SC"]]) + l2(gvbf[["MIX.SE"]]))
   mp.c <- 0.5 * (l2(gvcv[["MIX.SC"]]) + l2(gvcv[["MIX.SE"]]))
@@ -3610,10 +3592,6 @@ permute_contrasts_one <- function(g, expos, fits, mats, perms, ploidy_shift) {
     store(b, "dpar_sc", fit_ratio_axes(d1$a, d1$b))
     d2 <- .fit_split(c(cHYBc, cMIXse), c(expos$HYB, expos$MIX.SE), p$dparSE, nHYB)
     store(b, "dpar_se", fit_ratio_axes(d2$a, d2$b))
-    i1 <- .fit_split(c(cHYBsc, cMIXsc), c(expos$HYB, expos$MIX.SC), p$inhSC, nHYB)
-    store(b, "inh_sc", fit_ratio_axes(i1$a, i1$b))
-    i2 <- .fit_split(c(cHYBse, cMIXse), c(expos$HYB, expos$MIX.SE), p$inhSE, nHYB)
-    store(b, "inh_se", fit_ratio_axes(i2$a, i2$b))
   }
   out <- list(gene = g)
   for (md in .OUT_MODES) {

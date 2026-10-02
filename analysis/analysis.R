@@ -444,7 +444,7 @@ CONTRAST.FITS <- lapply(SPLIT.FITS, function(fr) data.frame(MU = as.numeric(as.c
 PLOIDY.SHIFT <- ploidy_shift(CONTRAST.MATS, CONTRAST.EXPOS)[GENES]
 
 ## Pre-draws every permutation label vector (one list entry per permutation, all modes) from one
-## seeded stream, so each gene is tested against the same relabelings. total/dpar/inh shuffle pooled
+## seeded stream, so each gene is tested against the same relabelings. total/dpar shuffle pooled
 ## cell labels and dom pairs random parent cells. cis and trans are drawn once per permutation for the
 ## mean split and the noise split together: the two splits share the alleles' swap flags (cis) and one
 ## pool ordering of the parent and hybrid cells (trans), so the bsize and kbal nulls, which combine a
@@ -485,7 +485,7 @@ load(file.path(OUTPUT.DIR, "gene_perm_output.rda"))            # PERM.RESULTS
 ## raw twin as <col>_raw, and the column ploidy_shift records the shift applied.
 ## Mean columns pass through untouched. SEs stay as bootstrapped.
 # BURST.CONTRASTS holds, per gene, the bootstrap point estimate and SE for the mean
-# and dispersion (disp) contrasts in each of the eight modes, plus two derived
+# and dispersion (disp) contrasts in each of the six modes, plus two derived
 # quantities per mode: bfreq (burst frequency, the disp contrast
 # itself) and bsize (burst size, mean minus disp in log2 space)
 # The dpar noise estimates then leave the HYB.COMB allele-summing shift behind
