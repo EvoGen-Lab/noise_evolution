@@ -100,7 +100,7 @@
 ###   10. PROMOTER ARCHITECTURE (TATA box, poly(dA:dT), nucleosome occupancy)
 ###     read_genome_fasta() - Reads a genome FASTA into a named DNAStringSet, one sequence per chromosome.
 ###     read_gff_genes() - Reads a GFF3 annotation into a per-gene coordinate table.
-###     extract_promoters() - Extracts each gene's promoter sequence, bounded by its upstream neighbor.
+###     extract_promoters() - Extracts each gene's promoter sequence, bounded by the nearest upstream gene end (running maximum over all genes that start before it).
 ###     score_promoters() - Applies both the TATA PWM score and poly(dA:dT) tract length to every promoter in a set.
 ###     nupop_cluster_inputs() - Packages one species' chromosomes and promoter coordinates for the NuPoP cluster job.
 ###     score_promoters_nupop() - Scores each promoter from the cluster occupancy tracks after confirming they match the current promoters.
@@ -2000,7 +2000,14 @@ read_gff_genes <- function(path, feature_type = "exon", id_field = "Name", id_su
 ## Extracts the promoter of every gene in genes: the sequence immediately
 ## upstream of its start codon, up to max_bp long or up to the nearest
 ## neighboring gene on the same chromosome, whichever is shorter, so a
-## promoter stops at the neighbor's boundary. A divergent gene pair gets
+## promoter stops at the neighbor's boundary. The boundary on the + strand is
+## the largest end among all genes that start before the gene (a running
+## maximum over the genes sorted by start, so a long gene upstream still
+## bounds the promoter when a shorter gene lies between them); on the - strand, the mirror
+## image, it is the smallest start among all genes that end after the gene (a gene nested
+## inside it does not bound it, while a host gene that contains it does). A gene that lies
+## inside another gene or overlaps its neighbor has no region left, which the min_bp rule below
+## handles. A divergent gene pair gets
 ## its full shared intergenic region and tightly spaced genes get short
 ## promoters, both genuine features of the genome.
 ##
@@ -2029,10 +2036,20 @@ extract_promoters <- function(genome, genes, max_bp = 300, min_bp = 50) {
     g <- genes[genes$seqid == sq, ]
     g <- g[order(g$start), ]
     chrom <- genome[[sq]]
+    ## Neighbor boundaries over all genes, not only the adjacent one. prev_end[i] is the largest end among
+    ## genes whose start is smaller than gene i's (0 when none; findInterval counts the genes that start
+    ## strictly before), and next_start[i] the smallest start among genes whose end is larger than gene i's
+    ## (Inf when none), a suffix minimum over the genes sorted by end. A value at or inside the gene
+    ## leaves the promoter region empty.
+    n_before   <- findInterval(g$start - 1, g$start)
+    prev_end   <- c(0, cummax(g$end))[n_before + 1]
+    by_end     <- order(g$end)
+    n_le_end   <- findInterval(g$end, g$end[by_end])
+    next_start <- c(rev(cummin(rev(g$start[by_end]))), Inf)[n_le_end + 1]
     for (i in seq_len(nrow(g))) {
       ext <- FALSE
       if (g$strand[i] == "+") {
-        limit   <- if (i > 1) g$end[i - 1] + 1 else 1
+        limit   <- prev_end[i] + 1
         p_end   <- g$start[i] - 1
         p_start <- max(limit, p_end - max_bp + 1, 1)
         if (p_end - p_start + 1 < min_bp) {
@@ -2042,7 +2059,7 @@ extract_promoters <- function(genome, genes, max_bp = 300, min_bp = 50) {
         seq <- if (p_start > p_end) "" else
           as.character(Biostrings::subseq(chrom, p_start, p_end))
       } else {
-        limit   <- if (i < nrow(g)) g$start[i + 1] - 1 else length(chrom)
+        limit   <- if (is.finite(next_start[i])) next_start[i] - 1 else length(chrom)
         p_start <- g$end[i] + 1
         p_end   <- min(limit, p_start + max_bp - 1, length(chrom))
         if (p_end - p_start + 1 < min_bp) {
