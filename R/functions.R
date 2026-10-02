@@ -1687,19 +1687,29 @@ cell_cycle_continuum_shared <- function(obj1, obj2) {
 ## continuous module scores of score_modules_by_cluster() (e.g.
 ## Glycolysis1/OXPHOS1/RiBi1). A cell can sit high on several pathways at
 ## once, so k-means on all scores jointly captures states defined by a
-## combination that per-pathway thresholds would miss. k is the value in
-## k_range with the highest mean silhouette width (ties go to the smaller k).
+## combination that per-pathway thresholds would miss. k-means is fit once for every k in
+## k_range (nstart = 10 random starts each) and the fit with the highest mean silhouette
+## width is returned as it was scored (ties go to the smaller k), so the labels are the
+## clustering the silhouette judged. The starts come from their own seeded stream (seed),
+## and the caller's random number state is restored on exit, so the states are the same on
+## every run and the function does not move any other draw.
 ## Returns a factor of state labels, one per cell
-metabolic_state_cluster <- function(obj, score_names = c("Glycolysis1", "OXPHOS1", "RiBi1"), k_range = 2:4) {
+metabolic_state_cluster <- function(obj, score_names = c("Glycolysis1", "OXPHOS1", "RiBi1"), k_range = 2:4, seed = 1) {
   missing <- setdiff(score_names, colnames(obj[[]]))
   if (length(missing) > 0)
     stop(sprintf("metabolic_state_cluster(): %s not found; run score_modules_by_cluster() on this object first and reassign its result", paste(missing, collapse = ", ")))
   scores <- scale(as.matrix(obj[[score_names]]))
-  d      <- dist(scores)
-  sil    <- numeric(length(k_range))
-  for (i in seq_along(k_range)) sil[i] <- mean(silhouette(kmeans(scores, centers = k_range[i], nstart = 10)$cluster, d)[, 3])
-  best_k <- k_range[which.max(sil)]
-  km     <- kmeans(scores, centers = best_k, nstart = 10)
+  stopifnot(is.numeric(seed), length(seed) == 1, is.finite(seed),
+            is.numeric(k_range), length(k_range) >= 1, all(k_range >= 2), all(k_range < nrow(scores)))
+  ## Own RNG stream: seed here, give the caller's state back on exit (no state to give back when none existed)
+  had_seed <- exists(".Random.seed", envir = globalenv(), inherits = FALSE)
+  if (had_seed) old_seed <- get(".Random.seed", envir = globalenv())
+  on.exit(if (had_seed) assign(".Random.seed", old_seed, envir = globalenv()) else if (exists(".Random.seed", envir = globalenv(), inherits = FALSE)) rm(".Random.seed", envir = globalenv()), add = TRUE)
+  set.seed(seed)
+  d    <- dist(scores)
+  fits <- lapply(k_range, function(k) kmeans(scores, centers = k, nstart = 10))
+  sil  <- vapply(fits, function(fit) mean(silhouette(fit$cluster, d)[, 3]), numeric(1))
+  km   <- fits[[which.max(sil)]]
   setNames(factor(km$cluster), rownames(scores))
 }
 

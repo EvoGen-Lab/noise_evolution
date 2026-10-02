@@ -13,7 +13,6 @@ Source: `docs/function_review.md` (item numbers refer to its section 3), re-chec
 
 | Review # | Where | Issue |
 |---|---|---|
-| 22 | `metabolic_state_cluster` | k-means unseeded; the silhouette-scored fit is discarded and refit. |
 
 ## C. Robustness, no numeric change
 
