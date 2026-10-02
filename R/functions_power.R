@@ -342,14 +342,15 @@ modes_long <- function(res, GRID, MEAN.READS, SIZE, PHI, FRAC, DESIGN, DEPTH.RAT
   list(power = stack("power"), sd_null = stack("sd_null"))
 }
 
-## modes_mde: the minimum detectable log2 ratio (mde_interp()) at power `target` on the BH-power curve of every
-## (grid row, mode, axis) in the long power table `pw` from modes_long(). Returns the grid values of each row with a mde_log2 column.
-modes_mde <- function(pw, target = 0.8) {
+## modes_mde: the minimum detectable log2 ratio (mde_interp()) at power `target` on the power curve (column `col`,
+## power_bh or power_raw) of every (grid row, mode, axis) in the long power table `pw` from modes_long(). Returns the
+## grid values of each row with a mde_log2 column.
+modes_mde <- function(pw, target = 0.8, col = "power_bh") {
   key <- interaction(pw$i, pw$mode, pw$axis, drop = TRUE)
   do.call(rbind, lapply(split(pw, key), function(d) {
     d <- d[order(d$ratio), ]
     out <- d[1, setdiff(names(d), c("ratio", "power_bh", "power_raw"))]
-    out$mde_log2 <- mde_interp(d$power_bh, d$ratio, target)
+    out$mde_log2 <- mde_interp(d[[col]], d$ratio, target)
     out
   }))
 }
@@ -357,12 +358,12 @@ modes_mde <- function(pw, target = 0.8) {
 ## modes_f_cross: the split fraction f at which cis and trans have equal power. For each combination of the grid
 ## values other than f (and each axis), the power of cis minus the power of the trans version `trans_mode` at SIZE.RATIO ==
 ## `ratio` is interpolated linearly over f, and the first sign change gives f_cross (NA when the two curves do not
-## cross). pw: long power table from modes_long().
-modes_f_cross <- function(pw, ratio, trans_mode = "trans_indep", axis = "disp") {
+## cross). pw: long power table from modes_long(); col: power_bh or power_raw.
+modes_f_cross <- function(pw, ratio, trans_mode = "trans_indep", axis = "disp", col = "power_bh") {
   d <- pw[pw$ratio == ratio & pw$axis == axis & pw$mode %in% c("cis", trans_mode), ]
-  wide <- reshape(d[, c("mean_reads", "size", "phi", "f", "N.P", "N.H", "depth", "mode", "power_bh")],
+  wide <- reshape(d[, c("mean_reads", "size", "phi", "f", "N.P", "N.H", "depth", "mode", col)],
                   idvar = c("mean_reads", "size", "phi", "f", "N.P", "N.H", "depth"), timevar = "mode", direction = "wide")
-  wide$diff <- wide[["power_bh.cis"]] - wide[[paste0("power_bh.", trans_mode)]]
+  wide$diff <- wide[[paste0(col, ".cis")]] - wide[[paste0(col, ".", trans_mode)]]
   keys <- c("mean_reads", "size", "phi", "N.P", "N.H", "depth")
   do.call(rbind, lapply(split(wide, interaction(wide[keys], drop = TRUE)), function(w) {
     w <- w[order(w$f), ]

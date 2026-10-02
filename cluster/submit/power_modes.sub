@@ -5,12 +5,12 @@
 # depth ratio) dealt round-robin across the array tasks. Each row simulates every SIZE.RATIO value, the cis
 # contrast and the trans contrast under two null versions. Each task requests 1 node and 24 cores.
 #
-# Sizing. The reduced grid defined in power_analysis.R Section 10.9 has 112 rows, NJ = 200 datasets and NI = 500
-# permutations per dataset. A permutation costs 10 fits (cis 2, trans 4 in each of two versions), about 4 ms
-# at 400 cells per group, so a row takes about 50 core-minutes (timed on a development machine; allow a
-# factor of 2 either way). With 4 tasks of 24 cores each task runs 28 rows, about 2 hours. A full grid scales
-# with the number of rows, NJ and NI: the same settings as power.sub (NJ = 1000, NI = 10000) cost 100 times
-# more per row, so raise --array and --time with them.
+# Sizing. The reduced grid defined in power_analysis.R Section 10.9 has 112 rows, NJ = 200 datasets and NI = 2000
+# permutations per dataset (NI sets the smallest p-value, 1 / (NI + 1), which BH power needs to resolve). A
+# permutation costs 10 fits (cis 2, trans 4 in each of two versions), about 4 ms at 400 cells per group, so a row takes about
+# 3.5 core-hours (timed on a development machine; allow a factor of 2 either way). With 4 tasks of 24 cores each task runs
+# 28 rows, about two rounds of 3.5 hours. A full grid scales with the number of rows, NJ and NI: the same settings
+# as power.sub (NJ = 1000, NI = 10000) cost 25 times more per row, so raise --array and --time with them.
 #
 # Restarts. A task writes its output file only when it finishes. Resubmitting the array
 # recomputes only the tasks whose power_modes_output_<k>of<K>.rda is missing; a task stopped at the

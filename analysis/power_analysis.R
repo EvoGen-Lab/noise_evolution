@@ -301,7 +301,15 @@ FRAC.M       <- sort(unique(round(c(0.1, 0.2, 0.3, 0.4, 0.5, MODES.REAL$f_star[i
 DEPTH.RATIO.M <- round(MODES.REAL$depth, 3)
 SIZE.RATIO.M <- c(1, 1.25, 1.5, 2, 3, 4, 6, 8)
 NJ.M <- 200    # simulated datasets per row
-NI.M <- 500    # permutations per dataset (the pipeline uses N.PERM)
+NI.M <- 2000   # permutations per dataset (the pipeline uses N.PERM)
+# BH power needs the permutation p-values to resolve small values: the smallest p-value is 1 / (NI.M + 1), and BH
+# over the pooled null and alternative datasets rejects only when enough alternatives sit at or below
+# ALPHA * rank / total. A small NI.M therefore makes the BH power curve a step that stays at zero until the raw power
+# is high. The number of alternatives that must reach the p-value floor is checked here, and the tables fall back
+# to the raw rejection rate (p < ALPHA) when it is large.
+BH.NEED <- ceiling((NJ.M + round(NJ.M * PI1 / (1 - PI1))) * (1 / (NI.M + 1)) / ALPHA)
+MODES.PW.COL <- if (BH.NEED <= 0.1 * round(NJ.M * PI1 / (1 - PI1))) "power_bh" else "power_raw"
+cat(sprintf("BH needs %d alternatives at the p-value floor (of %d); tables and curves use %s\n", BH.NEED, round(NJ.M * PI1 / (1 - PI1)), MODES.PW.COL))
 GRID.M <- expand.grid(m = seq_along(MEAN.READS.M), p = seq_along(SIZE.M), h = seq_along(PHI.M),
                       f = seq_along(FRAC.M), n = seq_len(nrow(DESIGN.M)), d = seq_along(DEPTH.RATIO.M))
 
@@ -341,7 +349,7 @@ MODES.LTY   <- c(cis = 1, trans_indep = 1, trans_paired = 2)
 
 ## 10.11 Power against effect size, by mode, at every grid point (size axis)
 # One PDF per (mean reads, size): panels over f (rows) and phi (columns), one curve per mode, power at
-# BH q < ALPHA against the log2 SIZE.RATIO, with the 80% line.
+# BH q < ALPHA (or the raw rate when MODES.PW.COL is power_raw) against the log2 SIZE.RATIO, with the 80% line.
 for (mr in MEAN.READS.M) for (sz in SIZE.M) {
   open_grid_pdf(file.path(FIGURE.DIR, "extended", sprintf("Power.Modes.curves_mean%s_size%s.pdf", mr, sz)),
                 length(FRAC.M), length(PHI.M), panel_w = 2.6, panel_h = 2.2)
@@ -350,7 +358,7 @@ for (mr in MEAN.READS.M) for (sz in SIZE.M) {
     plot(NA, xlim = range(log2(SIZE.RATIO.M)), ylim = c(0, 1), xlab = "log2 SIZE.RATIO", ylab = "Power",
          main = sprintf("f = %s, phi = %s", fr, ph), cex.main = 0.8)
     abline(h = 0.8, col = COLOR.GREY[["mid"]], lty = 3)
-    for (md in names(MODES.COL)) with(d[d$mode == md, ], lines(log2(ratio), power_bh, col = MODES.COL[[md]], lty = MODES.LTY[[md]], lwd = 1.6))
+    for (md in names(MODES.COL)) with(d[d$mode == md, ], lines(log2(ratio), get(MODES.PW.COL), col = MODES.COL[[md]], lty = MODES.LTY[[md]], lwd = 1.6))
   }
   dev.off()
 }
@@ -359,9 +367,9 @@ plot.new(); legend("center", legend = c("cis", "trans, independent shuffles", "t
 dev.off()
 
 ## 10.12 Minimum detectable log2 ratio at 80% power, and the trans-to-cis ratio (open item 4)
-# mde_interp() interpolates each power curve over log2(SIZE.RATIO); NA means the curve never reaches 80% by the
+# mde_interp() interpolates each power curve (column MODES.PW.COL) over log2(SIZE.RATIO); NA means the curve never reaches 80% by the
 # largest ratio tested. MDE ratio > 1 means trans needs a larger effect than cis at the same depth.
-MODES.MDE <- modes_mde(MODES.POWER[MODES.POWER$axis == "disp", ], target = 0.8)
+MODES.MDE <- modes_mde(MODES.POWER[MODES.POWER$axis == "disp", ], target = 0.8, col = MODES.PW.COL)
 MODES.MDE.WIDE <- reshape(MODES.MDE[, c("i", "mean_reads", "size", "phi", "f", "N.P", "N.H", "depth", "mode", "mde_log2")],
                           idvar = c("i", "mean_reads", "size", "phi", "f", "N.P", "N.H", "depth"), timevar = "mode", direction = "wide")
 write.csv(MODES.MDE, file.path(TABLE.DIR, "power_modes_mde.csv"), row.names = FALSE)
@@ -400,16 +408,17 @@ write.csv(MODES.TYPE1, file.path(TABLE.DIR, "power_modes_type1.csv"), row.names 
 cat(sprintf("type I error at SIZE.RATIO = 1 (nominal %.2f; binomial SE per row %.3f), mean and max over the grid:\n", ALPHA, sqrt(ALPHA * (1 - ALPHA) / NJ.M)))
 print(MODES.TYPE1, digits = 3, row.names = FALSE)
 CROSS.RATIO <- SIZE.RATIO.M[which.min(abs(SIZE.RATIO.M - 2))]
-F.CROSS <- do.call(rbind, lapply(c("trans_indep", "trans_paired"), function(tm) modes_f_cross(MODES.POWER, CROSS.RATIO, trans_mode = tm, axis = "disp")))
+F.CROSS <- do.call(rbind, lapply(c("trans_indep", "trans_paired"), function(tm) modes_f_cross(MODES.POWER, CROSS.RATIO, trans_mode = tm, axis = "disp", col = MODES.PW.COL)))
 write.csv(F.CROSS, file.path(TABLE.DIR, "power_modes_f_cross.csv"), row.names = FALSE)
 cat(sprintf("split fraction at which cis and trans power are equal (SIZE.RATIO = %s, size axis); pipeline f_disp = %.3f:\n", CROSS.RATIO, MODES.REAL$f_star[["f_disp"]]))
 print(F.CROSS[F.CROSS$trans_mode == "trans_indep", c("mean_reads", "size", "phi", "f_cross")], digits = 3, row.names = FALSE)
 
 ## 10.14 Observed null contrast: simulated SD against the variance statement in the project notes
 # project_context.md states var_trans = var_cis + 4 / N_p. At ratio 1 the SD of the observed size contrast is
-# simulated for cis (paired alleles) and trans (parental ratio minus hybrid ratio); the excess variance times N.P
-# is the constant that statement puts at 4. It is reported in log2 and natural-log units because the notes
-# do not name the scale, and it varies with mean, size, phi and f, so the table shows the spread.
+# simulated for cis (paired alleles) and trans (parental ratio minus hybrid ratio). The statement compares the two
+# on the same hybrid cells, which holds at f = 0.5 only (cis and trans then use N.H / 2 cells each), so the
+# excess variance times N.P, the constant the statement puts at 4, is summarized at f = 0.5. It is reported
+# in log2 and natural-log units because the notes do not name the scale, and it varies with mean, size and phi.
 SD.WIDE <- reshape(MODES.SD[MODES.SD$axis == "disp", c("i", "mean_reads", "size", "phi", "f", "N.P", "N.H", "depth", "mode", "sd")],
                    idvar = c("i", "mean_reads", "size", "phi", "f", "N.P", "N.H", "depth"), timevar = "mode", direction = "wide")
 SD.WIDE$excess_log2   <- SD.WIDE$sd.trans^2 - SD.WIDE$sd.cis^2
@@ -419,9 +428,12 @@ write.csv(SD.WIDE, file.path(TABLE.DIR, "power_modes_null_sd.csv"), row.names = 
 cat("simulated SD of the observed size contrast under the null (ratio 1), median by f and phi:\n")
 print(round(tapply(SD.WIDE$sd.cis, list(phi = SD.WIDE$phi, f = SD.WIDE$f), median), 3))
 print(round(tapply(SD.WIDE$sd.trans, list(phi = SD.WIDE$phi, f = SD.WIDE$f), median), 3))
-cat("(var_trans - var_cis) * N.P, the notes' constant of 4: log2 scale, then natural-log scale (median by phi):\n")
-print(round(tapply(SD.WIDE$const_log2, SD.WIDE$phi, median, na.rm = TRUE), 2))
-print(round(tapply(SD.WIDE$const_ln, SD.WIDE$phi, median, na.rm = TRUE), 2))
+SD.HALF <- SD.WIDE[SD.WIDE$f == 0.5, ]
+if (nrow(SD.HALF) > 0) {
+  cat("(var_trans - var_cis) * N.P at f = 0.5, the notes' constant of 4: log2 scale, then natural-log scale (median by phi):\n")
+  print(round(tapply(SD.HALF$const_log2, SD.HALF$phi, median, na.rm = TRUE), 2))
+  print(round(tapply(SD.HALF$const_ln, SD.HALF$phi, median, na.rm = TRUE), 2))
+}
 
 save(MODES.INPUTS, MODES.REAL, GEN.CHECK, MODES.POWER, MODES.SD, MODES.MDE, MDE.RATIO, MODES.TYPE1, F.CROSS, SD.WIDE,
      file = file.path(CHECKPOINT.DIR, "section10_modes_checkpoint.rda"))
