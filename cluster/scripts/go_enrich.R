@@ -22,7 +22,7 @@ suppressPackageStartupMessages({
 register(SerialParam())   # one process per job, parallelism comes from mclapply
 
 source("functions.R")
-write_pkg_versions("go_enrich")   # R and package versions of this job, compared locally by check_pkg_versions()
+write_pkg_versions("go_enrich")   # R and package versions of this job, compared with renv.lock by check_pkg_versions()
 
 load("go_enrich_inputs.rda")
 NUM.CORES <- as.integer(Sys.getenv("SLURM_CPUS_PER_TASK", unset = detectCores()))

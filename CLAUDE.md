@@ -62,5 +62,5 @@ Prefer fixes that avoid cluster reruns. Offer a local recompute path (for exampl
 - Do not claim a result is unchanged unless a check confirms it. Expected result changes after the R and Seurat upgrade include `FindMarkers` fold changes, newer GO and KEGG annotations, and Monte Carlo seed behavior.
 
 ## Open work
-1. Rerun the full pipeline after the R upgrade and review the expected result changes. Compare local and cluster package versions with `check_pkg_versions()` (run by `R/setup.R` once the cluster scripts' `pkg_versions_*.csv` files are copied back).
+1. Rerun the full pipeline after the R upgrade and review the expected result changes. Compare the cluster package versions with `renv.lock` through `check_pkg_versions()` (run by `R/setup.R` once the cluster scripts' `pkg_versions_*.csv` files are copied back).
 2. Address the trans versus cis power asymmetry for noise (see @docs/project_context.md).

@@ -74,8 +74,7 @@ COLOR.GREY <- c(light = "#DADAD5", mid = "#B0B0AB", dark = "#6E6E6A")
 # from the top or is resumed from a checkpoint. Steps with their own seed use with_local_seed().
 SEED.SECTION <- 100
 
-# Record the package versions of this session beside the results and compare them with the records
-# the cluster scripts write (pkg_versions_<script>.csv, copied back with each job's output). A
+# The local library follows renv.lock (renv::status() above). The cluster has no renv, so each cluster
+# script writes pkg_versions_<script>.csv (copied back with its output); compare those with renv.lock. A
 # difference is a warning, not a stop: check_pkg_versions(..., strict = TRUE) stops on a major or minor one.
-write_pkg_versions("local", dir = dirname(CHECKPOINT.DIR))
-check_pkg_versions(file.path(dirname(CHECKPOINT.DIR), "pkg_versions_local.csv"), OUTPUT.DIR)
+check_pkg_versions(here("renv.lock"), OUTPUT.DIR)

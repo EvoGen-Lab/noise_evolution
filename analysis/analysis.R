@@ -2137,7 +2137,8 @@ cat(sprintf("Se parent: within/between vs burst size, n = %d, Spearman rho = %.3
 ## so no additional ortholog mapping is needed here). Spearman rho
 ## reported on the ratios of every gene with a finite ratio in both datasets, zeros
 ## included, same rank-based convention used throughout this section; genes with
-## a zero ratio in either dataset cannot be placed on the log axes and are counted in the title.
+## a zero ratio in either dataset cannot be placed on the log axes, so they count
+## in n and rho but are not drawn.
 fig_pdf("extra/S_within_between_cross_species.pdf", 6, 6)
 WB.CROSS.SPECIES <- local({
   wb_a <- WB.MIX.SC
@@ -2150,7 +2151,6 @@ WB.CROSS.SPECIES <- local({
   rho <- suppressWarnings(cor(m$ratio_within_between_a[fin], m$ratio_within_between_b[fin], method = "spearman"))
   ok <- fin & m$ratio_within_between_a > 0 & m$ratio_within_between_b > 0
   x   <- log10(m$ratio_within_between_a[ok]); y <- log10(m$ratio_within_between_b[ok])
-  if (is.null(main)) main <- sprintf("n = %d genes (%d with a zero ratio not shown), Spearman rho = %.3f", sum(fin), sum(fin) - sum(ok), rho)
   plot(x, y, pch = 16, cex = 0.4, col = adjustcolor(COLOR.GREY[["dark"]], 0.38),
        xlab = sprintf("log10(within / between), %s", lab_a), ylab = sprintf("log10(within / between), %s", lab_b), main = main)
   abline(0, 1, lty = 3, col = COLOR.GREY[["mid"]])
@@ -2180,20 +2180,22 @@ S.GENES   <- c("YMR199W", "YPL256C", "YPR120C", "YGR109C", "YBR088C", "YKL113C",
 G2M.GENES <- c("YGR108W", "YPR119W", "YDL155W", "YMR001C", "YGL116W")                        # CLB1, CLB2, CLB3, CDC5, CDC20
 MG1.GENES <- c("YLR079W", "YDR146C", "YLR131C")                                              # SIC1, SWI5, ACE2
 
-YSC$MIX.SC <- score_cell_cycle_by_cluster(YSC$MIX.SC, "Sc parent", file.path(FIGURE.DIR, "extra/S_cell_cycle_scoring_MIX.SC.pdf"))
-YSC$MIX.SE <- score_cell_cycle_by_cluster(YSC$MIX.SE, "Se parent", file.path(FIGURE.DIR, "extra/S_cell_cycle_scoring_MIX.SE.pdf"))
-YSC$HYB.SC <- score_cell_cycle_by_cluster(YSC$HYB.SC, "Hybrid, Sc allele", file.path(FIGURE.DIR, "extra/S_cell_cycle_scoring_HYB.SC.pdf"))
-YSC$HYB.SE <- score_cell_cycle_by_cluster(YSC$HYB.SE, "Hybrid, Se allele", file.path(FIGURE.DIR, "extra/S_cell_cycle_scoring_HYB.SE.pdf"))
+# The four datasets that feed CONTRAST.MATS directly; every step below maps over them by name.
+# The hybrid alleles share one exposure vector (CONTRAST.EXPOS$HYB), so EXPO.KEY maps each dataset to its exposure entry.
+COV.DS   <- c("MIX.SC", "MIX.SE", "HYB.SC", "HYB.SE")
+EXPO.KEY <- c(MIX.SC = "MIX.SC", MIX.SE = "MIX.SE", HYB.SC = "HYB", HYB.SE = "HYB")
+
+YSC[COV.DS] <- Map(score_cell_cycle_by_cluster, YSC[COV.DS], DS.LABELS[COV.DS],
+                   file.path(FIGURE.DIR, sprintf("extra/S_cell_cycle_scoring_%s.pdf", COV.DS)))
 
 METABOLIC.GENE.SETS <- list(
   Glycolysis = go_gene_set("GO:0006096"),  # glycolytic process
   OXPHOS     = go_gene_set("GO:0006119"),  # oxidative phosphorylation
   RiBi       = go_gene_set("GO:0042254"))  # ribosome biogenesis
 
-YSC$MIX.SC <- score_modules_by_cluster(YSC$MIX.SC, METABOLIC.GENE.SETS, "Sc parent", file.path(FIGURE.DIR, "extra/S_metabolic_scoring_MIX.SC.pdf"))
-YSC$MIX.SE <- score_modules_by_cluster(YSC$MIX.SE, METABOLIC.GENE.SETS, "Se parent", file.path(FIGURE.DIR, "extra/S_metabolic_scoring_MIX.SE.pdf"))
-YSC$HYB.SC <- score_modules_by_cluster(YSC$HYB.SC, METABOLIC.GENE.SETS, "Hybrid, Sc allele", file.path(FIGURE.DIR, "extra/S_metabolic_scoring_HYB.SC.pdf"))
-YSC$HYB.SE <- score_modules_by_cluster(YSC$HYB.SE, METABOLIC.GENE.SETS, "Hybrid, Se allele", file.path(FIGURE.DIR, "extra/S_metabolic_scoring_HYB.SE.pdf"))
+YSC[COV.DS] <- Map(score_modules_by_cluster, YSC[COV.DS], label = DS.LABELS[COV.DS],
+                   pdf_path = file.path(FIGURE.DIR, sprintf("extra/S_metabolic_scoring_%s.pdf", COV.DS)),
+                   MoreArgs = list(gene_sets = METABOLIC.GENE.SETS))
 
 ## 7.7 Covariate-noise diagnostic
 # Tests whether per-cell NB Pearson residual noise, from the already-
@@ -2201,26 +2203,14 @@ YSC$HYB.SE <- score_modules_by_cluster(YSC$HYB.SE, METABOLIC.GENE.SETS, "Hybrid,
 # (single continuous axis, first PC of S.Score/G2M.Score) or metabolic
 # state (discrete, joint k-means on the three metabolic module scores).
 # Run on the four datasets that feed CONTRAST.MATS directly.
-CC.AXIS.MIX.SC <- cell_cycle_continuum(YSC$MIX.SC)
-CC.AXIS.MIX.SE <- cell_cycle_continuum(YSC$MIX.SE)
-CC.AXIS.HYB.SC <- cell_cycle_continuum(YSC$HYB.SC)
-CC.AXIS.HYB.SE <- cell_cycle_continuum(YSC$HYB.SE)
+CC.AXIS   <- lapply(YSC[COV.DS], cell_cycle_continuum)
+MET.STATE <- lapply(YSC[COV.DS], metabolic_state_cluster)
 
-MET.STATE.MIX.SC <- metabolic_state_cluster(YSC$MIX.SC)
-MET.STATE.MIX.SE <- metabolic_state_cluster(YSC$MIX.SE)
-MET.STATE.HYB.SC <- metabolic_state_cluster(YSC$HYB.SC)
-MET.STATE.HYB.SE <- metabolic_state_cluster(YSC$HYB.SE)
-
-COV.DIAG.MIX.SC <- covariate_noise_diagnostic(CONTRAST.MATS$MIX.SC, CONTRAST.EXPOS$MIX.SC, CONTRAST.FITS$MIX.SC, CC.AXIS.MIX.SC, MET.STATE.MIX.SC, "Sc parent")
-COV.DIAG.MIX.SE <- covariate_noise_diagnostic(CONTRAST.MATS$MIX.SE, CONTRAST.EXPOS$MIX.SE, CONTRAST.FITS$MIX.SE, CC.AXIS.MIX.SE, MET.STATE.MIX.SE, "Se parent")
-COV.DIAG.HYB.SC <- covariate_noise_diagnostic(CONTRAST.MATS$HYB.SC, CONTRAST.EXPOS$HYB,    CONTRAST.FITS$HYB.SC, CC.AXIS.HYB.SC, MET.STATE.HYB.SC, "Hybrid, Sc allele")
-COV.DIAG.HYB.SE <- covariate_noise_diagnostic(CONTRAST.MATS$HYB.SE, CONTRAST.EXPOS$HYB,    CONTRAST.FITS$HYB.SE, CC.AXIS.HYB.SE, MET.STATE.HYB.SE, "Hybrid, Se allele")
+COV.DIAG <- Map(covariate_noise_diagnostic, CONTRAST.MATS[COV.DS], CONTRAST.EXPOS[EXPO.KEY[COV.DS]], CONTRAST.FITS[COV.DS],
+                CC.AXIS, MET.STATE, DS.LABELS[COV.DS])
 
 fig_pdf("extra/S_covariate_noise_diagnostic.pdf", 9, 4.5)
-plot_covariate_noise_diagnostic(COV.DIAG.MIX.SC, "Sc parent")
-plot_covariate_noise_diagnostic(COV.DIAG.MIX.SE, "Se parent")
-plot_covariate_noise_diagnostic(COV.DIAG.HYB.SC, "Hybrid, Sc allele")
-plot_covariate_noise_diagnostic(COV.DIAG.HYB.SE, "Hybrid, Se allele")
+invisible(Map(plot_covariate_noise_diagnostic, COV.DIAG, DS.LABELS[COV.DS]))
 dev.off()
 
 ## 7.8 Species composition comparison and confound bound
@@ -2231,16 +2221,13 @@ dev.off()
 # expected noise shift, in residual-SD units (bound_sd = |d| x effect size, about rho x d), that a
 # composition difference of that size could produce. The bound, not the p-value, is the informative
 # output: with thousands of cells any test rejects.
-MET.SCORE.MIX.SC <- as.matrix(YSC$MIX.SC[[c("Glycolysis1", "OXPHOS1", "RiBi1")]])
-MET.SCORE.MIX.SE <- as.matrix(YSC$MIX.SE[[c("Glycolysis1", "OXPHOS1", "RiBi1")]])
-MET.SCORE.HYB.SC <- as.matrix(YSC$HYB.SC[[c("Glycolysis1", "OXPHOS1", "RiBi1")]])
-MET.SCORE.HYB.SE <- as.matrix(YSC$HYB.SE[[c("Glycolysis1", "OXPHOS1", "RiBi1")]])
+MET.SCORE <- lapply(YSC[COV.DS], function(o) as.matrix(o[[c("Glycolysis1", "OXPHOS1", "RiBi1")]]))
 
 CC.SHARED.PARENT <- cell_cycle_continuum_shared(YSC$MIX.SC, YSC$MIX.SE)
 CC.SHARED.HYBRID <- cell_cycle_continuum_shared(YSC$HYB.SC, YSC$HYB.SE)
 
-COMP.BOUND.PARENT <- species_composition_report(CC.SHARED.PARENT$x1, CC.SHARED.PARENT$x2, MET.SCORE.MIX.SC, MET.SCORE.MIX.SE, COV.DIAG.MIX.SC, COV.DIAG.MIX.SE, "Sc vs Se parent")
-COMP.BOUND.HYBRID <- species_composition_report(CC.SHARED.HYBRID$x1, CC.SHARED.HYBRID$x2, MET.SCORE.HYB.SC, MET.SCORE.HYB.SE, COV.DIAG.HYB.SC, COV.DIAG.HYB.SE, "Hybrid, Sc vs Se allele", paired = TRUE)
+COMP.BOUND.PARENT <- species_composition_report(CC.SHARED.PARENT$x1, CC.SHARED.PARENT$x2, MET.SCORE$MIX.SC, MET.SCORE$MIX.SE, COV.DIAG$MIX.SC, COV.DIAG$MIX.SE, "Sc vs Se parent")
+COMP.BOUND.HYBRID <- species_composition_report(CC.SHARED.HYBRID$x1, CC.SHARED.HYBRID$x2, MET.SCORE$HYB.SC, MET.SCORE$HYB.SE, COV.DIAG$HYB.SC, COV.DIAG$HYB.SE, "Hybrid, Sc vs Se allele", paired = TRUE)
 
 fig_pdf("extra/S_species_composition_bound.pdf", 8, 5)
 par(mfrow = c(1, 2), mar = c(8, 4.5, 3, 1))
@@ -2251,10 +2238,7 @@ barplot(setNames(COMP.BOUND.HYBRID$bound_sd, COMP.BOUND.HYBRID$axis), las = 2, c
 dev.off()
 
 # Checkpoint
-save(CC.AXIS.MIX.SC, CC.AXIS.MIX.SE, CC.AXIS.HYB.SC, CC.AXIS.HYB.SE,
-     MET.STATE.MIX.SC, MET.STATE.MIX.SE, MET.STATE.HYB.SC, MET.STATE.HYB.SE,
-     COV.DIAG.MIX.SC, COV.DIAG.MIX.SE, COV.DIAG.HYB.SC, COV.DIAG.HYB.SE,
-     CC.SHARED.PARENT, CC.SHARED.HYBRID, COMP.BOUND.PARENT, COMP.BOUND.HYBRID,
+save(CC.AXIS, MET.STATE, COV.DIAG, CC.SHARED.PARENT, CC.SHARED.HYBRID, COMP.BOUND.PARENT, COMP.BOUND.HYBRID,
      file = ckpt_path(7))
 
 console_start(8)

@@ -24,7 +24,7 @@ library('parallel')
 
 source("functions.R")
 source("functions_power.R")
-write_pkg_versions("power_modes_grid")   # R and package versions of this job, compared locally by check_pkg_versions()
+write_pkg_versions("power_modes_grid")   # R and package versions of this job, compared with renv.lock by check_pkg_versions()
 
 load("power_modes_inputs.rda")
 list2env(MODES.INPUTS, environment())

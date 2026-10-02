@@ -21,7 +21,7 @@
 ###     ckpt_path() - Path of a section's checkpoint file (section{N}_checkpoint.rda).
 ###     console_start() / console_stop() - Per-section console transcript (section{N}_console.txt).
 ###     with_local_seed() - Evaluates an expression on its own seeded random stream and restores the caller's random number state.
-###     pkg_versions() / write_pkg_versions() / check_pkg_versions() - Record the R and package versions of a run and compare the local and cluster records.
+###     pkg_versions() / write_pkg_versions() / check_pkg_versions() - Record the R and package versions of a cluster job and compare them with renv.lock.
 ###   1. OFFSET NEGATIVE-BINOMIAL FIT
 ###     neg_binom_fit_offset() - Offset NB fit for one gene: rate (mu) and NB size (disp) from .fit_one(), with glm.nb asymptotic log-scale SEs; disp = Inf when a Poisson-vs-NB pre-check finds no overdispersion.
 ###     fit_counts_offset() - Matrix version: one neg_binom_fit_offset() fit per gene (row) against its exposure vector; optionally splits genes across a PSOCK cluster, shipping the functions the fit needs.
@@ -211,7 +211,7 @@ PIPELINE.PACKAGES <- c("MASS", "parallel", "future", "ggplot2", "Seurat", "Matri
 
 ## pkg_versions(pkgs): the installed version of R and of each package in pkgs (NA when a package is not
 ## installed), read from the package descriptions without loading the packages. Returns a data.frame
-## (package, version). Local and cluster runs each record one, so check_pkg_versions() can compare them.
+## (package, version). Each cluster script records one, so check_pkg_versions() can compare it with renv.lock.
 pkg_versions <- function(pkgs = PIPELINE.PACKAGES) {
   stopifnot(is.character(pkgs), length(pkgs) >= 1)
   v <- vapply(pkgs, function(p) suppressWarnings(as.character(utils::packageDescription(p, fields = "Version"))), character(1))
@@ -228,34 +228,41 @@ write_pkg_versions <- function(tag, dir = ".") {
   invisible(out)
 }
 
-## check_pkg_versions(local_file, cluster_dir, strict): compares the local record with every
-## pkg_versions_*.csv in cluster_dir (one per cluster script). A package whose version differs is listed with
+## check_pkg_versions(lockfile, cluster_dir, strict): compares the versions renv.lock pins (R and each
+## package) with every pkg_versions_*.csv in cluster_dir (one per cluster script, written by
+## write_pkg_versions()). The local library already matches renv.lock (renv::status() checks it), so the
+## lock file stands for the local run and the cluster records are the only versions to verify. lockfile is a
+## path to renv.lock or the list renv::lockfile_read() returns. A package whose version differs is listed with
 ## the file it came from; a difference in the major or minor number ("major_minor") is a likely change of
-## results, a patch difference a minor one. Warns about any difference (a missing record is a message), and with
-## strict = TRUE stops on a major or minor difference. A package installed on one side only counts as a
-## major_minor difference. Returns the table of differences invisibly.
-check_pkg_versions <- function(local_file, cluster_dir, strict = FALSE) {
-  stopifnot(is.character(local_file), length(local_file) == 1, file.exists(local_file), is.logical(strict), length(strict) == 1)
+## results, a patch difference a minor one. A package the lock pins but the cluster lacks counts as
+## major_minor; a package absent from the lock (base packages) is not compared. Warns about any difference
+## (a missing record is a message), and with strict = TRUE stops on a major or minor difference. Returns the
+## table of differences invisibly.
+check_pkg_versions <- function(lockfile, cluster_dir, strict = FALSE) {
+  stopifnot(is.list(lockfile) || (is.character(lockfile) && length(lockfile) == 1 && file.exists(lockfile)),
+            is.logical(strict), length(strict) == 1)
   remote_files <- list.files(cluster_dir, pattern = "^pkg_versions_.*\\.csv$", full.names = TRUE)
   if (length(remote_files) == 0) {
     message("check_pkg_versions(): no cluster pkg_versions_*.csv in ", cluster_dir, "; nothing to compare yet")
     return(invisible(NULL))
   }
-  local <- utils::read.csv(local_file, stringsAsFactors = FALSE)
+  if (is.character(lockfile)) lockfile <- renv::lockfile_read(lockfile)
+  pinned <- c(R = lockfile$R$Version, vapply(lockfile$Packages, function(p) as.character(p$Version), character(1)))
   minor_key <- function(v) vapply(strsplit(v, "[.-]"), function(p) paste(head(p, 2), collapse = "."), character(1))
   diffs <- do.call(rbind, lapply(remote_files, function(fl) {
     remote <- utils::read.csv(fl, stringsAsFactors = FALSE)
-    m <- merge(local, remote, by = "package", suffixes = c("_local", "_cluster"), all = TRUE)
-    differs <- (is.na(m$version_local) != is.na(m$version_cluster)) | (!is.na(m$version_local) & !is.na(m$version_cluster) & m$version_local != m$version_cluster)
-    m <- m[differs, , drop = FALSE]
+    remote <- remote[remote$package %in% names(pinned), , drop = FALSE]
+    m <- data.frame(package = remote$package, version_lock = unname(pinned[remote$package]), version_cluster = remote$version,
+                    stringsAsFactors = FALSE)
+    m <- m[is.na(m$version_cluster) | m$version_cluster != m$version_lock, , drop = FALSE]
     if (nrow(m) == 0) return(NULL)
-    m$level <- ifelse(is.na(m$version_local) | is.na(m$version_cluster) | minor_key(m$version_local) != minor_key(m$version_cluster), "major_minor", "patch")
+    m$level <- ifelse(is.na(m$version_cluster) | minor_key(m$version_cluster) != minor_key(m$version_lock), "major_minor", "patch")
     m$file <- basename(fl)
     m
   }))
-  if (is.null(diffs)) { message("check_pkg_versions(): local and cluster package versions agree"); return(invisible(NULL)) }
-  warning("package versions differ between local and cluster:\n", paste(utils::capture.output(print(diffs, row.names = FALSE)), collapse = "\n"), call. = FALSE)
-  if (strict && any(diffs$level == "major_minor")) stop("check_pkg_versions(): major or minor version differences between local and cluster", call. = FALSE)
+  if (is.null(diffs)) { message("check_pkg_versions(): cluster package versions agree with renv.lock"); return(invisible(NULL)) }
+  warning("cluster package versions differ from renv.lock:\n", paste(utils::capture.output(print(diffs, row.names = FALSE)), collapse = "\n"), call. = FALSE)
+  if (strict && any(diffs$level == "major_minor")) stop("check_pkg_versions(): major or minor version differences between renv.lock and the cluster", call. = FALSE)
   invisible(diffs)
 }
 

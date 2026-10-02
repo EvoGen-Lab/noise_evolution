@@ -24,7 +24,7 @@ suppressPackageStartupMessages({
 })
 
 source("functions.R")
-write_pkg_versions("cluster_stability")   # R and package versions of this job, compared locally by check_pkg_versions()
+write_pkg_versions("cluster_stability")   # R and package versions of this job, compared with renv.lock by check_pkg_versions()
 
 load("cluster_stability_inputs.rda")
 
