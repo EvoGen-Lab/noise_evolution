@@ -16,12 +16,9 @@ Source: `docs/function_review.md` (item numbers refer to its section 3), re-chec
 
 ## C. Robustness, no numeric change
 
-All items in this section were fixed. Open decisions raised while fixing them:
+All items in this section were fixed. One note remains:
 
-- Unseeded random steps downstream of the seeded functions. Seeded functions now restore the caller's random number state (`with_local_seed`), so a later unseeded random step no longer inherits a stream that an earlier `set.seed` call happened to leave behind. The script-level `set.seed` calls were audited (Sections 2.3, 4.6 and 5.1 now use `with_local_seed`), and Seurat steps carry their own seeds. A top-level `set.seed()` at the start of each section would pin any remaining unseeded step.
-- Script-level `pdf()` ... `dev.off()` blocks in `analysis.R` cannot use `on.exit()`; an error inside one leaves a device open until the session is reset. `on.exit(dev.off())` is in place in every function that opens a device. A `graphics.off()` in `console_start()` would close stale devices at each section start.
-- `kegg_local()` selects the pathway-name column by its name, `to`, from `clusterProfiler::download_KEGG()`; it stops with the column names it found when `to` is absent. It was not run against the installed `clusterProfiler`.
-- Entry validation was added to the functions named in the old list and the other functions with scalar tuning arguments that the pipeline's inputs flow through (`qc_cell_cutoff`, `qc_gene_keep`, `split_indices_by_depth`, `make_coexpr_draws`, `class_overlap_heatmap`, `se_alpha_col`, `shrink_cor`, `gene_reliability`, `mean_adjusted_noise`, `nupop_occupancy_cluster`). Other numeric arguments are still unchecked.
+- Entry validation covers the functions named in the old list and the other functions with scalar tuning arguments that the pipeline's inputs flow through (`qc_cell_cutoff`, `qc_gene_keep`, `split_indices_by_depth`, `make_coexpr_draws`, `class_overlap_heatmap`, `se_alpha_col`, `shrink_cor`, `gene_reliability`, `mean_adjusted_noise`, `nupop_occupancy_cluster`). Other numeric arguments are still unchecked.
 
 ## D. Project-level open work (CLAUDE.md)
 

@@ -35,6 +35,7 @@ CONTRAST.FITS <- SEC2$CONTRAST.FITS
 rm(SEC2)
 
 console_start(9)
+set.seed(SEED.SECTION + 9)
 ##############################################################################
 ## 9. EXTERNAL NOISE VALIDATION                                             ##
 ##############################################################################

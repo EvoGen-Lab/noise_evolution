@@ -68,3 +68,8 @@ COLOR.CLUSTER <- c("#D7ACD7", "#A159AF", "#512B59")
 # Neutral colors for thresholds and reference lines
 COLOR.ACCENT <- "#3A3A3A"
 COLOR.GREY <- c(light = "#DADAD5", mid = "#B0B0AB", dark = "#6E6E6A")
+
+# Seed for the steps that carry no seed of their own: each section starts with
+# set.seed(SEED.SECTION + n) for section n, so a section gives the same draws whether it runs
+# from the top or is resumed from a checkpoint. Steps with their own seed use with_local_seed().
+SEED.SECTION <- 100

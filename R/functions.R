@@ -180,9 +180,11 @@ ckpt_path <- function(n, dir = CHECKPOINT.DIR) {
 ## into section{n}_console.txt; split = TRUE keeps the text visible in the R console
 ## as well. Starting the next section closes the previous file, so each section gets
 ## its own record. append = TRUE adds to an existing file, which suits re-running a
-## single subsection.
+## single subsection. Any graphics device a failed block left open is closed here, so a
+## section starts with none.
 console_start <- function(n, dir = CONSOLE.DIR, append = FALSE) {
   console_stop()
+  graphics.off()
   sink(file.path(dir, sprintf("section%d_console.txt", n)), append = append, split = TRUE)
 }
 
@@ -858,12 +860,12 @@ shrink_cor <- function(Z) {
   if (p < 2 || n < 3) stop(sprintf("shrink_cor(): needs at least 2 genes and 3 complete cells, got %d genes and %d cells", p, n))
   Zs <- scale(Z); Zs[!is.finite(Zs)] <- 0
   R  <- crossprod(Zs) / (n - 1)
-  num <- 0; den <- 0
-  for (i in 1:(p - 1)) for (j in (i + 1):p) {
-    w <- Zs[, i] * Zs[, j]
-    num <- num + (n / (n - 1)^3) * sum((w - mean(w))^2)
-    den <- den + R[i, j]^2
-  }
+  ## Var(r_ij) summed over the pairs i < j, in closed form. For w = z_i * z_j over the n cells,
+  ## sum(w^2) is crossprod(Zs^2)[i, j] and mean(w) = R_ij * (n - 1) / n, so
+  ## sum((w - mean(w))^2) = crossprod(Zs^2)[i, j] - (n - 1)^2 / n * R_ij^2, with no loop over pairs.
+  up  <- upper.tri(R)
+  num <- sum(n / (n - 1)^3 * (crossprod(Zs^2)[up] - (n - 1)^2 / n * R[up]^2))
+  den <- sum(R[up]^2)
   lam <- if (den > 0) max(0, min(1, num / den)) else 1
   Rs <- R * (1 - lam); diag(Rs) <- 1
   attr(Rs, "lambda") <- lam

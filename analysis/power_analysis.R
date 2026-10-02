@@ -37,6 +37,7 @@ N.PERM <- SEC2$N.PERM
 # SEC2 stays loaded for Section 10.9, which reads the real design parameters
 
 console_start(10)
+set.seed(SEED.SECTION + 10)
 ##############################################################################
 ## 10. POWER ANALYSIS                                                       ##
 ##############################################################################
@@ -47,7 +48,6 @@ console_start(10)
 # checkpoint: PR sets PI1, the fraction of truly different genes in the simulated
 # mixture, and N.PERM matches the permutation count to the gene-level analysis.
 
-set.seed(1)
 
 # Significance level for power analysis. Power is judged at this Benjamini-Hochberg
 # FDR (q < ALPHA), matching the gene-level analysis.

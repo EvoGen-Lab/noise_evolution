@@ -40,6 +40,7 @@ Prefer fixes that avoid cluster reruns. Offer a local recompute path (for exampl
 
 ## Conventions
 - R files use Windows CRLF line endings. `.sub` SLURM files use Unix LF line endings. `.gitattributes` enforces both. Keep it intact.
+- Each section of an analysis script starts with `set.seed(SEED.SECTION + n)` (`SEED.SECTION` is defined in `R/setup.R`). A step that needs its own reproducible stream draws it through `with_local_seed(seed, expr)`, which restores the caller's random state.
 - Check scalar conditions. Use `&&` and `||` only with length-one logical values. A scan of the full codebase for violations is still unfinished.
 - Write a function only when its code runs more than once: it is called from two or more places, or it is applied across many items (`lapply`, `sapply`, `vapply`, `Map`, `mapply`, `apply`, `parLapply`, `mclapply`). Code that runs once is written inline where it runs, so a reader follows the steps in order.
   - `analysis/analysis.R`, `analysis/power_analysis.R`, `analysis/external_validation.R`, `R/setup.R` and the cluster scripts define no named functions. A function that is applied across items, or called from two or more places, lives in `R/functions.R`, and is passed to the apply call with its other inputs as named arguments (`lapply(X, name, arg = value)`). A short one-line anonymous function in an apply call (`sapply(x, function(g) cor(a[g], b[g]))`) is fine inline and should not become a separate function. A multi-line body belongs in a named function in `R/functions.R`. Use `[[` for plain accessors.

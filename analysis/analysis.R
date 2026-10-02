@@ -96,6 +96,7 @@ suppressWarnings(suppressPackageStartupMessages({
 }))
 
 console_start(1)
+set.seed(SEED.SECTION + 1)
 ##############################################################################
 ## 1. DATA PROCESSING                                                       ##
 ##############################################################################
@@ -245,6 +246,7 @@ cat(sprintf("Genes retained: %d, minimum detected cells: %d\n", length(GENE.SET)
 save(MIX.SC, MIX.SE, HYB.SC, HYB.SE, QC.SUMMARY, file = ckpt_path(1))
 
 console_start(2)
+set.seed(SEED.SECTION + 2)
 ##############################################################################
 ## 2. NEGATIVE BINOMIAL FITS                                                ##
 ##############################################################################
@@ -559,6 +561,7 @@ save(GENES, HYB.COMB, CONTRAST.FITS, CONTRAST.MATS, CONTRAST.EXPOS, SPLIT.FITS,
      file = ckpt_path(2))
 
 console_start(3)
+set.seed(SEED.SECTION + 3)
 ##############################################################################
 ## 3. REGULATORY AND DOMINANCE RESULTS                                      ##
 ##############################################################################
@@ -800,6 +803,7 @@ save(REG.VEC, DOM.VEC,
      file = ckpt_path(3))
 
 console_start(4)
+set.seed(SEED.SECTION + 4)
 ##############################################################################
 ## 4. CO-EXPRESSION                                                         ##
 ##############################################################################
@@ -1363,6 +1367,7 @@ save(RESID, PLOIDY.F, COEXPR.POINT, CB, CB2, CB.CLASS, CB.DOM.CLASS,
      file = ckpt_path(4))
 
 console_start(5)
+set.seed(SEED.SECTION + 5)
 ##############################################################################
 ## 5. INTRINSIC / EXTRINSIC NOISE (allele-level co-expression)             ##
 ##############################################################################
@@ -1614,6 +1619,7 @@ save(NOISE.DECOMP, NOISE.DECOMP.CLEAN, NOISE.DECOMP.NOAMBIG, NOISE.DECOMP.CLEAN.
      file = ckpt_path(5))
 
 console_start(6)
+set.seed(SEED.SECTION + 6)
 ##############################################################################
 ## 6. PROMOTER ARCHITECTURE                                                 ##
 ##############################################################################
@@ -1790,6 +1796,7 @@ save(SCORE.SC, SCORE.SE, ARCH, NOISE.VALIDATE,
      file = ckpt_path(6))
 
 console_start(7)
+set.seed(SEED.SECTION + 7)
 ##############################################################################
 ## 7. BROAD CELLULAR DIFFERENCES IN EXPRESSION AND REGULATION               ##
 ##############################################################################
@@ -2251,6 +2258,7 @@ save(CC.AXIS.MIX.SC, CC.AXIS.MIX.SE, CC.AXIS.HYB.SC, CC.AXIS.HYB.SE,
      file = ckpt_path(7))
 
 console_start(8)
+set.seed(SEED.SECTION + 8)
 ##############################################################################
 ## 8. GO ENRICHMENT                                                         ##
 ##############################################################################
