@@ -104,8 +104,8 @@
 ###     score_promoters() - Applies both the TATA PWM score and poly(dA:dT) tract length to every promoter in a set.
 ###     nupop_cluster_inputs() - Packages one species' chromosomes and promoter coordinates for the NuPoP cluster job.
 ###     score_promoters_nupop() - Scores each promoter from the cluster occupancy tracks after confirming they match the current promoters.
-###     .concordance_eligible() - Genes eligible for the concordance tests: cis-class, both values defined and nonzero (with the .CIS_CLASSES constant).
-###     promoter_direction_test() - Tests whether a promoter feature's between-species direction matches the direction of cis divergence.
+###     .concordance_eligible() - Genes eligible for the concordance tests: cis-class, both values defined and nonzero (with the .CIS_CLASSES and .PROMOTER_PREDICTED_SIGN constants).
+###     promoter_direction_test() - Tests whether a promoter feature's between-species direction matches the predicted direction of cis divergence (burst frequency primary, burst size with the sign flipped).
 ###     concordance_by_magnitude() - Splits an any-cis gene set into magnitude bins and computes concordance within each bin.
 ###     plot_concordance_by_magnitude() - Bar plot of concordance_by_magnitude()'s output, one bar per magnitude bin.
 ###     promoter_noise_candidates() - Lists genes with a cis noise component and a top-decile promoter-feature shift, with each gene's concordance flag, for manual inspection.
@@ -2279,6 +2279,15 @@ score_promoters_nupop <- function(seqs, occ_list, window = TATA.WINDOW) {
 ## significant cis permutation p-value by construction (classify_reg()).
 .CIS_CLASSES <- c("Cis", "Cis + Trans", "Compensatory")
 
+## Predicted sign of each tested quantity's cis contrast relative to the promoter shift delta (Se - Sc), the one
+## prespecified direction the concordance tests use. bfreq is the primary test: a higher TATA score or a longer
+## poly(dA:dT) tract goes with lower DISP (Section 6.2), and bfreq_cis_est = log2(DISP_Sc) - log2(DISP_Se), so
+## sign(delta) should equal sign(bfreq_cis_est) (+1). bsize is read from the identity log BSIZE = log MU - log DISP:
+## a feature that acts through DISP at fixed mean moves log BSIZE the opposite way, so sign(delta) should equal
+## -sign(bsize_cis_est) (-1). The bsize test follows from the bfreq prediction and the mean contrast enters it, so
+## it is a secondary check that carries no independent mechanism. kbal has no independent prediction and is not tested.
+.PROMOTER_PREDICTED_SIGN <- c(bfreq = 1, bsize = -1)
+
 ## Genes eligible for the promoter concordance tests: in a class with a cis component, with the
 ## promoter shift (delta) and the cis estimate both defined, and neither exactly 0 (a zero has no
 ## sign to match). Shared by promoter_direction_test() and concordance_by_magnitude().
@@ -2293,10 +2302,13 @@ score_promoters_nupop <- function(seqs, occ_list, window = TATA.WINDOW) {
 ## bfreq_cis_est = log2(DISP_Sc) - log2(DISP_Se), so a positive value means
 ## Se has the lower DISP and is the noisier allele, and the prediction is
 ## that Se carries the larger feature value, delta (Se - Sc) > 0. A gene is
-## concordant when sign(delta) == sign(<quantity>_cis_est). For quantity
-## "bsize" or "kbal" the same sign rule is applied to that contrast, so
-## concordance there asks whether delta shares the contrast's sign, which
-## is a direction assumption for those quantities.
+## concordant when sign(delta) == .PROMOTER_PREDICTED_SIGN[[quantity]] *
+## sign(<quantity>_cis_est). bfreq is the primary, prespecified test. For
+## quantity "bsize" the predicted sign is flipped (log BSIZE = log MU - log DISP),
+## so concordance there asks whether delta has the sign opposite to bsize_cis_est;
+## it is a secondary test that follows from the bfreq prediction (see
+## .PROMOTER_PREDICTED_SIGN). kbal is not tested. The result carries the
+## quantity and the predicted sign beside each feature.
 ##
 ## The test runs on the full any-cis gene set (cis_classes), without the
 ## arch_frac magnitude cutoff used by promoter_noise_candidates(), because
@@ -2306,17 +2318,18 @@ score_promoters_nupop <- function(seqs, occ_list, window = TATA.WINDOW) {
 ## discordant genes are equally likely. Genes with delta or estimate equal
 ## to 0 are dropped. A non-significant result means the candidate tables
 ## in Section 6.5 should be read with caution.
-promoter_direction_test <- function(BURST.CONTRASTS, PR, ARCH, reg_class, quantity = c("bfreq", "bsize", "kbal"), cis_classes = .CIS_CLASSES) {
+promoter_direction_test <- function(BURST.CONTRASTS, PR, ARCH, reg_class, quantity = c("bfreq", "bsize"), cis_classes = .CIS_CLASSES) {
   quantity <- match.arg(quantity)
   est <- BURST.CONTRASTS[[paste0(quantity, "_cis_est")]]
+  predicted_sign <- .PROMOTER_PREDICTED_SIGN[[quantity]]
   one_feature <- function(delta) {
     ok <- .concordance_eligible(delta, est, reg_class, cis_classes)
     n          <- sum(ok)
-    concordant <- sign(delta[ok]) == sign(est[ok])
+    concordant <- sign(delta[ok]) == predicted_sign * sign(est[ok])
     n_conc     <- sum(concordant)
     bt <- if (n > 0) binom.test(n_conc, n, p = 0.5, alternative = "greater")
           else list(p.value = NA_real_)
-    data.frame(n = n, n_concordant = n_conc,
+    data.frame(quantity = quantity, predicted_sign = predicted_sign, n = n, n_concordant = n_conc,
                frac_concordant = if (n > 0) n_conc / n else NA_real_,
                p = bt$p.value)
   }
@@ -2325,12 +2338,13 @@ promoter_direction_test <- function(BURST.CONTRASTS, PR, ARCH, reg_class, quanti
 
 ## Splits the any-cis gene set used by promoter_direction_test() into
 ## n_bins equal-count bins by |delta| and reports the fraction concordant
-## with the sign of cis_est in each bin. An effect confined to the most
+## with the predicted sign of the cis estimate in each bin (.PROMOTER_PREDICTED_SIGN[[quantity]]). An effect confined to the most
 ## divergent promoters is diluted in the whole-set test but appears here as
 ## concordance rising from the smallest to the largest |delta| bin; no
 ## rise suggests there is no signal at any magnitude. Eligibility
 ## (cis_classes membership, both values defined, neither exactly 0) is
-## rebuilt here so the function works on its own.
+## rebuilt here so the function works on its own. est is the cis estimate of
+## the tested quantity (bfreq_cis_est or bsize_cis_est).
 ##
 ## ci_lo/ci_hi are a normal-approximation 95% interval on each bin's
 ## proportion, adequate for the bin sizes this produces and meant only
@@ -2340,11 +2354,12 @@ promoter_direction_test <- function(BURST.CONTRASTS, PR, ARCH, reg_class, quanti
 ## one bin) come from a logistic regression of concordance on
 ## log(|delta|), the formal version of "is the rate rising toward the
 ## extremes" that the binned table and its plot show informally.
-concordance_by_magnitude <- function(delta, bfreq_cis_est, reg_class, cis_classes = .CIS_CLASSES, n_bins = 10) {
-  ok <- .concordance_eligible(delta, bfreq_cis_est, reg_class, cis_classes)
+concordance_by_magnitude <- function(delta, est, reg_class, quantity = c("bfreq", "bsize"), cis_classes = .CIS_CLASSES, n_bins = 10) {
+  quantity <- match.arg(quantity)
+  ok <- .concordance_eligible(delta, est, reg_class, cis_classes)
 
   d    <- abs(delta[ok])
-  conc <- sign(delta[ok]) == sign(bfreq_cis_est[ok])
+  conc <- sign(delta[ok]) == .PROMOTER_PREDICTED_SIGN[[quantity]] * sign(est[ok])
   ## Rank-based equal-count binning rather than cut(quantile(...)):
   ## poly(dA:dT) length differences take only a few small integer
   ## values, so quantile() breakpoints collide and cut() fails on
@@ -2367,6 +2382,7 @@ concordance_by_magnitude <- function(delta, bfreq_cis_est, reg_class, cis_classe
   agg$ci_hi <- pmin(1, agg$frac_concordant + 1.96 * se)
 
   fit <- glm(conc ~ log(d), family = binomial)
+  attr(agg, "quantity")   <- quantity
   attr(agg, "trend_coef") <- unname(coef(fit)[2])
   attr(agg, "trend_p")    <- unname(summary(fit)$coefficients[2, 4])
   agg
@@ -2417,12 +2433,13 @@ plot_concordance_by_magnitude <- function(cb, main = NULL) {
 ## allele-specific quantity a promoter difference should track. Cis, trans
 ## and total estimates and p/q-values are all kept, so the reg_class call
 ## can be reconciled. concordant flags whether the gene's delta sign
-## matches the direction tested in promoter_direction_test(); a discordant
+## matches the predicted direction tested in promoter_direction_test() (the predicted sign of
+## the quantity, .PROMOTER_PREDICTED_SIGN); a discordant
 ## gene can be a valid example but merits extra scrutiny. Raw values for
 ## both species (score or length, position, matched sequence) precede each
 ## feature's deltas, so an indel can be told apart from a substitution by
 ## reading the sequences in the table.
-promoter_noise_candidates <- function(BURST.CONTRASTS, PR, ARCH, reg_class, quantity = c("bfreq", "bsize", "kbal"), cis_classes = .CIS_CLASSES, arch_frac = 0.90) {
+promoter_noise_candidates <- function(BURST.CONTRASTS, PR, ARCH, reg_class, quantity = c("bfreq", "bsize"), cis_classes = .CIS_CLASSES, arch_frac = 0.90) {
   quantity <- match.arg(quantity)
   stopifnot(nrow(BURST.CONTRASTS) == nrow(ARCH), nrow(BURST.CONTRASTS) == length(reg_class))
 
@@ -2473,7 +2490,7 @@ promoter_noise_candidates <- function(BURST.CONTRASTS, PR, ARCH, reg_class, quan
     keep  <- cis_flag & !is.na(delta) & abs(delta) >= cut
     keep[is.na(keep)] <- FALSE
     ## Columns shared by all three tables: gene, regulatory class and the cis, trans and total
-    ## estimates, p-values and q-values. Names carry the quantity prefix (bfreq_, bsize_ or kbal_) so a
+    ## estimates, p-values and q-values. Names carry the quantity prefix (bfreq_ or bsize_) so a
     ## table states which axis it was built from.
     ctx <- data.frame(
       gene      = BURST.CONTRASTS$gene[keep],
@@ -2488,7 +2505,7 @@ promoter_noise_candidates <- function(BURST.CONTRASTS, PR, ARCH, reg_class, quan
     arch_prom    <- as.data.frame(ARCH[prom_cols], stringsAsFactors = FALSE)[keep, , drop = FALSE]
     row.names(arch_feature) <- row.names(arch_prom) <- NULL
     out <- cbind(ctx, arch_feature,
-                 data.frame(concordant = sign(delta[keep]) == sign(est_cis[keep])),
+                 data.frame(concordant = sign(delta[keep]) == .PROMOTER_PREDICTED_SIGN[[quantity]] * sign(est_cis[keep])),
                  arch_prom)
     out[order(-abs(out[[est_col]])), ]
   })

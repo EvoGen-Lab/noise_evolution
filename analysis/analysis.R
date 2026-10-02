@@ -1714,87 +1714,73 @@ ARCH <- local({
 })
 ARCH <- ARCH[match(BURST.CONTRASTS$gene, ARCH$gene), ]
 
-## 6.4 Directional concordance: does the promoter shift point the right way? (burst frequency, burst size, frequency-size balance)
-# Tests whether the allele that gained more accessibility is the noisier
-# allele in the hybrid, across all three features at once
-# (promoter_direction_test()), separately for burst frequency, burst
-# size, and kinetic balance.
+## 6.4 Directional concordance: does the promoter shift point the right way? (burst frequency primary, burst size secondary)
+# Tests whether the allele with the stronger promoter feature carries the predicted noise
+# direction, across all three features (promoter_direction_test()). Burst frequency is the
+# primary, prespecified test: sign(delta) = sign(bfreq_cis_est), since a stronger TATA box or
+# longer poly(dA:dT) tract goes with lower DISP (Section 6.2). Burst size is the secondary test
+# with the sign flipped, sign(delta) = -sign(bsize_cis_est), from log BSIZE = log MU - log DISP: a feature
+# acting through DISP at fixed mean moves BSIZE the other way. The bsize test follows from the
+# bfreq prediction and is read with the mean contrast in mind. Frequency-size balance (kbal) has no independent
+# prediction and is not tested (.PROMOTER_PREDICTED_SIGN).
 PROM.DIRECTION.TEST.BFREQ <- promoter_direction_test(BURST.CONTRASTS, PR, ARCH, REG.VEC$bfreq, quantity = "bfreq")
 PROM.DIRECTION.TEST.BSIZE <- promoter_direction_test(BURST.CONTRASTS, PR, ARCH, REG.VEC$bsize, quantity = "bsize")
-PROM.DIRECTION.TEST.KBAL  <- promoter_direction_test(BURST.CONTRASTS, PR, ARCH, REG.VEC$kbal,  quantity = "kbal")
 print(PROM.DIRECTION.TEST.BFREQ)
 print(PROM.DIRECTION.TEST.BSIZE)
-print(PROM.DIRECTION.TEST.KBAL)
 
 # Does concordance rise toward the largest promoter shifts? Bins the
 # same gene set by |delta| magnitude and checks whether concordance
-# rises from the smallest bin toward the largest, for burst frequency,
-# burst size, and kinetic balance
-TATA.CONCORD.BINS.BFREQ   <- concordance_by_magnitude(ARCH$tata_delta,        BURST.CONTRASTS$bfreq_cis_est, REG.VEC$bfreq)
-POLYAT.CONCORD.BINS.BFREQ <- concordance_by_magnitude(ARCH$polyat_delta,      BURST.CONTRASTS$bfreq_cis_est, REG.VEC$bfreq)
-OCC.CONCORD.BINS.BFREQ    <- concordance_by_magnitude(ARCH$occ_access_delta,  BURST.CONTRASTS$bfreq_cis_est, REG.VEC$bfreq)
-TATA.CONCORD.BINS.BSIZE   <- concordance_by_magnitude(ARCH$tata_delta,        BURST.CONTRASTS$bsize_cis_est, REG.VEC$bsize)
-POLYAT.CONCORD.BINS.BSIZE <- concordance_by_magnitude(ARCH$polyat_delta,      BURST.CONTRASTS$bsize_cis_est, REG.VEC$bsize)
-OCC.CONCORD.BINS.BSIZE    <- concordance_by_magnitude(ARCH$occ_access_delta,  BURST.CONTRASTS$bsize_cis_est, REG.VEC$bsize)
-TATA.CONCORD.BINS.KBAL    <- concordance_by_magnitude(ARCH$tata_delta,        BURST.CONTRASTS$kbal_cis_est,  REG.VEC$kbal)
-POLYAT.CONCORD.BINS.KBAL  <- concordance_by_magnitude(ARCH$polyat_delta,      BURST.CONTRASTS$kbal_cis_est,  REG.VEC$kbal)
-OCC.CONCORD.BINS.KBAL     <- concordance_by_magnitude(ARCH$occ_access_delta,  BURST.CONTRASTS$kbal_cis_est,  REG.VEC$kbal)
+# rises from the smallest bin toward the largest, for burst frequency
+# (primary) and burst size (predicted sign flipped)
+TATA.CONCORD.BINS.BFREQ   <- concordance_by_magnitude(ARCH$tata_delta,        BURST.CONTRASTS$bfreq_cis_est, REG.VEC$bfreq, quantity = "bfreq")
+POLYAT.CONCORD.BINS.BFREQ <- concordance_by_magnitude(ARCH$polyat_delta,      BURST.CONTRASTS$bfreq_cis_est, REG.VEC$bfreq, quantity = "bfreq")
+OCC.CONCORD.BINS.BFREQ    <- concordance_by_magnitude(ARCH$occ_access_delta,  BURST.CONTRASTS$bfreq_cis_est, REG.VEC$bfreq, quantity = "bfreq")
+TATA.CONCORD.BINS.BSIZE   <- concordance_by_magnitude(ARCH$tata_delta,        BURST.CONTRASTS$bsize_cis_est, REG.VEC$bsize, quantity = "bsize")
+POLYAT.CONCORD.BINS.BSIZE <- concordance_by_magnitude(ARCH$polyat_delta,      BURST.CONTRASTS$bsize_cis_est, REG.VEC$bsize, quantity = "bsize")
+OCC.CONCORD.BINS.BSIZE    <- concordance_by_magnitude(ARCH$occ_access_delta,  BURST.CONTRASTS$bsize_cis_est, REG.VEC$bsize, quantity = "bsize")
 cat("\n-- TATA score: concordance by magnitude, burst frequency --\n")
 print(TATA.CONCORD.BINS.BFREQ)
 cat("\n-- poly(dA:dT) length: concordance by magnitude, burst frequency --\n")
 print(POLYAT.CONCORD.BINS.BFREQ)
 cat("\n-- nucleosome occupancy (NuPoP): concordance by magnitude, burst frequency --\n")
 print(OCC.CONCORD.BINS.BFREQ)
-cat("\n-- TATA score: concordance by magnitude, burst size --\n")
+cat("\n-- TATA score: concordance by magnitude, burst size (predicted sign flipped) --\n")
 print(TATA.CONCORD.BINS.BSIZE)
-cat("\n-- poly(dA:dT) length: concordance by magnitude, burst size --\n")
+cat("\n-- poly(dA:dT) length: concordance by magnitude, burst size (predicted sign flipped) --\n")
 print(POLYAT.CONCORD.BINS.BSIZE)
-cat("\n-- nucleosome occupancy (NuPoP): concordance by magnitude, burst size --\n")
+cat("\n-- nucleosome occupancy (NuPoP): concordance by magnitude, burst size (predicted sign flipped) --\n")
 print(OCC.CONCORD.BINS.BSIZE)
-cat("\n-- TATA score: concordance by magnitude, frequency-size balance --\n")
-print(TATA.CONCORD.BINS.KBAL)
-cat("\n-- poly(dA:dT) length: concordance by magnitude, frequency-size balance --\n")
-print(POLYAT.CONCORD.BINS.KBAL)
-cat("\n-- nucleosome occupancy (NuPoP): concordance by magnitude, frequency-size balance --\n")
-print(OCC.CONCORD.BINS.KBAL)
 
-fig_pdf("extra/S_promoter_concordance_by_magnitude.pdf", 13, 13)
-par(mfrow = c(3, 3))
+fig_pdf("extra/S_promoter_concordance_by_magnitude.pdf", 13, 9)
+par(mfrow = c(2, 3))
 plot_concordance_by_magnitude(TATA.CONCORD.BINS.BFREQ,   main = "TATA (burst frequency)")
 plot_concordance_by_magnitude(POLYAT.CONCORD.BINS.BFREQ, main = "poly(dA:dT) (burst frequency)")
 plot_concordance_by_magnitude(OCC.CONCORD.BINS.BFREQ,    main = "nucleosome occupancy (burst frequency)")
-plot_concordance_by_magnitude(TATA.CONCORD.BINS.BSIZE,   main = "TATA (burst size)")
-plot_concordance_by_magnitude(POLYAT.CONCORD.BINS.BSIZE, main = "poly(dA:dT) (burst size)")
-plot_concordance_by_magnitude(OCC.CONCORD.BINS.BSIZE,    main = "nucleosome occupancy (burst size)")
-plot_concordance_by_magnitude(TATA.CONCORD.BINS.KBAL,    main = "TATA (frequency-size balance)")
-plot_concordance_by_magnitude(POLYAT.CONCORD.BINS.KBAL,  main = "poly(dA:dT) (frequency-size balance)")
-plot_concordance_by_magnitude(OCC.CONCORD.BINS.KBAL,     main = "nucleosome occupancy (frequency-size balance)")
+plot_concordance_by_magnitude(TATA.CONCORD.BINS.BSIZE,   main = "TATA (burst size, sign flipped)")
+plot_concordance_by_magnitude(POLYAT.CONCORD.BINS.BSIZE, main = "poly(dA:dT) (burst size, sign flipped)")
+plot_concordance_by_magnitude(OCC.CONCORD.BINS.BSIZE,    main = "nucleosome occupancy (burst size, sign flipped)")
 dev.off()
 
-## 6.5 Candidate genes (burst frequency, burst size, frequency-size balance)
+## 6.5 Candidate genes (burst frequency, burst size)
 # Intersects a significant cis component of divergence (Cis, Cis +
 # Trans, or Compensatory) with a large shift in a promoter feature,
-# ranked by |<quantity>_cis_est|. 
+# ranked by |<quantity>_cis_est|. The concordant column follows the predicted sign of each quantity
+# (burst frequency: same sign as the cis estimate; burst size: opposite sign).
 PROM.NOISE.CANDIDATES.BFREQ <- promoter_noise_candidates(BURST.CONTRASTS, PR, ARCH, REG.VEC$bfreq, quantity = "bfreq")
 PROM.NOISE.CANDIDATES.BSIZE <- promoter_noise_candidates(BURST.CONTRASTS, PR, ARCH, REG.VEC$bsize, quantity = "bsize")
-PROM.NOISE.CANDIDATES.KBAL  <- promoter_noise_candidates(BURST.CONTRASTS, PR, ARCH, REG.VEC$kbal,  quantity = "kbal")
 write.csv(PROM.NOISE.CANDIDATES.BFREQ$tata,   file.path(TABLE.DIR, "tata_bfreq_candidates.csv"),   row.names = FALSE)
 write.csv(PROM.NOISE.CANDIDATES.BFREQ$polyat, file.path(TABLE.DIR, "polyat_bfreq_candidates.csv"), row.names = FALSE)
 write.csv(PROM.NOISE.CANDIDATES.BFREQ$occ,    file.path(TABLE.DIR, "occ_bfreq_candidates.csv"),    row.names = FALSE)
 write.csv(PROM.NOISE.CANDIDATES.BSIZE$tata,   file.path(TABLE.DIR, "tata_bsize_candidates.csv"),   row.names = FALSE)
 write.csv(PROM.NOISE.CANDIDATES.BSIZE$polyat, file.path(TABLE.DIR, "polyat_bsize_candidates.csv"), row.names = FALSE)
 write.csv(PROM.NOISE.CANDIDATES.BSIZE$occ,    file.path(TABLE.DIR, "occ_bsize_candidates.csv"),    row.names = FALSE)
-write.csv(PROM.NOISE.CANDIDATES.KBAL$tata,    file.path(TABLE.DIR, "tata_kbal_candidates.csv"),    row.names = FALSE)
-write.csv(PROM.NOISE.CANDIDATES.KBAL$polyat,  file.path(TABLE.DIR, "polyat_kbal_candidates.csv"),  row.names = FALSE)
-write.csv(PROM.NOISE.CANDIDATES.KBAL$occ,     file.path(TABLE.DIR, "occ_kbal_candidates.csv"),     row.names = FALSE)
 
 # Checkpoint
 save(SCORE.SC, SCORE.SE, ARCH, NOISE.VALIDATE,
-     PROM.DIRECTION.TEST.BFREQ, PROM.DIRECTION.TEST.BSIZE, PROM.DIRECTION.TEST.KBAL,
+     PROM.DIRECTION.TEST.BFREQ, PROM.DIRECTION.TEST.BSIZE,
      TATA.CONCORD.BINS.BFREQ, POLYAT.CONCORD.BINS.BFREQ, OCC.CONCORD.BINS.BFREQ,
      TATA.CONCORD.BINS.BSIZE, POLYAT.CONCORD.BINS.BSIZE, OCC.CONCORD.BINS.BSIZE,
-     TATA.CONCORD.BINS.KBAL, POLYAT.CONCORD.BINS.KBAL, OCC.CONCORD.BINS.KBAL,
-     PROM.NOISE.CANDIDATES.BFREQ, PROM.NOISE.CANDIDATES.BSIZE, PROM.NOISE.CANDIDATES.KBAL,
+     PROM.NOISE.CANDIDATES.BFREQ, PROM.NOISE.CANDIDATES.BSIZE,
      file = ckpt_path(6))
 
 console_start(7)

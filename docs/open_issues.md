@@ -13,7 +13,6 @@ Source: `docs/function_review.md` (item numbers refer to its section 3), re-chec
 
 | Review # | Where | Issue |
 |---|---|---|
-| 12 | `promoter_direction_test`, `concordance_by_magnitude`, `promoter_noise_candidates` | "Concordant" means the same sign as cis for every quantity, but that prediction was derived for burst frequency. bsize and kbal tails need a decision. |
 | 16 | `coexpr_rank_check` | `eigen()` orders by signed value, `coexpr_candidate_axes` and `coexpr_axis_validate` by absolute value. |
 | 17 | `kbal_sig`, `plot_burst_kinetics_sig` | Gene-level test uses nominal `p < sig`; the rest of the pipeline uses BH q. |
 | 18 | `species_composition_bound` | Label says residual SD, comment says variance fraction; the Wilcoxon p-value is invalid for paired allele cells. |
