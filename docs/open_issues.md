@@ -13,13 +13,7 @@ Source: `docs/function_review.md` (item numbers refer to its section 3), re-chec
 
 | Review # | Where | Issue |
 |---|---|---|
-| 18 | `species_composition_bound` | Label says residual SD, comment says variance fraction; the Wilcoxon p-value is invalid for paired allele cells. |
-| 19 | `within_between_decomp` and plots | No NA check on `clusters`; divisor n instead of n - 1; plots drop genes with ratio <= 0. |
-| 20 | `map_to_orf` | `YAL047C.A` is passed through unchanged while `NB.SC` uses the hyphen form, so those genes drop out of the Jackson merge. |
-| 21 | `add_burst_terms` | Mean x CV2 is a Fano factor only on a count scale; the fluorescence sources depend on instrument units. Also `d$Fano` overwrites the source's own column. |
 | 22 | `metabolic_state_cluster` | k-means unseeded; the silhouette-scored fit is discarded and refit. |
-| 23 | `run_enrichment` | `pvalueCutoff` stays 0.05 while `qval` feeds only `qvalueCutoff`. |
-| 24 | `coexpr_axis_mixtures` | `normalmixEM` unseeded. |
 
 ## C. Robustness, no numeric change
 

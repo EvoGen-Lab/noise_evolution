@@ -14,7 +14,7 @@
 ###
 ### Outline (function name - purpose):
 ###     cor_row() - Spearman rank correlation between two vectors, with pairwise-complete filtering; returns one row (n, rho, p).
-###     add_burst_terms() - Implied Fano factor, burst size, and burst frequency algebraically recovered from a reported mean and CV^2.
+###     add_burst_terms() - Implied Fano factor (Fano_implied), burst size, and burst frequency algebraically recovered from a reported mean and CV^2; count scale, or relative units where only rank statistics on burst size apply.
 ###     read_header_line() - Header line of a delimited file as a character vector, with quotes stripped.
 ###     get_data_header() - Sample/gene names of a file's header with the row-id field removed, whichever header convention the file uses.
 ###     fread_matrix() - Fast row-named numeric matrix reader (fread based) with column selection.
@@ -37,6 +37,7 @@ cor_row <- function(x, y) {
   keep <- is.finite(x) & is.finite(y)
   # exact = FALSE selects the asymptotic t approximation for the Spearman
   # p-value, which remains valid when the ranks contain ties.
+  if (sum(keep) < 3) return(data.frame(n = sum(keep), rho = NA_real_, p = NA_real_))
   ct <- suppressWarnings(cor.test(x[keep], y[keep], method = "spearman", exact = FALSE))
   data.frame(n = sum(keep), rho = unname(ct$estimate), p = ct$p.value)
 }
@@ -45,20 +46,31 @@ cor_row <- function(x, y) {
 ## reported mean and CV^2, for a data frame with columns Mean and CV2. The NB
 ## identity used for MIX.SC runs in reverse: Fano = mean * CV^2, burst size =
 ## Fano - 1, burst frequency = mean / (Fano - 1). This is an algebraic
-## transform of the reported summary statistics, not a re-fit. Fano <= 1
-## (sub-Poissonian) is read as measurement noise and gives NA burst terms.
-## Interpretive caveats: burst size and frequency are mRNA-level kinetic
-## constructs while the protein-level sources add translational and
-## degradation noise; and for arbitrary-unit fluorescence the product
-## mean * CV^2 carries the instrument's units, so the Fano > 1 gate and the
-## burst values are relative quantities. The Fano column is overwritten with
-## mean * CV^2 so every source uses one definition.
-add_burst_terms <- function(d) {
+## transform of the reported summary statistics, not a re-fit. The implied Fano
+## factor goes in Fano_implied; a Fano column the source carries is left as it was.
+## Burst size and frequency are mRNA-level kinetic constructs while the
+## protein-level sources add translational and degradation noise.
+## scale = "count" (counts or molecules): Fano <= 1 (sub-Poissonian) is read as
+## measurement noise and gives NA burst terms.
+## scale = "relative" (arbitrary-unit fluorescence): mean * CV^2 carries the
+## instrument's gain c, so Fano > 1 gating, Fano - 1 and mean / (Fano - 1) are not
+## unit-free (the last is not even rank-invariant to c). BFREQ is NA, and BSIZE holds the
+## implied Fano factor itself, which ranks the genes exactly as Fano - 1 does, so only
+## rank statistics (Spearman) on BSIZE are meaningful. CV^2 and the mean-adjusted noise
+## are the unit-free comparisons for these sources.
+add_burst_terms <- function(d, scale = c("count", "relative")) {
+  scale <- match.arg(scale)
+  stopifnot(all(c("Mean", "CV2") %in% names(d)))
   fano <- d$Mean * d$CV2
-  ok <- fano > 1
-  d$Fano  <- fano
-  d$BSIZE <- ifelse(ok, fano - 1, NA_real_)
-  d$BFREQ <- ifelse(ok, d$Mean / (fano - 1), NA_real_)
+  d$Fano_implied <- fano
+  if (scale == "relative") {
+    d$BSIZE <- fano
+    d$BFREQ <- NA_real_
+  } else {
+    ok <- fano > 1
+    d$BSIZE <- ifelse(ok, fano - 1, NA_real_)
+    d$BFREQ <- ifelse(ok, d$Mean / (fano - 1), NA_real_)
+  }
   d
 }
 
@@ -160,6 +172,9 @@ map_to_orf <- function(ids, label = "") {
       })
     out[!is.orf] <- unname(looked.up[match(ids[!is.orf], need)])
   }
+  ## One spelling of the dubious-ORF suffix (YAL047C-A), the form NB.SC and org.Sc.sgd.db use
+  out <- sub("\\.(?=[A-Z]$)", "-", out, perl = TRUE)
+  stopifnot(!any(grepl("\\.[A-Z]$", out)))
   n.unresolved <- sum(is.na(out))
   if (n.unresolved > 0)
     message(label, ": ", n.unresolved, " of ", length(out), " row(s) did not resolve to an ORF and will be dropped")

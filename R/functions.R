@@ -1484,39 +1484,44 @@ build_component_go_sets <- function(BURST.CONTRASTS, PR, universe, component = c
 ## fixed universe. Genes outside the universe are dropped; sets with fewer than 2 genes after
 ## intersection return all-NULL without calling enrichGO/enrichKEGG. kegg_data (from
 ## kegg_local()) runs KEGG offline through enricher() with enrichKEGG()'s defaults (BH,
-## p < 0.05, gene-set size 10 to 500). Results for small sets (roughly under 10-15 genes) are
+## gene-set size 10 to 500). Every term is judged on its Benjamini-Hochberg adjusted p-value
+## (p.adjust) alone: fdr is the BH cutoff (passed as pvalueCutoff, which clusterProfiler applies to
+## p.adjust) and the Storey q-value cutoff is left open (qvalueCutoff = 1), so the qvalue column
+## never filters terms and is not used. Results for small sets (roughly under 10-15 genes) are
 ## exploratory; the direction-split class sets (e.g. Compensatory_Se) are the most likely to
 ## be that small, and n_genes in the summary table flags it.
-run_enrichment <- function(genes, universe, orgdb = org.Sc.sgd.db, keytype = "ORF", kegg_org = "sce", qval = 0.2, kegg_data = NULL) {
+run_enrichment <- function(genes, universe, orgdb = org.Sc.sgd.db, keytype = "ORF", kegg_org = "sce", fdr = 0.2, kegg_data = NULL) {
+  stopifnot(is.numeric(fdr), length(fdr) == 1, fdr > 0, fdr <= 1)
   genes    <- unique(genes[!is.na(genes)])
   universe <- unique(universe[!is.na(universe)])
   genes    <- intersect(genes, universe)
   if (length(genes) < 2) return(list(BP = NULL, CC = NULL, MF = NULL, KEGG = NULL))
   go_one <- function(ont) {
-    tryCatch(simplify(enrichGO(gene = genes, universe = universe, OrgDb = orgdb, keyType = keytype, ont = ont, qvalueCutoff = qval)), error = function(e) NULL)
+    tryCatch(simplify(enrichGO(gene = genes, universe = universe, OrgDb = orgdb, keyType = keytype, ont = ont, pvalueCutoff = fdr, qvalueCutoff = 1)), error = function(e) NULL)
   }
-  kegg <- tryCatch(if (is.null(kegg_data)) enrichKEGG(gene = genes, universe = universe, organism = kegg_org, keyType = "kegg", qvalueCutoff = qval)
+  kegg <- tryCatch(if (is.null(kegg_data)) enrichKEGG(gene = genes, universe = universe, organism = kegg_org, keyType = "kegg", pvalueCutoff = fdr, qvalueCutoff = 1)
                    else enricher(gene = genes, universe = universe, TERM2GENE = kegg_data$KEGGPATHID2EXTID,
-                                 TERM2NAME = kegg_data$KEGGPATHID2NAME, qvalueCutoff = qval),
+                                 TERM2NAME = kegg_data$KEGGPATHID2NAME, pvalueCutoff = fdr, qvalueCutoff = 1),
                    error = function(e) NULL)
   list(BP = go_one("BP"), CC = go_one("CC"), MF = go_one("MF"), KEGG = kegg)
 }
 
 ## axis_pole_enrichment: GO (BP, MF or CC, simplified) or KEGG enrichment of one pole of a co-expression axis
-## (genes) against the co-expressed universe, at enrichGO()/enrichKEGG()'s default cutoffs. A pole with fewer
-## than min_genes genes returns NULL without testing.
-axis_pole_enrichment <- function(genes, universe, ont = c("BP", "MF", "CC", "KEGG"), min_genes = 0) {
+## (genes) against the co-expressed universe, at a Benjamini-Hochberg cutoff fdr on p.adjust (the Storey q-value
+## cutoff is left open). A pole with fewer than min_genes genes returns NULL without testing.
+axis_pole_enrichment <- function(genes, universe, ont = c("BP", "MF", "CC", "KEGG"), min_genes = 0, fdr = 0.05) {
   ont <- match.arg(ont)
+  stopifnot(is.numeric(fdr), length(fdr) == 1, fdr > 0, fdr <= 1)
   if (length(genes) < min_genes) return(NULL)
-  if (ont == "KEGG") enrichKEGG(gene = genes, universe = universe, organism = "sce")
-  else simplify(enrichGO(gene = genes, universe = universe, OrgDb = org.Sc.sgd.db, keyType = "ORF", ont = ont))
+  if (ont == "KEGG") enrichKEGG(gene = genes, universe = universe, organism = "sce", pvalueCutoff = fdr, qvalueCutoff = 1)
+  else simplify(enrichGO(gene = genes, universe = universe, OrgDb = org.Sc.sgd.db, keyType = "ORF", ont = ont, pvalueCutoff = fdr, qvalueCutoff = 1))
 }
 
-## n_sig_terms: number of terms at qvalue < q in one enrichResult, 0 for a
+## n_sig_terms: number of terms at BH q (p.adjust) < q in one enrichResult, 0 for a
 ## NULL or empty result (a set too small to test, or no hits)
 n_sig_terms <- function(e, q = 0.2) {
   if (is.null(e) || is.null(e@result) || nrow(e@result) == 0) return(0L)
-  sum(e@result$qvalue < q, na.rm = TRUE)
+  sum(e@result$p.adjust < q, na.rm = TRUE)
 }
 
 ## print_enrich_brief: console-friendly view of one enrichResult, since
@@ -1524,13 +1529,13 @@ n_sig_terms <- function(e, q = 0.2) {
 ## separated gene list per term) and R's console truncates that to
 ## fit width, hiding exactly the columns worth reading. Shows only
 ## Description, p.adjust, and Count, for the n_top most significant
-## terms at qvalue < q. Prints one line and returns invisibly for a
+## terms at BH q (p.adjust) < q. Prints one line and returns invisibly for a
 ## NULL result or one with nothing significant, rather than an empty
 ## table with no explanation.
 print_enrich_brief <- function(e, q = 0.2, n_top = 10) {
   if (is.null(e) || is.null(e@result) || nrow(e@result) == 0) { cat("  (no terms tested)\n"); return(invisible(NULL)) }
-  tab <- e@result[e@result$qvalue < q, c("Description", "p.adjust", "Count"), drop = FALSE]
-  if (nrow(tab) == 0) { cat(sprintf("  (0 terms at qvalue < %.2f)\n", q)); return(invisible(NULL)) }
+  tab <- e@result[e@result$p.adjust < q, c("Description", "p.adjust", "Count"), drop = FALSE]
+  if (nrow(tab) == 0) { cat(sprintf("  (0 terms at BH q < %g)\n", q)); return(invisible(NULL)) }
   tab <- tab[order(tab$p.adjust), ][seq_len(min(n_top, nrow(tab))), ]
   tab$p.adjust <- signif(tab$p.adjust, 3)
   print(tab, row.names = FALSE)
@@ -1755,33 +1760,47 @@ plot_covariate_noise_diagnostic <- function(diag_df, label) {
 ## cell-cycle axis and on each metabolic module score for one species/allele
 ## pair. The effect size for each axis is the larger of the two views' median
 ## per-gene 8g effect sizes, so the bound reflects the stronger covariate
-## dependence of the two. For the metabolic scores sqrt(median eta-squared)
+## dependence of the two. The result's bound_sd is an expected shift in residual-SD units (|Cohen's d| x
+## effect size). For the metabolic scores sqrt(median eta-squared)
 ## is the effect size: eta-squared is the categorical analog of a squared
 ## correlation, so its square root is on the same standardized scale as
 ## Cohen's d and the cell-cycle rho
-species_composition_report <- function(cc1, cc2, met1, met2, diag1, diag2, label) {
+species_composition_report <- function(cc1, cc2, met1, met2, diag1, diag2, label, paired = FALSE) {
   ## A small covariate-noise effect (8g) rules out a cell-state confound on the
   ## cross-species comparison only if the two species also differ little in
   ## composition along that axis. Each axis (the cell-cycle axis, or one
   ## metabolic module score) is compared between two species/allele views by
-  ## Cohen's d and a rank-sum test. Multiplying |d| by the matching 8g
-  ## effect size gives the expected shift, in residual-SD units, that a
-  ## composition difference of that size can produce (a linear, bivariate-
-  ## normal approximation: E[Y | X shifted by d SD] = rho * d SD). The bound
-  ## sizes the confound; it is not a refit or a test of any specific contrast
-  species_composition_bound <- function(x1, x2, effect_size, label, axis_label) {
+  ## Cohen's d (pooled SD, so d is the composition shift in SD units of the axis) and a rank test.
+  ## Multiplying |d| by the matching 8g effect size (a correlation) gives the expected shift, in
+  ## residual-SD units, that a composition difference of that size can produce (a linear, bivariate-
+  ## normal approximation: E[Y | X shifted by d SD] = rho * d SD). That shift (bound_sd) is not a share
+  ## of residual variance; the variance share would be roughly its square. The bound sizes the
+  ## confound; it is not a refit or a test of any specific contrast. With thousands of cells any
+  ## test rejects, so the p-value is descriptive and the bound is the informative output.
+  ## paired = FALSE compares different cells (the parents) with the rank-sum test. paired = TRUE
+  ## compares two views of the same cells (the Sc and Se alleles of the hybrid cells): the values
+  ## are matched by cell name and the signed-rank test is used, since the rank-sum test would
+  ## treat the 2n paired values as independent samples. Cohen's d keeps the pooled SD in both cases
+  ## (a paired d_z would inflate the bound with the allele correlation).
+  species_composition_bound <- function(x1, x2, effect_size, label, axis_label, paired) {
+    if (paired) {
+      stopifnot(!is.null(names(x1)), !is.null(names(x2)), setequal(names(x1), names(x2)))
+      x2 <- x2[names(x1)]
+    }
     d     <- (mean(x1, na.rm = TRUE) - mean(x2, na.rm = TRUE)) / sqrt((var(x1, na.rm = TRUE) + var(x2, na.rm = TRUE)) / 2)
-    wt    <- wilcox.test(x1, x2)
-    bound <- abs(d) * effect_size
-    cat(sprintf("%s, %s: Cohen's d = %.3f (Wilcoxon p = %.2g), noise-association effect size = %.3f, bound on expected noise shift = %.3f SD\n",
-                label, axis_label, d, wt$p.value, effect_size, bound))
-    data.frame(label = label, axis = axis_label, cohens_d = d, wilcox_p = wt$p.value, effect_size = effect_size, bound = bound)
+    ok    <- is.finite(x1) & is.finite(x2)
+    test  <- if (paired) "signed-rank" else "rank-sum"
+    wt    <- if (paired) wilcox.test(x1[ok], x2[ok], paired = TRUE, exact = FALSE) else wilcox.test(x1, x2, exact = FALSE)
+    bound_sd <- abs(d) * effect_size
+    cat(sprintf("%s, %s: Cohen's d = %.3f (%s p = %.2g, descriptive), noise-association effect size = %.3f, bound on expected noise shift = %.3f residual SD\n",
+                label, axis_label, d, test, wt$p.value, effect_size, bound_sd))
+    data.frame(label = label, axis = axis_label, cohens_d = d, test = test, test_p = wt$p.value, effect_size = effect_size, bound_sd = bound_sd)
   }
 
   cc_effect  <- max(median(abs(diag1$cc_rho), na.rm = TRUE), median(abs(diag2$cc_rho), na.rm = TRUE))
   met_effect <- sqrt(max(median(diag1$met_eta, na.rm = TRUE), median(diag2$met_eta, na.rm = TRUE)))
-  rows <- list(species_composition_bound(cc1, cc2, cc_effect, label, "cell-cycle axis"))
-  for (sn in colnames(met1)) rows[[length(rows) + 1]] <- species_composition_bound(met1[, sn], met2[, sn], met_effect, label, sn)
+  rows <- list(species_composition_bound(cc1, cc2, cc_effect, label, "cell-cycle axis", paired))
+  for (sn in colnames(met1)) rows[[length(rows) + 1]] <- species_composition_bound(met1[, sn], met2[, sn], met_effect, label, sn, paired)
   do.call(rbind, rows)
 }
 
@@ -2813,28 +2832,42 @@ load_replicates <- function(stem, object, n_rep, expected, size = nrow, script =
 ## subtracting shot noise, the "intrinsic-like" analog.
 ##
 ## mat: genes x cells count matrix. expo: per-cell exposure (same column
-## order as mat). clusters: per-cell cluster label (same order).
+## order as mat). clusters: per-cell cluster label (same order, no NA).
+## Clusters with fewer than min_cells cells (at least 2, the least a variance
+## needs) are left out with a message, and the weights and the gene means
+## are computed over the remaining cells.
 ##
-## Shot noise is subtracted from the within-cluster component only:
-## between-cluster differences are differences in cluster MEANS, which
-## are not directly inflated by per-cell Poisson sampling noise the way
-## within-cluster variance is. This ignores the smaller, n_c-dependent
-## sampling noise of the group means themselves; worth revisiting if
-## small clusters turn out to matter for this specific comparison.
+## Within-cluster variance uses the sample divisor n_c - 1, so small clusters do not
+## understate it. Shot noise is subtracted from the within-cluster component:
+## per-cell Poisson sampling noise inflates within-cluster variance. The
+## between-cluster component is the variance of the cluster means, and each
+## mean carries its own sampling noise (the cluster's total within variance
+## divided by n_c), which is subtracted so small clusters do not inflate the
+## between-cluster variance. Both corrections make the pair an unbiased
+## estimate rather than an exact partition of the total variance.
 ## var_within can come out slightly negative for a gene whose true
 ## biological within-cluster variance is near zero (shot noise
 ## subtraction is only unbiased on average, not gene by gene); it is
 ## returned as-is for transparency and only floored at zero where used
 ## as a ratio, the same convention intrinsic_extrinsic_components() uses
-## for extr.
+## for extr. var_between can likewise come out at or below zero after its
+## correction; the ratio is then NA.
 ##
 ## Returns a list: table (one row per gene: var_within, var_between,
 ## ratio_within_between) and cluster_n (one row per cluster: cell
-## count), so cluster sizes travel with the result rather than being
-## dropped after this step.
-within_between_decomp <- function(mat, expo, clusters) {
-  stopifnot(ncol(mat) == length(expo), ncol(mat) == length(clusters))
+## count and whether the cluster entered the decomposition), so cluster
+## sizes travel with the result rather than being dropped after this step.
+within_between_decomp <- function(mat, expo, clusters, min_cells = 2) {
+  stopifnot(ncol(mat) == length(expo), ncol(mat) == length(clusters), !anyNA(clusters),
+            is.numeric(min_cells), length(min_cells) == 1, min_cells >= 2)
   cl        <- as.character(clusters)
+  n_all     <- table(cl)
+  small     <- names(n_all)[n_all < min_cells]
+  if (length(small) > 0) {
+    message(sprintf("within_between_decomp(): leaving out %d cluster(s) with fewer than %d cells (%s)", length(small), min_cells, paste(small, collapse = ", ")))
+    use  <- !(cl %in% small)
+    mat  <- mat[, use, drop = FALSE]; expo <- expo[use]; cl <- cl[use]
+  }
   cl_levels <- sort(unique(cl))
   n_c       <- table(cl)[cl_levels]
   N         <- ncol(mat)
@@ -2849,21 +2882,22 @@ within_between_decomp <- function(mat, expo, clusters) {
   var_between <- numeric(nrow(mat))
   for (cc in cl_levels) {
     idx   <- which(cl == cc)
-    w     <- length(idx) / N
+    n     <- length(idx)
+    w     <- n / N
     cmean <- rowMeans(ap[, idx, drop = FALSE])
-    cvar  <- rowMeans((ap[, idx, drop = FALSE] - cmean)^2)
+    cvar  <- rowSums((ap[, idx, drop = FALSE] - cmean)^2) / (n - 1)
     cshot <- rowMeans(shot_cell[, idx, drop = FALSE])
     raw_within  <- raw_within + w * (cvar - cshot)
-    var_between <- var_between + w * (cmean - 1)^2
+    var_between <- var_between + w * ((cmean - 1)^2 - cvar / n)
   }
   var_within <- raw_within
   ratio <- pmax(var_within, 0) / var_between
-  ratio[!ok_gene | !is.finite(ratio)] <- NA_real_
+  ratio[!ok_gene | !is.finite(ratio) | var_between <= 0] <- NA_real_
 
   list(
     table = data.frame(gene = rownames(mat), var_within = var_within, var_between = var_between,
                         ratio_within_between = ratio, row.names = NULL),
-    cluster_n = data.frame(cluster = cl_levels, n_cells = as.integer(n_c), row.names = NULL)
+    cluster_n = data.frame(cluster = names(n_all), n_cells = as.integer(n_all), used = !(names(n_all) %in% small), row.names = NULL)
   )
 }
 
@@ -2871,22 +2905,24 @@ within_between_decomp <- function(mat, expo, clusters) {
 ## dataset. Values above 1 (log10 > 0) mean within-cluster variance
 ## exceeds between-cluster variance for that gene, i.e. residual noise
 ## among cells sharing a cluster outweighs the variance attributable to
-## exceeds between-cluster variance, i.e. residual noise among cells
-## sharing a cluster outweighs the variance attributable to cluster
-## identity. A large fraction of genes above 1 means the clustering
+## cluster identity. A large fraction of genes above 1 means the clustering
 ## captures a modest share of total variance (graded rather than sharply
-## separated cell states). Only genes with a positive ratio enter the
-## histogram. Returns n and the fraction above 1 invisibly for logging.
+## separated cell states). The fraction above 1 is taken over every gene with
+## a finite ratio. Genes whose within-cluster variance is zero after the shot-noise
+## subtraction (ratio 0, the most between-dominated end) cannot be placed on a log
+## axis, so they are counted in the title and left out of the histogram.
+## Returns n (genes with a finite ratio), n_zero and the fraction above 1 invisibly for logging.
 plot_within_between_hist <- function(wb, main = NULL, brk = 40) {
-  x <- wb$table$ratio_within_between
-  x <- x[is.finite(x) & x > 0]
-  lx <- log10(x)
-  frac_above_1 <- mean(x > 1)
+  r <- wb$table$ratio_within_between
+  r <- r[is.finite(r)]
+  n_zero <- sum(r == 0)
+  frac_above_1 <- mean(r > 1)
+  lx <- log10(r[r > 0])
   h <- hist(lx, breaks = brk, plot = FALSE)
-  if (is.null(main)) main <- sprintf("n = %d genes, %.0f%% with within > between", length(x), 100 * frac_above_1)
+  if (is.null(main)) main <- sprintf("n = %d genes (%d with within = 0 not shown), %.0f%% with within > between", length(r), n_zero, 100 * frac_above_1)
   plot(h, col = COLOR.GREY[["light"]], border = "white", xlab = "log10(within / between)", ylab = "# of genes", main = main)
   abline(v = 0, lty = 2, col = COLOR.ACCENT)
-  invisible(list(n = length(x), frac_above_1 = frac_above_1))
+  invisible(list(n = length(r), n_zero = n_zero, frac_above_1 = frac_above_1))
 }
 
 ## Scatter of within_between_decomp()'s ratio (log10) against one burst
@@ -2896,16 +2932,22 @@ plot_within_between_hist <- function(wb, main = NULL, brk = 40) {
 ## three near-duplicate copies. The comparison is by rank (Spearman),
 ## since the ratio can span orders of magnitude without a linear
 ## relationship to the burst quantity; the dashed line is a least-squares
-## guide on the plotted scale. Returns n and rho invisibly.
+## guide on the plotted scale. rho uses every gene with a finite ratio, zeros
+## included (ranks need no log); genes with ratio 0 cannot be placed on the log
+## axis and are left out of the points and the guide line, and counted in the title.
+## Returns n (genes in rho), n_zero and rho invisibly.
 plot_within_between_vs_quantity <- function(wb, quantity, xlab, main = NULL) {
   idx <- match(wb$table$gene, names(quantity))
-  ok  <- is.finite(wb$table$ratio_within_between) & wb$table$ratio_within_between > 0 & !is.na(idx) & is.finite(quantity[idx])
-  x   <- quantity[idx[ok]]; y <- log10(wb$table$ratio_within_between[ok])
-  rho <- suppressWarnings(cor(x, y, method = "spearman"))
-  if (is.null(main)) main <- sprintf("n = %d, Spearman rho = %.3f", sum(ok), rho)
-  plot(x, y, pch = 16, cex = 0.4, col = adjustcolor(COLOR.GREY[["dark"]], 0.38), xlab = xlab, ylab = "log10(within / between)", main = main)
-  abline(lm(y ~ x), col = COLOR.ACCENT, lty = 2)
-  invisible(list(n = sum(ok), rho = rho))
+  ok  <- is.finite(wb$table$ratio_within_between) & !is.na(idx) & is.finite(quantity[idx])
+  r   <- wb$table$ratio_within_between[ok]; x <- quantity[idx[ok]]
+  rho <- suppressWarnings(cor(x, r, method = "spearman"))
+  pos <- r > 0
+  n_zero <- sum(!pos)
+  if (is.null(main)) main <- sprintf("n = %d (%d with within = 0 not shown), Spearman rho = %.3f", length(r), n_zero, rho)
+  y <- log10(r[pos])
+  plot(x[pos], y, pch = 16, cex = 0.4, col = adjustcolor(COLOR.GREY[["dark"]], 0.38), xlab = xlab, ylab = "log10(within / between)", main = main)
+  abline(lm(y ~ x[pos]), col = COLOR.ACCENT, lty = 2)
+  invisible(list(n = length(r), n_zero = n_zero, rho = rho))
 }
 
 ## Runs plot_within_between_by_class() for two datasets side by side
@@ -2933,6 +2975,9 @@ report_within_between_by_class <- function(wb_a, wb_b, class, gene_ref, class_le
   plot_within_between_by_class <- function(wb, class, class_levels, colors, main = NULL) {
     x  <- log10(wb$table$ratio_within_between)
     ok <- is.finite(x) & !is.na(class)
+    ## genes with ratio 0 have no log value; they are counted on the console, not dropped silently
+    n_zero <- sum(wb$table$ratio_within_between == 0 & !is.na(class), na.rm = TRUE)
+    if (n_zero > 0) message(sprintf("within/between by class: %d gene(s) with within = 0 left out of the log10 comparison", n_zero))
     x  <- x[ok]; cl <- factor(class[ok], levels = class_levels)
     res <- class_anova(x, cl)
     boxplot(x ~ cl, col = colors, las = 2, ylab = "log10(within / between)", main = main, border = COLOR.GREY[["dark"]])
@@ -2959,9 +3004,11 @@ report_within_between_by_class <- function(wb_a, wb_b, class, gene_ref, class_le
 }
 
 ## map_to_orf() returns the systematic ORF name for each identifier in ids.
-## Identifiers that match ORF.PATTERN are returned as given; the pattern
-## accepts '-' or '.' before the dubious-ORF suffix (YAL047C-A / YAL047C.A),
-## since the Jackson file writes it with a period. All other identifiers are
+## Identifiers that match ORF.PATTERN are returned as given except for the
+## suffix separator: the pattern accepts '-' or '.' before the dubious-ORF
+## suffix (YAL047C-A / YAL047C.A), since the Jackson file writes it with a
+## period, and the result always uses the hyphen that NB.SC and org.Sc.sgd.db
+## use, so these genes merge. All other identifiers are
 ## looked up as common names in org.Sc.sgd.db. Identifiers that do not resolve
 ## (SUTs, CUTs, snoRNAs, ERCC spike-ins, names absent from SGD) return NA and
 ## are dropped by the caller. When no identifier at all matches as a common
@@ -3842,7 +3889,7 @@ go_enrich_job <- function(k, go_inputs, jobs, kegg_data) {
   tryCatch({
     job <- jobs[[k]]
     if (job$kind == "ora") {
-      run_enrichment(job$genes, job$universe, qval = go_inputs$GO.QVAL, kegg_data = kegg_data)
+      run_enrichment(job$genes, job$universe, fdr = go_inputs$GO.FDR, kegg_data = kegg_data)
     } else {
       set.seed(go_inputs$SEED.GO + k)
       suppressWarnings(gseGO(geneList = job$ranks, OrgDb = org.Sc.sgd.db, keyType = "ORF", ont = job$ont, nPermSimple = 100000))

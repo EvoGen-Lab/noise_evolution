@@ -107,10 +107,12 @@ NB.SC$BFREQ <- NB.SC$DISP           # burst frequency, this pipeline's own DISP 
 NB.SC$BSIZE <- NB.SC$MU / NB.SC$DISP  # burst size, equivalently Fano - 1
 
 # Implied burst frequency and burst size for each external source, via
-# add_burst_terms(). 
-NEWMAN  <- add_burst_terms(NEWMAN)
-KEREN   <- add_burst_terms(KEREN)
-STEWART <- add_burst_terms(STEWART)
+# add_burst_terms(). The three protein sources report fluorescence in instrument units, so they use
+# scale = "relative": BFREQ is NA and BSIZE (the implied Fano factor) carries rank information only,
+# which leaves CV^2 and the mean-adjusted noise (9.5) as their unit-free comparisons.
+NEWMAN  <- add_burst_terms(NEWMAN,  scale = "relative")
+KEREN   <- add_burst_terms(KEREN,   scale = "relative")
+STEWART <- add_burst_terms(STEWART, scale = "relative")
 
 # Per-source join on ORF
 EXT.MERGE <- list(

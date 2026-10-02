@@ -1116,8 +1116,9 @@ cat(sprintf("%s: axes clearing the variance and participation-ratio floors: %s\n
 
 EXTRA.AXES.LIST <- list()
 
-## Fits a two-component Gaussian mixture (mixtools::normalmixEM, random starts) to each candidate
-## axis's gene loadings, assigns genes to the low or high pole by posterior probability (> 0.5), and
+## Fits a two-component Gaussian mixture (mixtools::normalmixEM) to each candidate
+## axis's gene loadings, starting EM from the data (means at the 25th and 75th percentiles of the loadings,
+## SDs of half the loadings' SD, equal weights), so the fit, the poles and the enrichment sets are the same on every run, assigns genes to the low or high pole by posterior probability (> 0.5), and
 ## runs BP GO enrichment on each pole (>= 5 genes) against co_genes. Writes one page per axis to
 ## pdf_path and returns a named list (axis<k>) with variance and participation-ratio stats, mixture
 ## parameters, the two gene sets and their enrichment results.
@@ -1135,8 +1136,10 @@ for (ax in COEXPR.AXES) {
     pdf(pdf_path, width = 6, height = 5, useDingbats = FALSE)
     for (k in sig_axes) {
       load_k <- setNames(rank_check$vectors[, k], rownames(mat))
-      mix_k  <- tryCatch(normalmixEM(load_k, k = 2), error = function(e) NULL)
+      mix_k  <- tryCatch(normalmixEM(load_k, k = 2, lambda = c(0.5, 0.5), mu = unname(quantile(load_k, c(0.25, 0.75))), sigma = rep(sd(load_k) / 2, 2)), error = function(e) NULL)
       if (is.null(mix_k)) next
+      n_iter <- length(mix_k$all.loglik) - 1
+      if (n_iter >= 1000) message(sprintf("%s axis %d: the mixture fit did not converge in %d EM iterations", axis_label, k, n_iter))
 
       plot(mix_k, loglik = FALSE, density = TRUE, xlab2 = sprintf("loading on %s %d", axis_label, k))
 
@@ -1152,6 +1155,7 @@ for (ax in COEXPR.AXES) {
       out[[paste0("axis", k)]] <- list(
         var_explained = axis_var[as.character(k)], eff_genes = axis_pr[as.character(k)],
         mu = mix_k$mu[c(lo, hi)], sigma = mix_k$sigma[c(lo, hi)], lambda = mix_k$lambda[c(lo, hi)],
+        loglik = mix_k$loglik, n_iter = n_iter,
         genes_lo = genes_lo, genes_hi = genes_hi, enrich_lo = enrich_lo, enrich_hi = enrich_hi)
     }
     dev.off()
@@ -1216,13 +1220,12 @@ for (ax in COEXPR.AXES) {
 # Mixture and enrichment results for the validated total axes. 
 EXTRA.AXES <- VALIDATED.LIST$total$extra_axes
 
-# Enrichment results for every validated total axis, at enrichGO()'s
-# default qvalueCutoff = 0.2
+# Enrichment results for every validated total axis, at BH q < 0.05 (axis_pole_enrichment())
 for (nm in names(EXTRA.AXES)) {
-  cat(sprintf("\n-- total %s: enrichment, low-loading pole (top terms, qvalue < 0.20) --\n", nm))
-  print_enrich_brief(EXTRA.AXES[[nm]]$enrich_lo, q = 0.2)
-  cat(sprintf("\n-- total %s: enrichment, high-loading pole (top terms, qvalue < 0.20) --\n", nm))
-  print_enrich_brief(EXTRA.AXES[[nm]]$enrich_hi, q = 0.2)
+  cat(sprintf("\n-- total %s: enrichment, low-loading pole (top terms, BH q < 0.05) --\n", nm))
+  print_enrich_brief(EXTRA.AXES[[nm]]$enrich_lo, q = 0.05)
+  cat(sprintf("\n-- total %s: enrichment, high-loading pole (top terms, BH q < 0.05) --\n", nm))
+  print_enrich_brief(EXTRA.AXES[[nm]]$enrich_hi, q = 0.05)
 }
 
 ## 4.10 Total Axis 1
@@ -1349,10 +1352,10 @@ for (ax_mode in c("cis", "trans")) {
   }
   for (nm in validated) {
     key <- paste0("axis", nm)
-    cat(sprintf("\n-- %s %s: enrichment, low-loading pole (top terms, qvalue < 0.20) --\n", ax_mode, nm))
-    print_enrich_brief(extra[[key]]$enrich_lo, q = 0.2)
-    cat(sprintf("\n-- %s %s: enrichment, high-loading pole (top terms, qvalue < 0.20) --\n", ax_mode, nm))
-    print_enrich_brief(extra[[key]]$enrich_hi, q = 0.2)
+    cat(sprintf("\n-- %s %s: enrichment, low-loading pole (top terms, BH q < 0.05) --\n", ax_mode, nm))
+    print_enrich_brief(extra[[key]]$enrich_lo, q = 0.05)
+    cat(sprintf("\n-- %s %s: enrichment, high-loading pole (top terms, BH q < 0.05) --\n", ax_mode, nm))
+    print_enrich_brief(extra[[key]]$enrich_hi, q = 0.05)
   }
 }
 
@@ -2080,8 +2083,8 @@ cat("Sc parent: cells per cluster\n"); print(WB.MIX.SC$cluster_n)
 fig_pdf("extra/S_within_between_hist_MIX.SC.pdf", 6, 5)
 WB.HIST.MIX.SC <- plot_within_between_hist(WB.MIX.SC, main = "Sc parent: within/between-cluster variance ratio")
 dev.off()
-cat(sprintf("Sc parent: within/between ratio, n = %d genes, %.1f%% with within > between (ratio > 1)\n",
-            WB.HIST.MIX.SC$n, 100 * WB.HIST.MIX.SC$frac_above_1))
+cat(sprintf("Sc parent: within/between ratio, n = %d genes (%d with within = 0), %.1f%% with within > between (ratio > 1)\n",
+            WB.HIST.MIX.SC$n, WB.HIST.MIX.SC$n_zero, 100 * WB.HIST.MIX.SC$frac_above_1))
 
 BF.MIX.SC         <- CONTRAST.FITS$MIX.SC
 MU.LOG2.MIX.SC    <- setNames(log2(BF.MIX.SC$MU), rownames(BF.MIX.SC))
@@ -2106,8 +2109,8 @@ cat("Se parent: cells per cluster\n"); print(WB.MIX.SE$cluster_n)
 fig_pdf("extra/S_within_between_hist_MIX.SE.pdf", 6, 5)
 WB.HIST.MIX.SE <- plot_within_between_hist(WB.MIX.SE, main = "Se parent: within/between-cluster variance ratio")
 dev.off()
-cat(sprintf("Se parent: within/between ratio, n = %d genes, %.1f%% with within > between (ratio > 1)\n",
-            WB.HIST.MIX.SE$n, 100 * WB.HIST.MIX.SE$frac_above_1))
+cat(sprintf("Se parent: within/between ratio, n = %d genes (%d with within = 0), %.1f%% with within > between (ratio > 1)\n",
+            WB.HIST.MIX.SE$n, WB.HIST.MIX.SE$n_zero, 100 * WB.HIST.MIX.SE$frac_above_1))
 
 BF.MIX.SE         <- CONTRAST.FITS$MIX.SE
 MU.LOG2.MIX.SE    <- setNames(log2(BF.MIX.SE$MU), rownames(BF.MIX.SE))
@@ -2130,7 +2133,9 @@ cat(sprintf("Se parent: within/between vs burst size, n = %d, Spearman rho = %.3
 ## already ortholog-matched by name (e.g. MIX.SC vs MIX.SE, both indexed
 ## by the shared GENES ortholog-pair set built earlier in the pipeline,
 ## so no additional ortholog mapping is needed here). Spearman rho
-## reported, same rank-based convention used throughout this section.
+## reported on the ratios of every gene with a finite ratio in both datasets, zeros
+## included, same rank-based convention used throughout this section; genes with
+## a zero ratio in either dataset cannot be placed on the log axes and are counted in the title.
 fig_pdf("extra/S_within_between_cross_species.pdf", 6, 6)
 WB.CROSS.SPECIES <- local({
   wb_a <- WB.MIX.SC
@@ -2139,15 +2144,16 @@ WB.CROSS.SPECIES <- local({
   lab_b <- "Se"
   main <- "Within/between ratio: Sc vs Se parent"
   m  <- merge(wb_a$table[, c("gene", "ratio_within_between")], wb_b$table[, c("gene", "ratio_within_between")], by = "gene", suffixes = c("_a", "_b"))
-  ok <- is.finite(m$ratio_within_between_a) & m$ratio_within_between_a > 0 & is.finite(m$ratio_within_between_b) & m$ratio_within_between_b > 0
+  fin <- is.finite(m$ratio_within_between_a) & is.finite(m$ratio_within_between_b)
+  rho <- suppressWarnings(cor(m$ratio_within_between_a[fin], m$ratio_within_between_b[fin], method = "spearman"))
+  ok <- fin & m$ratio_within_between_a > 0 & m$ratio_within_between_b > 0
   x   <- log10(m$ratio_within_between_a[ok]); y <- log10(m$ratio_within_between_b[ok])
-  rho <- suppressWarnings(cor(x, y, method = "spearman"))
-  if (is.null(main)) main <- sprintf("n = %d genes, Spearman rho = %.3f", sum(ok), rho)
+  if (is.null(main)) main <- sprintf("n = %d genes (%d with a zero ratio not shown), Spearman rho = %.3f", sum(fin), sum(fin) - sum(ok), rho)
   plot(x, y, pch = 16, cex = 0.4, col = adjustcolor(COLOR.GREY[["dark"]], 0.38),
        xlab = sprintf("log10(within / between), %s", lab_a), ylab = sprintf("log10(within / between), %s", lab_b), main = main)
   abline(0, 1, lty = 3, col = COLOR.GREY[["mid"]])
   abline(lm(y ~ x), col = COLOR.ACCENT, lty = 2)
-  invisible(list(n = sum(ok), rho = rho))
+  invisible(list(n = sum(fin), rho = rho))
 })
 dev.off()
 cat(sprintf("Within/between ratio, Sc vs Se parent, n = %d genes, Spearman rho = %.3f\n",
@@ -2217,10 +2223,12 @@ dev.off()
 
 ## 7.8 Species composition comparison and confound bound
 # Compares Sc and Se on the cell-cycle axis and the three metabolic
-# module scores (Cohen's d, rank-sum test), and multiplies each
-# composition difference by the matching 7.7 noise-association effect
-# size to bound the fraction of residual variance a composition
-# difference of that size could explain.
+# module scores (Cohen's d with a descriptive rank test: rank-sum for the parents, which are
+# different cells, signed-rank for the hybrid alleles, which are the same cells), and multiplies each
+# composition difference by the matching 7.7 noise-association effect size to bound the
+# expected noise shift, in residual-SD units (bound_sd = |d| x effect size, about rho x d), that a
+# composition difference of that size could produce. The bound, not the p-value, is the informative
+# output: with thousands of cells any test rejects.
 MET.SCORE.MIX.SC <- as.matrix(YSC$MIX.SC[[c("Glycolysis1", "OXPHOS1", "RiBi1")]])
 MET.SCORE.MIX.SE <- as.matrix(YSC$MIX.SE[[c("Glycolysis1", "OXPHOS1", "RiBi1")]])
 MET.SCORE.HYB.SC <- as.matrix(YSC$HYB.SC[[c("Glycolysis1", "OXPHOS1", "RiBi1")]])
@@ -2230,14 +2238,14 @@ CC.SHARED.PARENT <- cell_cycle_continuum_shared(YSC$MIX.SC, YSC$MIX.SE)
 CC.SHARED.HYBRID <- cell_cycle_continuum_shared(YSC$HYB.SC, YSC$HYB.SE)
 
 COMP.BOUND.PARENT <- species_composition_report(CC.SHARED.PARENT$x1, CC.SHARED.PARENT$x2, MET.SCORE.MIX.SC, MET.SCORE.MIX.SE, COV.DIAG.MIX.SC, COV.DIAG.MIX.SE, "Sc vs Se parent")
-COMP.BOUND.HYBRID <- species_composition_report(CC.SHARED.HYBRID$x1, CC.SHARED.HYBRID$x2, MET.SCORE.HYB.SC, MET.SCORE.HYB.SE, COV.DIAG.HYB.SC, COV.DIAG.HYB.SE, "Hybrid, Sc vs Se allele")
+COMP.BOUND.HYBRID <- species_composition_report(CC.SHARED.HYBRID$x1, CC.SHARED.HYBRID$x2, MET.SCORE.HYB.SC, MET.SCORE.HYB.SE, COV.DIAG.HYB.SC, COV.DIAG.HYB.SE, "Hybrid, Sc vs Se allele", paired = TRUE)
 
 fig_pdf("extra/S_species_composition_bound.pdf", 8, 5)
 par(mfrow = c(1, 2), mar = c(8, 4.5, 3, 1))
-barplot(setNames(COMP.BOUND.PARENT$bound, COMP.BOUND.PARENT$axis), las = 2, col = COLOR.GREY[["mid"]], border = NA,
-        ylab = "bound on expected noise shift (fraction of residual SD)", main = "Sc vs Se parent")
-barplot(setNames(COMP.BOUND.HYBRID$bound, COMP.BOUND.HYBRID$axis), las = 2, col = COLOR.GREY[["mid"]], border = NA,
-        ylab = "bound on expected noise shift (fraction of residual SD)", main = "Hybrid, Sc vs Se allele")
+barplot(setNames(COMP.BOUND.PARENT$bound_sd, COMP.BOUND.PARENT$axis), las = 2, col = COLOR.GREY[["mid"]], border = NA,
+        ylab = "bound on expected noise shift (residual SD units)", main = "Sc vs Se parent")
+barplot(setNames(COMP.BOUND.HYBRID$bound_sd, COMP.BOUND.HYBRID$axis), las = 2, col = COLOR.GREY[["mid"]], border = NA,
+        ylab = "bound on expected noise shift (residual SD units)", main = "Hybrid, Sc vs Se allele")
 dev.off()
 
 # Checkpoint
@@ -2255,7 +2263,7 @@ console_start(8)
 # permutation-p / class-call threshold used to build every gene set
 # below.
 GO.SIG  <- 0.05
-GO.QVAL <- 0.2
+GO.FDR <- 0.2   # Benjamini-Hochberg cutoff on each enrichment test's adjusted p-value (p.adjust); the Storey q-value is not used
 
 ## 8.1 Overall parental divergence: mean, burst frequency, burst size
 # Baseline sets per quantity: any gene with a significant parent-vs-
@@ -2320,7 +2328,7 @@ GO.INPUTS <- list(GO.SETS = GO.SETS, GO.UNIVERSE = BURST.CONTRASTS$gene,
                   INTR.SETS = INTR.SETS, INTR.UNIVERSE = NOISE.DECOMP.NOAMBIG$gene,
                   INTR.SETS.CLEAN = INTR.SETS.CLEAN, INTR.UNIVERSE.CLEAN = NOISE.DECOMP.CLEAN.NOAMBIG$gene,
                   GSE.LISTS = list(MEAN = MEAN.ORD, BFREQ = BFREQ.ORD, BSIZE = BSIZE.ORD),
-                  GO.QVAL = GO.QVAL, SEED.GO = 1)
+                  GO.FDR = GO.FDR, SEED.GO = 1)
 if (!exists("KEGG.DATA")) KEGG.DATA <- kegg_local("sce")
 
 ## ---- Cluster round trip: Rscript go_enrich.R ----
@@ -2341,7 +2349,7 @@ cat(sprintf("GO/KEGG enrichment loaded for %d gene sets against a universe of %d
 GO.SUMMARY <- local({
   sets <- GO.SETS
   enrich <- GO.ENRICH
-  q <- GO.QVAL
+  q <- GO.FDR
   data.frame(
     set     = names(sets),
     n_genes = vapply(sets, length, integer(1)),
@@ -2363,8 +2371,8 @@ list2env(GO.GSE, envir = environment())
 # Low, average, and high intrinsic-fraction sets,
 # enriched by go_enrich.R
 
-sapply(INTR.GO,       function(s) sapply(s, n_sig_terms, q = GO.QVAL))
-sapply(INTR.GO.CLEAN, function(s) sapply(s, n_sig_terms, q = GO.QVAL))
+sapply(INTR.GO,       function(s) sapply(s, n_sig_terms, q = GO.FDR))
+sapply(INTR.GO.CLEAN, function(s) sapply(s, n_sig_terms, q = GO.FDR))
 
 # Checkpoint
 save(GO.SETS, GO.ENRICH, GO.SUMMARY,
