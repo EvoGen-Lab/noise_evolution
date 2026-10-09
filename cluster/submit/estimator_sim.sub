@@ -1,0 +1,40 @@
+#!/bin/sh -l
+# FILENAME:  estimator_sim.sub
+#
+# Estimator simulation: the NB maximum-likelihood fit against a Poisson-corrected moment estimator on
+# simulated cells whose expression factor is gamma, lognormal or bimodal (analysis/sim_inputs.R builds the
+# grid, about 5,700 rows). Truth keys are dealt round-robin across the array tasks and each task runs every
+# row of its keys. Each task requests 1 node, 24 cores and 12 hours.
+#
+# Sizing. Timed on a development machine at about 1,000 cells per group: 4-5 ms per fit set (five groups,
+# both estimators) and 6 core-seconds per row at 60 replicates x 26 fit sets. At 200 replicates x 101 fit sets
+# and 3,000 cells per group a full-size row costs about 4-5 core-minutes and the average row (cell fractions
+# 1 to 0.1) about 2 core-minutes, so the grid needs about 220 core-hours with the 5e7-draw truths included.
+# With 8 tasks of 24 cores that is about 1.2 hours per task; the 12-hour limit leaves room for a factor of
+# ten in cell number, cluster speed or replicates. Change --array and nothing else: estimator_sim.R reads
+# the task count from SLURM_ARRAY_TASK_COUNT.
+#
+# Inputs. Copy functions.R, estimator_sim.R and estimator_sim_inputs.rda into the working directory.
+#
+# Restarts. A task writes its output file only when it finishes. Resubmitting the array recomputes only the
+# tasks whose estimator_sim_output_<k>of<K>.rda is missing; a task stopped at the time limit starts over.
+
+#SBATCH --account=bphm
+#SBATCH --nodes=1
+#SBATCH --ntasks=1
+#SBATCH --partition=cpu
+#SBATCH --cpus-per-task=24
+#SBATCH --qos=normal
+#SBATCH --time=12:00:00
+#SBATCH --job-name estimator_sim
+#SBATCH --array=1-8
+#SBATCH --output=estimator_sim_%A_%a.out
+
+module load r/4.5.2
+
+export OMP_NUM_THREADS=1
+export MKL_NUM_THREADS=1
+export OPENBLAS_NUM_THREADS=1
+export VECLIB_MAXIMUM_THREADS=1
+
+Rscript estimator_sim.R
