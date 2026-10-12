@@ -4,7 +4,7 @@
 ### sourced by analysis.R and by the SLURM cluster
 ### scripts (gene_pilot.R, gene_boot.R, gene_perm.R,
 ### coexpr_boot.R, coexpr_perm.R, nupop_occupancy.R,
-### cluster_stability.R, go_enrich.R, power_grid.R, estimator_sim.R)
+### cluster_stability.R, go_enrich.R, power_grid.R, estimator_sim.R, cis_direct_sim.R)
 ###
 ### A function lives here when its code runs more than once: it is called from two or more places, or it is
 ### applied across many items (Section 13b for analysis.R, Section 13c for the cluster scripts). Code that
@@ -190,6 +190,11 @@
 ###     estimator_sim_truth() - Latent truth of one truth key: variances of a h, a_H and a from up to 5e7 streamed draws, with their Monte Carlo error.
 ###     estimator_sim_row() - one grid row of the estimator simulation: formula predictions, replicate fits, bootstrap SEs and coverage against the latent truth.
 ###     wmean() - Grid-weighted mean of the simulation summary, dropping missing cells with their weights.
+###   13e. FUNCTIONS THE DIRECT CIS-CONTRAST SIMULATION RUNS
+###     nb_loglik_grid() - NB log-likelihood of counts with fixed means over a grid of log(theta).
+###     cis_profile() - Direct cis contrast from the joint two-allele likelihood: maximiser and 95% likelihood-ratio interval, unbounded where an allele is Poisson-like.
+###     cis_paired_moment() - Direct moment estimate of phi_Hc - phi_He with paired and unpaired sandwich standard errors.
+###     cis_direct_row() - one grid row of the cis comparison: option 2 (MLE per allele, bootstrap) against the profile likelihood and the paired moment difference.
 ###############################################################
 
 library(MASS)   # glm.nb, ships with base R
@@ -4344,3 +4349,148 @@ estimator_sim_row <- function(i, GRID, TRUTH, LIB.HYB, LIB.PAR, DEPTH.REF, N.OBS
 
 ## wmean: grid-weighted mean for the estimator simulation summary; a missing cell drops out together with its weight.
 wmean <- function(x, w) weighted.mean(x, w, na.rm = TRUE)
+
+## ============================================================
+## 13e. FUNCTIONS THE DIRECT CIS-CONTRAST SIMULATION RUNS
+## ============================================================
+## cis_direct_sim.R compares the pipeline's cis contrast (an NB fit per allele, then log2 phi_Hc - log2 phi_He, option 2)
+## with two direct estimators of the contrast made on the same paired cells. cis_profile() works from the joint
+## likelihood of both alleles and returns a likelihood-ratio interval that stays defined when one allele's dispersion is
+## not identifiable. cis_paired_moment() estimates phi_Hc - phi_He from per-cell moment contributions, whose paired
+## covariance gives the standard error of the difference.
+
+## nb_loglik_grid: NB log-likelihood of counts y with fixed means m on a grid of log(theta) values lt (the terms that
+## do not depend on theta or the means are dropped, as in .fit_one()).
+nb_loglik_grid <- function(y, m, lt) {
+  out <- numeric(length(lt))
+  for (k in seq_along(lt)) {
+    th <- exp(lt[k])
+    out[k] <- sum(lgamma(y + th) - lgamma(th) + th * log(th) - (th + y) * log(th + m) + y * log(m))
+  }
+  out
+}
+
+## cis_profile: direct estimate of the cis contrast log2(phi_1 / phi_2) for two alleles counted in the same cells
+## (y1, e1 and y2, e2: counts and allele-specific exposures). Each allele keeps the pipeline's mean, mu = sum(y) / sum(e),
+## and its NB log-likelihood is evaluated on the pipeline's log(theta) range in steps of `step`. For each value of the
+## contrast the likelihood is maximised over the shared level of the two dispersions (a shift of the two grids against
+## each other), giving the profile likelihood of the contrast. Returns c(est, lo, hi) on the log2 scale: the maximiser
+## (parabola through the grid peak) and the 95% likelihood-ratio interval. An end that reaches the edge of the
+## identifiable range, or lies beyond +/- `big` log2 units, is returned as -Inf or +Inf: that side is unbounded, which is
+## what a fit reports when an allele is indistinguishable from Poisson. NA when an allele has no counts.
+cis_profile <- function(y1, e1, y2, e2, step = 0.1, big = 10) {
+  out <- c(est = NA_real_, lo = NA_real_, hi = NA_real_)
+  keep <- is.finite(y1) & is.finite(y2) & is.finite(e1) & is.finite(e2) & e1 > 0 & e2 > 0
+  y1 <- y1[keep]; e1 <- e1[keep]; y2 <- y2[keep]; e2 <- e2[keep]
+  if (length(y1) < 2 || sum(y1) == 0 || sum(y2) == 0) return(out)
+  lt <- seq(LOG.THETA.RANGE[1], LOG.THETA.RANGE[2], by = step); n <- length(lt)
+  l1 <- nb_loglik_grid(y1, sum(y1) / sum(e1) * e1, lt)
+  l2 <- nb_loglik_grid(y2, sum(y2) / sum(e2) * e2, lt)
+  shifts <- (-(n - 1)):(n - 1)                          # log theta_2 - log theta_1 = shift * step = log phi_1 - log phi_2
+  prof <- numeric(length(shifts))
+  for (j in seq_along(shifts)) {
+    d <- shifts[j]
+    i1 <- if (d >= 0) seq_len(n - d) else (1 - d):n
+    prof[j] <- max(l1[i1] + l2[i1 + d])
+  }
+  dev <- 2 * (max(prof) - prof)
+  jm <- which.max(prof); crit <- qchisq(0.95, 1)
+  pos <- shifts[jm]
+  if (jm > 1 && jm < length(prof)) {                    # parabola through the peak and its neighbours
+    den <- prof[jm - 1] - 2 * prof[jm] + prof[jm + 1]
+    if (den < 0) pos <- pos + 0.5 * (prof[jm - 1] - prof[jm + 1]) / den
+  }
+  left <- jm; while (left > 1 && dev[left - 1] <= crit) left <- left - 1
+  right <- jm; while (right < length(dev) && dev[right + 1] <= crit) right <- right + 1
+  lo <- if (left == 1) -Inf else shifts[left] - (crit - dev[left]) / (dev[left - 1] - dev[left])
+  hi <- if (right == length(dev)) Inf else shifts[right] + (crit - dev[right]) / (dev[right + 1] - dev[right])
+  res <- c(est = pos, lo = lo, hi = hi) * step / log(2)
+  res[abs(res) > big & names(res) != "est"] <- sign(res[abs(res) > big & names(res) != "est"]) * Inf
+  res
+}
+
+## cis_paired_moment: direct moment estimate of phi_1 - phi_2 for two alleles counted in the same cells. Each allele's
+## phi-hat is sum[(y - m)^2 - m] / sum(m^2) with m = mu-hat * exposure, so it is a ratio of sums over cells and each
+## cell contributes a linearised term psi_i = [a_i - phi-hat m_i^2] / sum(m^2). The paired variance of the difference
+## sums (psi_1i - psi_2i)^2 over cells, which keeps the covariance of the two alleles; the unpaired variance adds the
+## alleles' own sums. The variance of the log ratio follows by the delta method when both phi-hat are positive.
+## Returns c(phi1, phi2, diff, se_paired, se_unpaired, se_log), with se_log NA unless both phi-hat are positive.
+cis_paired_moment <- function(y1, e1, y2, e2) {
+  out <- c(phi1 = NA_real_, phi2 = NA_real_, diff = NA_real_, se_paired = NA_real_, se_unpaired = NA_real_, se_log = NA_real_)
+  keep <- is.finite(y1) & is.finite(y2) & is.finite(e1) & is.finite(e2) & e1 > 0 & e2 > 0
+  y1 <- y1[keep]; e1 <- e1[keep]; y2 <- y2[keep]; e2 <- e2[keep]
+  if (length(y1) < 2 || sum(y1) == 0 || sum(y2) == 0) return(out)
+  m1 <- sum(y1) / sum(e1) * e1; m2 <- sum(y2) / sum(e2) * e2
+  a1 <- (y1 - m1)^2 - m1; a2 <- (y2 - m2)^2 - m2
+  b1 <- sum(m1^2); b2 <- sum(m2^2)
+  p1 <- sum(a1) / b1; p2 <- sum(a2) / b2
+  psi1 <- (a1 - p1 * m1^2) / b1; psi2 <- (a2 - p2 * m2^2) / b2
+  out[c("phi1", "phi2", "diff")] <- c(p1, p2, p1 - p2)
+  out[["se_paired"]] <- sqrt(sum((psi1 - psi2)^2)); out[["se_unpaired"]] <- sqrt(sum(psi1^2) + sum(psi2^2))
+  if (p1 > 0 && p2 > 0) out[["se_log"]] <- sqrt(sum((psi1 / p1 - psi2 / p2)^2))
+  out
+}
+
+## cis_direct_row: one row i of GRID for the cis contrast. Each of NREP replicates simulates hybrid cells and applies
+## three estimators of the cis contrast to the same cells: option 2 (an MLE per allele with .fit_one(), then the
+## log2 ratio, with a percentile bootstrap interval from NBOOT cell resamples drawn before any fit), the joint
+## profile likelihood (cis_profile) and the paired moment difference (cis_paired_moment). Truth is the latent
+## Var(a h) of each allele from estimator_sim_truth(). Returns one data.frame row: failure, bias, SE, coverage and
+## width for option 2, coverage and recovery of the genes where option 2 fails for the profile likelihood, and the
+## pairing gain for the moment difference.
+cis_direct_row <- function(i, GRID, TRUTH, LIB.HYB, DEPTH.REF, N.OBS, NREP, NBOOT, SEED.BASE, VAR.C) {
+  for (nm in c("NREP", "NBOOT", "DEPTH.REF", "VAR.C"))
+    if (!is.numeric(get(nm)) || length(get(nm)) != 1 || !is.finite(get(nm)) || get(nm) < 0) stop("cis_direct_row(): ", nm, " must be one non-negative number")
+  if (NREP < 2 || NBOOT < 10) stop("cis_direct_row(): NREP must be at least 2 and NBOOT at least 10")
+  g  <- GRID[i, ]
+  sp <- sim_scenario_pars(g, VAR.C)
+  tr <- TRUTH[[as.character(g$tkey)]]
+  nh <- max(20L, round(g$frac * N.OBS[["HYB"]]))
+  truth_log2 <- log2(tr$lat[["Hc"]]) - log2(tr$lat[["He"]])
+  truth_diff <- tr$lat[["Hc"]] - tr$lat[["He"]]
+
+  set.seed(SEED.BASE + 2e6 + i)
+  R <- data.frame(e2 = rep(NA_real_, NREP), b_se = NA_real_, b_lo = NA_real_, b_hi = NA_real_,
+                  p_est = NA_real_, p_lo = NA_real_, p_hi = NA_real_,
+                  m_diff = NA_real_, m_sep = NA_real_, m_seu = NA_real_, m_selog = NA_real_, m_log = NA_real_)
+  for (r in seq_len(NREP)) {
+    h  <- sim_hybrid_cells(nh, sp$par, LIB.HYB, DEPTH.REF, tr$rho, g$family)
+    x1 <- h$S * h$C; x2 <- h$S * (1 - h$C)
+    ib <- matrix(sample.int(nh, nh * NBOOT, replace = TRUE), nh, NBOOT)   # all indices before any fit
+    th <- c(.fit_one(h$y_hc, x1)[["disp"]], .fit_one(h$y_he, x2)[["disp"]])
+    R$e2[r] <- if (all(is.finite(th)) && all(th > 0)) log2(th[2]) - log2(th[1]) else NA_real_   # log2 phi_Hc - log2 phi_He
+    bo <- rep(NA_real_, NBOOT)
+    for (b in seq_len(NBOOT)) {
+      tb <- c(.fit_one(h$y_hc[ib[, b]], x1[ib[, b]])[["disp"]], .fit_one(h$y_he[ib[, b]], x2[ib[, b]])[["disp"]])
+      if (all(is.finite(tb)) && all(tb > 0)) bo[b] <- log2(tb[2]) - log2(tb[1])
+    }
+    if (sum(is.finite(bo)) >= 0.5 * NBOOT) {
+      R$b_se[r] <- sd(bo, na.rm = TRUE); R[r, c("b_lo", "b_hi")] <- quantile(bo, c(0.025, 0.975), na.rm = TRUE, names = FALSE)
+    }
+    R[r, c("p_est", "p_lo", "p_hi")] <- cis_profile(h$y_hc, x1, h$y_he, x2)
+    mm <- cis_paired_moment(h$y_hc, x1, h$y_he, x2)
+    R[r, c("m_diff", "m_sep", "m_seu", "m_selog")] <- mm[c("diff", "se_paired", "se_unpaired", "se_log")]
+    R$m_log[r] <- if (mm[["phi1"]] > 0 && mm[["phi2"]] > 0) log2(mm[["phi1"]]) - log2(mm[["phi2"]]) else NA_real_
+  }
+  ok2 <- is.finite(R$e2); bad2 <- !ok2
+  cover <- function(lo, hi, truth) mean(lo <= truth & truth <= hi, na.rm = TRUE)
+  two <- is.finite(R$p_lo) & is.finite(R$p_hi); one <- xor(is.finite(R$p_lo), is.finite(R$p_hi))
+  ex0 <- R$p_lo > 0 | R$p_hi < 0
+  okb <- ok2 & is.finite(R$b_se)
+  data.frame(
+    i = i, truth_log2 = truth_log2, truth_diff = truth_diff, mc_se = tr$mc_se,
+    e2_fail = mean(bad2), e2_bias = mean(R$e2[ok2] - truth_log2), e2_sd = sd(R$e2[ok2]), e2_se_boot = median(R$b_se[okb]),
+    e2_cover = cover(R$b_lo[okb], R$b_hi[okb], truth_log2), e2_width = median((R$b_hi - R$b_lo)[okb]),
+    p_cover = cover(R$p_lo, R$p_hi, truth_log2), p_cover_e2ok = cover(R$p_lo[ok2], R$p_hi[ok2], truth_log2),
+    p_bias_e2ok = mean(R$p_est[ok2] - truth_log2, na.rm = TRUE), p_two_sided = mean(two), p_one_sided = mean(one),
+    p_excl0 = mean(ex0, na.rm = TRUE), p_width_e2ok = median((R$p_hi - R$p_lo)[ok2 & two]),
+    rec_n = sum(bad2), rec_cover = if (any(bad2)) cover(R$p_lo[bad2], R$p_hi[bad2], truth_log2) else NA_real_,
+    rec_two_sided = if (any(bad2)) mean(two[bad2]) else NA_real_, rec_one_sided = if (any(bad2)) mean(one[bad2]) else NA_real_,
+    rec_excl0 = if (any(bad2)) mean(ex0[bad2], na.rm = TRUE) else NA_real_,
+    m_log_fail = mean(is.na(R$m_log)), m_diff_cover = mean(abs(R$m_diff - truth_diff) <= 1.96 * R$m_sep, na.rm = TRUE),
+    m_diff_cover_unpaired = mean(abs(R$m_diff - truth_diff) <= 1.96 * R$m_seu, na.rm = TRUE),
+    m_se_ratio = median(R$m_sep / R$m_seu, na.rm = TRUE), m_selog_over_boot = median((R$m_selog / R$b_se)[okb], na.rm = TRUE),
+    m_log_cover = mean(abs(R$m_log - truth_log2) <= 1.96 * R$m_selog, na.rm = TRUE),
+    m_excl0 = mean(abs(R$m_diff) > 1.96 * R$m_sep, na.rm = TRUE),
+    rec_m_excl0 = if (any(bad2)) mean(abs(R$m_diff[bad2]) > 1.96 * R$m_sep[bad2], na.rm = TRUE) else NA_real_)
+}
