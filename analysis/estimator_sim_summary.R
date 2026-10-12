@@ -3,7 +3,7 @@
 ### Local. Reads the estimator_sim_output_<k>of<K>.rda files from cluster/scripts/estimator_sim.R,
 ### verifies that every grid row arrived, reports the study's outputs, and applies the decision rule.
 ###
-### Needs   : <INPUT.DIR>/estimator_sim_inputs.rda (GRID) and <OUTPUT.DIR>/estimator_sim_output_*.rda
+### Needs   : R/functions.R (sourced here if wmean() is not loaded), <INPUT.DIR>/estimator_sim_inputs.rda (GRID) and <OUTPUT.DIR>/estimator_sim_output_*.rda
 ### Writes  : tables under TABLE.DIR (when it exists) and a printed decision.
 ###
 ### Decision rule (log2 phi scale, null-scenario rows, targets Hc, He and the summed hybrid H):
@@ -18,6 +18,7 @@
 
 if (!exists("INPUT.DIR"))  INPUT.DIR  <- "."
 if (!exists("OUTPUT.DIR")) OUTPUT.DIR <- "."
+if (!exists("wmean")) source("R/functions.R")   # wmean() lives in functions.R
 BIAS.FRAC   <- 0.25      # bias must stay under this fraction of the bootstrap SE
 KEEP.BELOW  <- 0.05      # flagged share of genes under which the MLE is kept as is
 ADOPT.ABOVE <- 0.20      # flagged share of genes at which a switch is considered
@@ -61,6 +62,21 @@ TAB.ALL <- data.frame(
   row.names = NULL)
 cat("\n== Weighted bias, RMSE, failure rate, bootstrap SE, coverage (null scenario, log2 phi) ==\n")
 print(TAB.ALL[order(TAB.ALL$target, TAB.ALL$est, TAB.ALL$family), ], digits = 3, row.names = FALSE)
+
+## ---- 1b. the same by grid cell: mean x dispersion x cell fraction x family -------------------------
+## Averaging over the whole grid mixes very low-count genes, where every fit fails or is noisy, with
+## well-measured ones. This table keeps the mean, dispersion and cell-fraction axes (averaged over omega and cbar) and
+## is small enough to share.
+CELLS <- NULLROWS[NULLROWS$target %in% c("Hc", "He", "H", "Pc"), ]
+CELLS$flag_num <- as.numeric(CELLS$flag)
+TAB.CELL <- aggregate(cbind(fail, bias, rmse, sd_emp, se_boot, cover, flag_num) ~ target + est + family + mu + phi + frac, data = CELLS,
+                      FUN = function(x) mean(x, na.rm = TRUE), na.action = na.pass)
+cat("\n== MLE and moment estimator by mean (averaged over the other axes), target Hc and H ==\n")
+for (tg in c("Hc", "H")) {
+  d <- TAB.CELL[TAB.CELL$target == tg, ]
+  by_mu <- aggregate(cbind(fail, bias, rmse, se_boot, flag_num) ~ est + family + mu, data = d, FUN = function(x) mean(x, na.rm = TRUE), na.action = na.pass)
+  cat("target", tg, "\n"); print(by_mu[order(by_mu$est, by_mu$family, by_mu$mu), ], digits = 2, row.names = FALSE)
+}
 
 ## ---- 2. decision -------------------------------------------------------------------------------
 DEC <- NULLROWS[NULLROWS$target %in% c("Hc", "He", "H") & NULLROWS$family != "gamma" & NULLROWS$usable, ]
@@ -111,6 +127,7 @@ print(TAB.CON[order(TAB.CON$target, TAB.CON$scenario, TAB.CON$est), ], digits = 
 
 if (exists("TABLE.DIR") && dir.exists(TABLE.DIR)) {
   write.csv(TAB.ALL, file.path(TABLE.DIR, "estimator_sim_by_family.csv"), row.names = FALSE)
+  write.csv(TAB.CELL, file.path(TABLE.DIR, "estimator_sim_by_cell.csv"), row.names = FALSE)
   write.csv(TAB.CON, file.path(TABLE.DIR, "estimator_sim_contrasts.csv"), row.names = FALSE)
   write.csv(AGREE.TAB, file.path(TABLE.DIR, "estimator_sim_agreement.csv"), row.names = FALSE)
   write.csv(EST, file.path(TABLE.DIR, "estimator_sim_all_rows.csv"), row.names = FALSE)
