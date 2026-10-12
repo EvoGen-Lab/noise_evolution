@@ -56,7 +56,7 @@ for (k in seq_along(chunks)) {
   ## the observed contrasts (mean, bfreq, CV2, bsize, kbal) with the null by a two-sided permutation p, and
   ## adds ploidy-adjusted p-values for the dpar contrasts. bsize and kbal nulls recombine the mean and
   ## bfreq null draws of the same permutation.
-  results[[k]] <- mclapply(chunks[[k]], permute_contrasts_one, mc.cores = NUM.CORES, mc.preschedule = FALSE, expos = CONTRAST.EXPOS, fits = CONTRAST.FITS, mats = CONTRAST.MATS, perms = PERMS, ploidy_shift = PLOIDY.SHIFT)
+  results[[k]] <- mclapply(chunks[[k]], permute_contrasts_one, mc.cores = NUM.CORES, mc.preschedule = FALSE, expos = CONTRAST.EXPOS, fits = CONTRAST.FITS, mats = CONTRAST.MATS, perms = PERMS, ploidy_shift = PLOIDY.SHIFT, seed = SEED.PERM)
   bad <- vapply(results[[k]], function(x) inherits(x, "try-error") || is.null(x), logical(1))
   if (any(bad)) stop(sprintf("%d gene(s) failed in chunk %d, first: %s", sum(bad), k, chunks[[k]][which(bad)[1]]))
   done <- done + length(chunks[[k]])
