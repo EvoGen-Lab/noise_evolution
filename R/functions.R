@@ -430,9 +430,9 @@ make_draws <- function(ncells, B, seed = 1) {
 ##
 ## OFFSETS, HAPLOID PARENTS AND THE DIPLOID HYBRID
 ## Every offset is a median-based size factor computed once per genome on its parent and hybrid-allele cells
-## together and anchored to the parent library scale (analysis.R Section 2). A parent's MU is then the mean count at
-## the median depth, and each hybrid allele, offset by its own haplotype offset (s_Hc, s_He), sits on the same
-## per-genome scale: with no regulatory divergence mu_Hc = mu_He = the parental rate. HYB.COMB sums the two alleles
+## together and anchored by the median Sc:Se ratio of the parental means (analysis.R Section 2). A parent's MU is then
+## the mean count at the median depth, and each hybrid allele, offset by its own haplotype offset (s_Hc, s_He), sits
+## on the same per-genome scale: with no regulatory divergence mu_Hc = mu_He = the parental rate. HYB.COMB sums the two alleles
 ## and offsets by the summed s_Hc + s_He. HYB.SC and HYB.SE keep the alleles apart.
 ## Mean axis
 ##   total, cis  Ratios inside one ploidy state, so a shared factor cancels.

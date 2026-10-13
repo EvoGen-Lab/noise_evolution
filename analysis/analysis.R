@@ -336,13 +336,10 @@ DEPTH.REF <- median(c(colSums(MIX.SC), colSums(MIX.SE), colSums(HYB.SC) + colSum
 # with HYB.SE. The factors pool cells and take medians of gene ratios, so a few highly expressed genes with
 # strong allelic effects cannot shift the scale of every other gene. Cells are clustered by group (parent or
 # hybrid allele): pools form within a group, and the same medians put the two groups on one scale.
-# A size factor is a relative scale. Multiplying a genome's factors by one constant anchors them to the
-# library scale of its parent: the parental offsets then average (mean parent library) / DEPTH.REF, and the
-# hybrid-allele offsets sit on that same scale, which puts Hc, He and the parents on one per-genome scale.
 if (!requireNamespace("scran", quietly = TRUE) || !requireNamespace("SingleCellExperiment", quietly = TRUE))
   stop("Section 2 computes the offsets with scran::computeSumFactors; install scran (Bioconductor, with SingleCellExperiment) in the project library.")
 GENOME.MATS <- list(SC = list(parent = MIX.SC, allele = HYB.SC), SE = list(parent = MIX.SE, allele = HYB.SE))
-GENOME.EXPOS <- list()
+GENOME.SF <- list()
 for (gen in names(GENOME.MATS)) {
   par.m <- GENOME.MATS[[gen]]$parent; allele.m <- GENOME.MATS[[gen]]$allele
   n.par <- ncol(par.m); n.all <- ncol(allele.m)
@@ -351,13 +348,27 @@ for (gen in names(GENOME.MATS)) {
   sce <- scran::computeSumFactors(sce, clusters = rep(c("parent", "allele"), c(n.par, n.all)))
   sf  <- SingleCellExperiment::sizeFactors(sce)
   stopifnot(length(sf) == n.par + n.all, all(is.finite(sf) & sf > 0))
-  anchor <- mean(colSums(par.m)) / DEPTH.REF / mean(sf[seq_len(n.par)])
-  GENOME.EXPOS[[gen]] <- list(parent = sf[seq_len(n.par)] * anchor, allele = sf[n.par + seq_len(n.all)] * anchor)
+  GENOME.SF[[gen]] <- list(parent = sf[seq_len(n.par)], allele = sf[n.par + seq_len(n.all)])
 }
-EXPO.MIX.SC <- GENOME.EXPOS$SC$parent
-EXPO.MIX.SE <- GENOME.EXPOS$SE$parent
-EXPO.HYB.SC <- GENOME.EXPOS$SC$allele      # s_Hc
-EXPO.HYB.SE <- GENOME.EXPOS$SE$allele      # s_He
+
+# Median anchor. A size factor is a relative scale, so each genome needs one constant that fixes its level.
+# The two genomes are tied together by the median of the per-gene Sc:Se ratios of the parental means: most genes
+# are unchanged between the species, so the median ratio is the scale difference between the genomes, and
+# highly expressed genes with strong effects cannot move it. The constants a_Sc and a_Se give the median gene
+# the same fitted parental mean in both species (a_Sc / a_Se = that median ratio). One common constant sets the
+# level: the mean parental offset equals the mean parental library over DEPTH.REF, so a mean is the expected
+# count of a cell at the median depth. The hybrid alleles take the constant of their genome.
+MIN.ANCHOR.COUNT <- 20                                       # total parental UMIs a gene needs in each species to enter the median
+ANCHOR.GENES <- rowSums(MIX.SC) >= MIN.ANCHOR.COUNT & rowSums(MIX.SE) >= MIN.ANCHOR.COUNT
+stopifnot(sum(ANCHOR.GENES) >= 100)
+ANCHOR.LOG.RATIO <- median(log((rowSums(MIX.SC)[ANCHOR.GENES] / sum(GENOME.SF$SC$parent)) / (rowSums(MIX.SE)[ANCHOR.GENES] / sum(GENOME.SF$SE$parent))))
+ANCHOR.LEVEL <- (sum(colSums(MIX.SC)) + sum(colSums(MIX.SE))) / DEPTH.REF / (exp(ANCHOR.LOG.RATIO) * sum(GENOME.SF$SC$parent) + sum(GENOME.SF$SE$parent))
+ANCHOR <- c(SC = ANCHOR.LEVEL * exp(ANCHOR.LOG.RATIO), SE = ANCHOR.LEVEL)
+cat(sprintf("Median anchor: %d genes, median log2(Sc/Se) parental ratio before anchoring = %.3f\n", sum(ANCHOR.GENES), ANCHOR.LOG.RATIO / log(2)))
+EXPO.MIX.SC <- GENOME.SF$SC$parent * ANCHOR[["SC"]]
+EXPO.MIX.SE <- GENOME.SF$SE$parent * ANCHOR[["SE"]]
+EXPO.HYB.SC <- GENOME.SF$SC$allele * ANCHOR[["SC"]]      # s_Hc
+EXPO.HYB.SE <- GENOME.SF$SE$allele * ANCHOR[["SE"]]      # s_He
 # The summed hybrid HYB.COMB is offset by the sum of its two haplotype offsets.
 EXPO.HYB    <- EXPO.HYB.SC + EXPO.HYB.SE
 
