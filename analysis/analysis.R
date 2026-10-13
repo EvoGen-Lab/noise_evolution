@@ -529,8 +529,8 @@ NCELLS <- c(MIX.SC = ncol(MIX.SC), MIX.SE = ncol(MIX.SE), HYC.SC = ncol(HYC.SC),
 
 ## 2.3 Per-gene contrasts, bootstrap SEs, and permutation null
 
-## Genes whose fit passes in every dataset of `fits`: a finite DISP below THETA.CAP (a detectable,
-## non-degenerate dispersion), a raw mean count above the dataset's depth-scaled floor, and
+## Genes whose fit passes in every dataset of `fits`: a positive finite DISP (phi = 0 is the Poisson limit, a
+## non-identifiable dispersion), a raw mean count above the dataset's depth-scaled floor, and
 ## detection in at least min_expr_frac of the smallest dataset's cells. depth is a named vector of
 ## mean reads per cell for each dataset. The mean floor min_mean applies at the shallowest dataset
 ## and scales up in proportion to depth; the detected-cell floor is one absolute number of cells,
@@ -617,9 +617,10 @@ load(file.path(OUTPUT.DIR, "gene_perm_output.rda"))            # PERM.RESULTS
 ## raw twin as <col>_raw, and the column ploidy_shift records the shift applied.
 ## Mean columns pass through untouched. SEs stay as bootstrapped.
 # BURST.CONTRASTS holds, per gene, the bootstrap point estimate and SE for the mean
-# and dispersion (disp) contrasts in each of the eight modes, plus two derived
-# quantities per mode: bfreq (burst frequency, the disp contrast
-# itself) and bsize (burst size, mean minus disp in log2 space)
+# and burst-frequency (bfreq) contrasts in each of the eight modes, plus derived
+# quantities per mode: bsize (burst size, mean minus bfreq in log2 space) and kbal.
+# bfreq is the log2 contrast of theta = 1/phi, so the log2 contrast of the dispersion phi
+# is its negative.
 # The dpar noise estimates then leave the HYB.COMB allele-summing shift behind
 # (ploidy_adjust_dpar), with the raw values kept in the _est_raw columns.
 BURST.CONTRASTS <- local({
@@ -628,11 +629,11 @@ BURST.CONTRASTS <- local({
   shift <- PLOIDY.SHIFT
   s   <- unname(shift[df$gene])
   hyb <- fits$HYB.COMB[df$gene, ]
-  cv_h <- 1 / hyb$MU + 2^s / hyb$DISP                # latent term scaled by 2^s
+  cv_h <- 1 / hyb$MU + 2^s * hyb$DISP                # latent term (phi) scaled by 2^s
   df$ploidy_shift <- s
   for (sp in c("sc", "se")) {
     par  <- fits[[if (sp == "sc") "MIX.SC" else "MIX.SE"]][df$gene, ]
-    cv_p <- 1 / par$MU + 1 / par$DISP
+    cv_p <- 1 / par$MU + par$DISP
     est <- setNames(paste0(c("bfreq", "bsize", "kbal", "cv2"), "_dpar_", sp, "_est"), c("bfreq", "bsize", "kbal", "cv2"))
     for (q in names(est)) df[[paste0(est[[q]], "_raw")]] <- df[[est[[q]]]]
     df[[est[["bfreq"]]]] <- df[[est[["bfreq"]]]] - s
@@ -713,14 +714,14 @@ cat("Weighted against unweighted hybrid mean, |difference| / bootstrap SE per ge
 print(WEIGHT.CHECK, digits = 3, row.names = FALSE)
 write.csv(WEIGHT.CHECK, file.path(TABLE.DIR, "hybrid_mean_weighting_check.csv"), row.names = FALSE)
 
-# The ploidy shift assumes the two hybrid alleles share one dispersion. log2(phi_Hc / phi_He) = log2(theta_He / theta_Hc)
+# The ploidy shift assumes the two hybrid alleles share one dispersion. log2(phi_Hc / phi_He)
 # per gene, from the full-hybrid allele fits, is read against its bootstrap SE from the internal pilot (the two alleles
 # share their resampled cells, so the SE carries their covariance). If the alleles share a dispersion, about 5% of
 # genes have |z| above 1.96 and the centre of the distribution sits at zero.
 ALLELE.DISP <- local({
-  th_c <- CONTRAST.FITS$HYB.SC[GENES, "DISP"]; th_e <- CONTRAST.FITS$HYB.SE[GENES, "DISP"]
-  ok <- is.finite(th_c) & is.finite(th_e) & th_c > 0 & th_e > 0 & th_c < THETA.CAP & th_e < THETA.CAP
-  ratio <- setNames(log2(th_e / th_c), GENES)[ok]
+  ph_c <- CONTRAST.FITS$HYB.SC[GENES, "DISP"]; ph_e <- CONTRAST.FITS$HYB.SE[GENES, "DISP"]
+  ok <- is.finite(ph_c) & is.finite(ph_e) & ph_c > 0 & ph_e > 0
+  ratio <- setNames(log2(ph_c / ph_e), GENES)[ok]
   pil   <- PILOT.SE[match(names(ratio), PILOT.SE$gene), ]
   se    <- sqrt(pmax(pil$HYB.SC_logdisp_se^2 + pil$HYB.SE_logdisp_se^2 - 2 * pil$HYB_logdisp_cov, 0)) / log(2)
   z     <- ratio / se
@@ -1033,16 +1034,16 @@ RESID <- list(
 ## latent deviation. Private allele noise does not correlate across genes, so
 ## the shared term e carries the whole covariance. Summing alleles leaves that
 ## covariance unchanged and only lowers each gene's latent variance by
-## g = 2^-s (see ploidy_shift), which raises theta by 1/g, so the
-## haploid-equivalent theta is g * theta. The covariance stays fixed, so the
+## g = 2^-s (see ploidy_shift), which lowers phi by g, so the
+## haploid-equivalent phi is phi / g. The covariance stays fixed, so the
 ## haploid-equivalent correlation equals the hybrid's times sd_h / sd_c for
-## each gene, with sd_h^2 = mu + mu^2 / theta and sd_c^2 = mu + mu^2 / (g *
-## theta). That ratio squared is
-## f^2 = g * (mu + theta) / (mu + g * theta), which is at most 1 and equals g
+## each gene, with sd_h^2 = mu + phi * mu^2 and sd_c^2 = mu + phi * mu^2 / g.
+## That ratio squared is
+## f^2 = g * (1 + phi * mu) / (g + phi * mu), which is at most 1 and equals g
 ## when counts are large. Adjusted hybrid correlations therefore shrink toward
 ## zero, in step with the lower latent variance of a single genome.
 ## fit: CONTRAST.FITS$HYB.COMB rows for the genes (MU, DISP); shift: PLOIDY.SHIFT for the same genes.
-## A gene with no finite shift or theta gets f = 1 (no adjustment) and is counted below.
+## A gene with no finite shift or phi gets f = 1 (no adjustment) and is counted below.
 # Summing the two hybrid alleles lowers each gene's latent variance and leaves
 # the between-gene covariance alone, so HYB.COMB residual correlations run
 # higher than a haploid genome's. PLOIDY.F gives each gene the factor f that
@@ -1050,9 +1051,8 @@ RESID <- list(
 PLOIDY.F <- local({
   fit <- CONTRAST.FITS$HYB.COMB[CO.GENES, ]
   shift <- PLOIDY.SHIFT[CO.GENES]
-  g  <- 2^(-shift); mu <- fit$MU; th <- fit$DISP
-  f2 <- g * (mu + th) / (mu + g * th)
-  f2[!is.finite(th) & is.finite(g)] <- 1     # Poisson limit, no latent noise to rescale
+  g  <- 2^(-shift); mu <- fit$MU; phi <- fit$DISP
+  f2 <- g * (1 + phi * mu) / (g + phi * mu)   # phi = 0 (Poisson limit) gives f = 1: no latent noise to rescale
   f  <- sqrt(f2)
   f[!is.finite(f)] <- 1
   setNames(f, rownames(fit))
@@ -1834,9 +1834,9 @@ SCORE.SE <- merge(SCORE.SE, OCC.SE, by = "gene")
 
 ## 6.2 Validation: does each feature associate with burst frequency?
 # Uses each species' own allele within the hybrid (SPLIT.FITS$HYC.SC.N/
-# HYC.SE.N, Section 2.2). Each feature is tested against burst frequency (DISP) with
+# HYC.SE.N, Section 2.2). Each feature is tested against burst frequency (BFREQ = theta) with
 # mean expression (MU) as the covariate. Burst size is not tested separately: with MU as
-# the covariate, log BSIZE = log MU - log DISP makes the BSIZE test the DISP test with the
+# the covariate, log BSIZE = log MU - log BFREQ makes the BSIZE test the BFREQ test with the
 # sign of the slope reversed.
 TATA.SC      <- setNames(SCORE.SC$tata_score, SCORE.SC$gene)
 TATA.SE      <- setNames(SCORE.SE$tata_score, SCORE.SE$gene)
@@ -1846,12 +1846,12 @@ OCC.SC.SCORE <- setNames(SCORE.SC$occ_score,  SCORE.SC$gene)
 OCC.SE.SCORE <- setNames(SCORE.SE$occ_score,  SCORE.SE$gene)
 
 NOISE.VALIDATE <- rbind(
-  cbind(species = "Sc", parameter = "bfreq", architecture_noise_check(SPLIT.FITS$HYC.SC.N, TATA.SC,      "TATA score",                   response = "DISP")),
-  cbind(species = "Sc", parameter = "bfreq", architecture_noise_check(SPLIT.FITS$HYC.SC.N, POLYAT.SC,    "poly(dA:dT) length",           response = "DISP")),
-  cbind(species = "Sc", parameter = "bfreq", architecture_noise_check(SPLIT.FITS$HYC.SC.N, OCC.SC.SCORE, "nucleosome occupancy (NuPoP)", response = "DISP")),
-  cbind(species = "Se", parameter = "bfreq", architecture_noise_check(SPLIT.FITS$HYC.SE.N, TATA.SE,      "TATA score",                   response = "DISP")),
-  cbind(species = "Se", parameter = "bfreq", architecture_noise_check(SPLIT.FITS$HYC.SE.N, POLYAT.SE,    "poly(dA:dT) length",           response = "DISP")),
-  cbind(species = "Se", parameter = "bfreq", architecture_noise_check(SPLIT.FITS$HYC.SE.N, OCC.SE.SCORE, "nucleosome occupancy (NuPoP)", response = "DISP")))
+  cbind(species = "Sc", parameter = "bfreq", architecture_noise_check(SPLIT.FITS$HYC.SC.N, TATA.SC,      "TATA score",                   response = "BFREQ")),
+  cbind(species = "Sc", parameter = "bfreq", architecture_noise_check(SPLIT.FITS$HYC.SC.N, POLYAT.SC,    "poly(dA:dT) length",           response = "BFREQ")),
+  cbind(species = "Sc", parameter = "bfreq", architecture_noise_check(SPLIT.FITS$HYC.SC.N, OCC.SC.SCORE, "nucleosome occupancy (NuPoP)", response = "BFREQ")),
+  cbind(species = "Se", parameter = "bfreq", architecture_noise_check(SPLIT.FITS$HYC.SE.N, TATA.SE,      "TATA score",                   response = "BFREQ")),
+  cbind(species = "Se", parameter = "bfreq", architecture_noise_check(SPLIT.FITS$HYC.SE.N, POLYAT.SE,    "poly(dA:dT) length",           response = "BFREQ")),
+  cbind(species = "Se", parameter = "bfreq", architecture_noise_check(SPLIT.FITS$HYC.SE.N, OCC.SE.SCORE, "nucleosome occupancy (NuPoP)", response = "BFREQ")))
 print(NOISE.VALIDATE)
 
 ## 6.3 Between-species divergence in architecture
@@ -2266,8 +2266,8 @@ cat(sprintf("Sc parent: within/between ratio, n = %d genes, %.1f%% with within >
 
 BF.MIX.SC         <- CONTRAST.FITS$MIX.SC
 MU.LOG2.MIX.SC    <- setNames(log2(BF.MIX.SC$MU), rownames(BF.MIX.SC))
-BFREQ.LOG2.MIX.SC <- setNames(log2(BF.MIX.SC$DISP), rownames(BF.MIX.SC))
-BSIZE.LOG2.MIX.SC <- setNames(log2(BF.MIX.SC$MU / BF.MIX.SC$DISP), rownames(BF.MIX.SC))
+BFREQ.LOG2.MIX.SC <- setNames(-log2(BF.MIX.SC$DISP), rownames(BF.MIX.SC))
+BSIZE.LOG2.MIX.SC <- setNames(log2(BF.MIX.SC$MU * BF.MIX.SC$DISP), rownames(BF.MIX.SC))
 
 fig_pdf("extra/S_within_between_vs_burst_MIX.SC.pdf", 15, 5)
 par(mfrow = c(1, 3), mar = c(5, 4.5, 2, 1))
@@ -2292,8 +2292,8 @@ cat(sprintf("Se parent: within/between ratio, n = %d genes, %.1f%% with within >
 
 BF.MIX.SE         <- CONTRAST.FITS$MIX.SE
 MU.LOG2.MIX.SE    <- setNames(log2(BF.MIX.SE$MU), rownames(BF.MIX.SE))
-BFREQ.LOG2.MIX.SE <- setNames(log2(BF.MIX.SE$DISP), rownames(BF.MIX.SE))
-BSIZE.LOG2.MIX.SE <- setNames(log2(BF.MIX.SE$MU / BF.MIX.SE$DISP), rownames(BF.MIX.SE))
+BFREQ.LOG2.MIX.SE <- setNames(-log2(BF.MIX.SE$DISP), rownames(BF.MIX.SE))
+BSIZE.LOG2.MIX.SE <- setNames(log2(BF.MIX.SE$MU * BF.MIX.SE$DISP), rownames(BF.MIX.SE))
 
 fig_pdf("extra/S_within_between_vs_burst_MIX.SE.pdf", 15, 5)
 par(mfrow = c(1, 3), mar = c(5, 4.5, 2, 1))
@@ -2622,10 +2622,10 @@ STEWART <- STEWART[!is.na(STEWART$ORF) & !is.na(STEWART$Mean) & !is.na(STEWART$C
 
 ## 9.2 NB-implied noise and per-source merge
 # NB-implied CV^2 and Fano factor for MIX.SC
-NB.SC$CV2   <- 1 / NB.SC$MU + 1 / NB.SC$DISP
-NB.SC$Fano  <- 1 + NB.SC$MU / NB.SC$DISP
-NB.SC$BFREQ <- NB.SC$DISP           # burst frequency, this pipeline's own DISP column
-NB.SC$BSIZE <- NB.SC$MU / NB.SC$DISP  # burst size, equivalently Fano - 1
+NB.SC$CV2   <- 1 / NB.SC$MU + NB.SC$DISP
+NB.SC$Fano  <- 1 + NB.SC$MU * NB.SC$DISP
+NB.SC$BFREQ <- 1 / NB.SC$DISP       # burst frequency theta = 1 / phi
+NB.SC$BSIZE <- NB.SC$MU * NB.SC$DISP  # burst size, equivalently Fano - 1
 
 # Implied burst frequency and burst size for each external source, via
 # add_burst_terms(). 
@@ -2715,9 +2715,9 @@ EXT.CORR <- EXT.CORR[, c("source", "statistic", "n", "rho", "p")]
 
 # Newman's DM is a mean-corrected residual rather than a raw CV^2, so it
 # is reported separately rather than folded into EXT.CORR above.
-NEWMAN.DM.CORR <- cor_row(1 / EXT.MERGE$Newman$DISP, EXT.MERGE$Newman$DM)
+NEWMAN.DM.CORR <- cor_row(EXT.MERGE$Newman$DISP, EXT.MERGE$Newman$DM)
 NEWMAN.DM.CORR$source    <- "Newman"
-NEWMAN.DM.CORR$statistic <- "DM vs 1/DISP"
+NEWMAN.DM.CORR$statistic <- "DM vs DISP (phi)"
 
 print(EXT.CORR, row.names = FALSE)
 print(NEWMAN.DM.CORR[, c("source", "statistic", "n", "rho", "p")], row.names = FALSE)

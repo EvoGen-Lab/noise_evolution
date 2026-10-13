@@ -16,9 +16,9 @@
 ###     ckpt_path() - Path of a section's checkpoint file (section{N}_checkpoint.rda).
 ###     console_start() / console_stop() - Per-section console transcript (section{N}_console.txt).
 ###   1. OFFSET NEGATIVE-BINOMIAL FIT
-###     neg_binom_fit_offset() - Offset NB fit for one gene: rate (mu) and NB size (disp) from .fit_one(), with glm.nb asymptotic log-scale SEs; disp = Inf when a Poisson-vs-NB pre-check finds no overdispersion.
+###     neg_binom_fit_offset() - Offset NB fit for one gene: rate (mu), dispersion phi (disp) and NB size theta = 1/phi from .fit_one(), with glm.nb asymptotic log-scale SEs; disp = 0 (theta = Inf) when a Poisson-vs-NB pre-check finds no overdispersion.
 ###     fit_counts_offset() - Matrix version: one neg_binom_fit_offset() fit per gene (row) against its exposure vector; optionally splits genes across a PSOCK cluster, shipping the functions the fit needs.
-###     .fit_one() - The pipeline's single NB estimator (mu = sum(y)/sum(exposure), disp by 1-D likelihood given mu): observed fits, every bootstrap and permutation replicate, and the power grid.
+###     .fit_one() - The pipeline's single NB estimator (mu = sum(y)/sum(exposure), theta by 1-D likelihood given mu, disp = 1/theta): observed fits, every bootstrap and permutation replicate, and the power grid.
 ###     .fit_split() - Splits a pooled sample by a pre-drawn permutation and fits each half with .fit_one(); the gene-level null and the power grid share it.
 ###   1b. INTERNAL-PILOT SPLIT FRACTION (f*)
 ###     split_indices_by_depth() - Depth-matched split of depth-ordered hybrid cells at an arbitrary fraction.
@@ -108,7 +108,7 @@
 ###     concordance_by_magnitude() - Splits an any-cis gene set into magnitude bins and computes concordance within each bin.
 ###     plot_concordance_by_magnitude() - Bar plot of concordance_by_magnitude()'s output, one bar per magnitude bin.
 ###     promoter_noise_candidates() - Lists genes with a cis noise component and a top-decile promoter-feature shift, with each gene's concordance flag, for manual inspection.
-###     architecture_noise_check() - Tests whether a promoter feature associates with a species' own DISP or BSIZE, controlling for a second fit column (MU by default).
+###     architecture_noise_check() - Tests whether a promoter feature associates with a species' own BFREQ or BSIZE, controlling for a second fit column (MU by default).
 ###   11. SEURAT CLUSTERING DIAGNOSTICS (data-driven feature count, resolution, and metric choices)
 ###     hvg_elbow() - Elbow point on the ranked standardized-variance curve from FindVariableFeatures(), for a data-driven nfeatures.
 ###     plot_hvg_elbow() - Diagnostic plot for hvg_elbow()'s output: full curve, chosen cutoff, and floor marked.
@@ -225,29 +225,30 @@ console_stop <- function() {
 ## ============================================================
 ## 1. OFFSET NEGATIVE-BINOMIAL FIT
 ## ============================================================
-# Offset NB fit for one gene. Counts follow y ~ NB(mean = exposure * mu, size = disp),
-# so mu is a per-unit-exposure rate and disp is the NB size theta (larger = less noise).
-# The point estimates come from .fit_one(): mu = sum(y)/sum(exposure), and disp is the
-# NB likelihood maximizer given that mu (Inf when Pearson chi-square / df <= 1, i.e. no
-# detectable overdispersion). Every bootstrap, permutation and power-grid replicate fits
-# with this same estimator, so an observed value and the distribution it is compared
-# against are measured identically. glm.nb supplies only the asymptotic log-scale SEs.
-# Returns c(disp, mu, disp_logse, mu_logse).
+# Offset NB fit for one gene. Counts follow y ~ NB(mean = exposure * mu, size = theta),
+# so mu is a per-unit-exposure rate, disp is the dispersion phi = 1/theta (the noise; larger = noisier) and
+# theta is the NB size, the quantity that behaves as burst frequency. The point estimates come from
+# .fit_one(): mu = sum(y)/sum(exposure), and theta is the NB likelihood maximizer given that mu
+# (disp = 0, theta = Inf when Pearson chi-square / df <= 1, i.e. no detectable overdispersion).
+# Every bootstrap, permutation and power-grid replicate fits with this same estimator, so an observed
+# value and the distribution it is compared against are measured identically. glm.nb supplies only
+# the asymptotic log-scale SEs; the log-scale SE of theta is the log-scale SE of phi.
+# Returns c(disp, mu, disp_logse, mu_logse, theta).
 neg_binom_fit_offset <- function(y, exposure) {
   if (!is.null(dim(y)))
     stop("neg_binom_fit_offset() takes one gene's counts; use fit_counts_offset() for a matrix")
-  na_out <- c(disp = NA_real_, mu = NA_real_, disp_logse = NA_real_, mu_logse = NA_real_)
+  na_out <- c(disp = NA_real_, mu = NA_real_, disp_logse = NA_real_, mu_logse = NA_real_, theta = NA_real_)
   if (length(y) < 2 || length(exposure) != length(y)) return(na_out)
   keep <- is.finite(y) & is.finite(exposure) & exposure > 0
   y <- y[keep]; exposure <- exposure[keep]
   if (length(y) < 2) return(na_out)
 
   core <- .fit_one(y, exposure)
-  out  <- c(disp = unname(core["disp"]), mu = unname(core["mu"]), disp_logse = NA_real_, mu_logse = NA_real_)
-  if (!is.finite(out[["disp"]])) return(out)
+  out  <- c(disp = unname(core["disp"]), mu = unname(core["mu"]), disp_logse = NA_real_, mu_logse = NA_real_, theta = unname(core["theta"]))
+  if (!is.finite(out[["theta"]])) return(out)
 
   logexp <- log(exposure)
-  fit <- suppressWarnings(tryCatch(glm.nb(y ~ 1 + offset(logexp), init.theta = out[["disp"]]),
+  fit <- suppressWarnings(tryCatch(glm.nb(y ~ 1 + offset(logexp), init.theta = out[["theta"]]),
                                    error = function(e) NULL))
   if (!is.null(fit) && !isFALSE(fit$converged)) {
     out["mu_logse"] <- tryCatch(sqrt(vcov(fit)[1, 1]), error = function(e) NA_real_)
@@ -257,40 +258,40 @@ neg_binom_fit_offset <- function(y, exposure) {
   out
 }
 
-# Bounds of the NB size (theta) estimate. The 1-D likelihood search runs over log(theta) in
-# LOG.THETA.RANGE. A fitted theta above THETA.CAP is indistinguishable from Poisson at any count the data
-# can resolve, so it is reported as Inf (the Poisson limit), and gene filters treat DISP >= THETA.CAP as
-# not identifiable.
-THETA.CAP       <- 1e6
+# Bounds of the NB fit. The 1-D likelihood search runs over log(theta) in LOG.THETA.RANGE. A fitted
+# dispersion phi = 1/theta below PHI.FLOOR is indistinguishable from Poisson at any count the data can
+# resolve, so it is reported as phi = 0 (theta = Inf, the Poisson limit), and gene filters treat phi = 0
+# as not identifiable.
+PHI.FLOOR       <- 1e-6
 LOG.THETA.RANGE <- c(-4, 15)
 
-# The pipeline's single NB estimator: mu = sum(y)/sum(exposure), and disp = the NB size
+# The pipeline's single NB estimator: mu = sum(y)/sum(exposure), and theta = the NB size
 # from a 1-D likelihood maximization over log(theta) given that mu, after a Poisson-vs-NB
-# pre-check (Pearson chi-square / df <= 1 gives disp = Inf). neg_binom_fit_offset() uses it
-# for the observed fits, gene_boot.R and gene_perm.R for every resample,
-# and power_grid.R for the simulated observed contrast and its null. Returns c(mu, disp);
-# base R only and RNG-free, so fork-safe.
+# pre-check (Pearson chi-square / df <= 1 gives phi = 0, theta = Inf). The dispersion is
+# disp = phi = 1/theta. neg_binom_fit_offset() uses it for the observed fits, gene_boot.R and
+# gene_perm.R for every resample, and power_grid.R for the simulated observed contrast and its
+# null. Returns c(mu, disp, theta); base R only and RNG-free, so fork-safe.
 .fit_one <- function(counts, expo) {
   keep <- is.finite(counts) & is.finite(expo) & expo > 0
   y <- counts[keep]; e <- expo[keep]
-  if (length(y) < 2) return(c(mu = NA_real_, disp = NA_real_))
+  if (length(y) < 2) return(c(mu = NA_real_, disp = NA_real_, theta = NA_real_))
 
   mu_hat <- sum(y) / sum(e)
-  if (sum(y) == 0) return(c(mu = 0, disp = NA_real_))
+  if (sum(y) == 0) return(c(mu = 0, disp = NA_real_, theta = NA_real_))
 
   mu_i <- mu_hat * e
   pearson <- sum((y - mu_i)^2 / mu_i) / (length(y) - 1)
-  if (pearson <= 1) return(c(mu = mu_hat, disp = Inf))
+  if (pearson <= 1) return(c(mu = mu_hat, disp = 0, theta = Inf))
 
   # NB log-likelihood in log(theta), with the means fixed at mu_i
   opt <- tryCatch(optimize(function(ltheta) {
     th <- exp(ltheta)
     sum(lgamma(y + th) - lgamma(th) + th*log(th) - (th + y)*log(th + mu_i) + y*log(mu_i))
   }, LOG.THETA.RANGE, maximum = TRUE), error = function(e) NULL)
-  if (is.null(opt)) return(c(mu = mu_hat, disp = NA_real_))
+  if (is.null(opt)) return(c(mu = mu_hat, disp = NA_real_, theta = NA_real_))
 
-  theta <- exp(opt$maximum)
-  c(mu = mu_hat, disp = if (theta > THETA.CAP) Inf else theta)
+  phi <- exp(-opt$maximum)
+  if (phi < PHI.FLOOR) c(mu = mu_hat, disp = 0, theta = Inf) else c(mu = mu_hat, disp = phi, theta = 1 / phi)
 }
 
 # Splits a pooled sample at position n1 of a pre-drawn index permutation and fits each
@@ -303,8 +304,8 @@ LOG.THETA.RANGE <- c(-4, 15)
 }
 
 ## Fits every gene (row) of a genes x cells matrix against one shared exposure vector
-## with neg_binom_fit_offset() and returns a per-gene table: DISP (NB size), MU, their log
-## SEs, MEAN_CT, N_EXPR, and derived VAR, FANO, CV, BFREQ (= DISP) and BSIZE (= MU / DISP).
+## with neg_binom_fit_offset() and returns a per-gene table: DISP (dispersion phi = 1/theta), MU, their log
+## SEs, MEAN_CT, N_EXPR, and derived VAR, FANO, CV, BFREQ (theta = 1 / DISP) and BSIZE (MU * DISP).
 ## cl is optional: NULL fits on one core; a PSOCK cluster from parallel::makeCluster() splits
 ## the genes into one chunk per worker, each chunk carrying all cells for its genes. A PSOCK
 ## worker starts with an empty workspace, so the functions the fit needs are sent to it here:
@@ -315,17 +316,17 @@ fit_counts_offset <- function(mat, exposure, cl = NULL) {
   stopifnot(ncol(mat) == length(exposure))
   if (is.null(cl))
     return(do.call(rbind, lapply(seq_len(nrow(mat)), function(i) {
-      ## One NB fit per gene. DISP is the NB size parameter (theta), which this pipeline also reports
-      ## as burst frequency (BFREQ = DISP). BSIZE is the separate derived quantity MU / DISP (mean
-      ## count per burst); DISP and BSIZE are distinct quantities.
+      ## One NB fit per gene. DISP is the dispersion phi (the noise); BFREQ is theta = 1 / phi, the NB size,
+      ## which behaves as burst frequency. BSIZE = MU * DISP (mean count per burst) is a separate derived
+      ## quantity. Since DISP = 1 / BFREQ, a contrast of log2 DISP is the negative of the log2 BFREQ contrast.
       y <- mat[i, ]
       f <- neg_binom_fit_offset(y, exposure)
       disp <- f[["disp"]]; mu <- f[["mu"]]
       data.frame(
         DISP = disp, MU = mu, DISP_LOGSE = f[["disp_logse"]], MU_LOGSE = f[["mu_logse"]],
         MEAN_CT = sum(y) / length(y), N_EXPR = sum(y > 0),
-        VAR = mu + mu^2 / disp, FANO = 1 + mu / disp, CV = sqrt(1 / disp + 1 / mu),
-        BFREQ = disp, BSIZE = mu / disp,
+        VAR = mu + mu^2 * disp, FANO = 1 + mu * disp, CV = sqrt(disp + 1 / mu),
+        BFREQ = f[["theta"]], BSIZE = mu * disp,
         row.names = rownames(mat)[i])
     })))
 
@@ -444,18 +445,18 @@ make_draws <- function(ncells, B, seed = 1) {
 ##               share. The summed fit HYB.COMB enters the noise axis only.
 ##   inh         One allele against its own parent on the same scale, so pure inheritance sits at 0. inh is
 ##               descriptive and no classifier reads it.
-## Noise axis (DISP is the NB size and has no summing rule)
+## Noise axis (reported as BFREQ = theta = 1/DISP, the NB size, which has no summing rule)
 ##   total, cis, trans  Ratios again, so a ploidy effect shared by both
 ##               species (cell size, cell-cycle timing) cancels.
 ##   dom         The midparent is geometric, the mean of the two log2 values.
 ##               Its observed noise contrast and null keep the raw HYB.COMB
 ##               scale, so the noise axis of dom stays descriptive.
 ##   dpar        HYB.COMB sums two alleles per cell, which averages their
-##               private (intrinsic) noise and raises DISP in the hybrid.
+##               private (intrinsic) noise, lowers DISP (phi) and raises BFREQ (theta) in the hybrid.
 ##               For alleles with count shares w1 and w2 (w1 is the Hc share of the summed count) and intrinsic
-##               fraction phi, the summed pair keeps the shared noise and
+##               fraction phi_i, the summed pair keeps the shared noise and
 ##               scales the private noise by w1^2 + w2^2. The expected rise
-##               in log2 DISP is s = -log2(1 - (1 - w1^2 - w2^2) * phi),
+##               in log2 BFREQ is s = -log2(1 - (1 - w1^2 - w2^2) * phi_i),
 ##               between 0 and 1 (ploidy_shift). ploidy_adjust_dpar removes
 ##               s from the dpar estimates as follows. bfreq falls by s,
 ##               bsize (mean - bfreq) rises by s, kbal (bfreq - bsize)
@@ -514,7 +515,7 @@ make_draws <- function(ncells, B, seed = 1) {
                HYB.COMB = "HYB", HYB.SC = "HYB", HYB.SE = "HYB")
 
 ## Log2 contrast for one mode from a named list gv of per-group fitted values. q selects the
-## quantity: "MU" (per-genome mean rate), "BFREQ" (NB size; geometric midparent for dom) or "CV2".
+## quantity: "MU" (per-genome mean rate), "BFREQ" (theta = 1/phi, the NB size; geometric midparent for dom) or "CV2".
 ## total and cis are ratios within one ploidy state; trans is the parental ratio minus the hybrid allele
 ## ratio. On the mean axis dom and dpar use the unweighted average of the two allele rates as the
 ## hybrid mean (against the arithmetic midparent for dom); on the noise axes they use the summed fit HYB.COMB.
@@ -536,21 +537,22 @@ make_draws <- function(ncells, B, seed = 1) {
     inh_se  = l2(gv[["HYB.SE"]]) - l2(gv[["MIX.SE"]]))
 }
 
-## CV2 (squared coefficient of variation) of one fitted group: 1/mu + 1/disp, the Poisson plus
-## overdispersion terms. Returns NA unless mu and disp are finite and positive, so the bootstrap
+## CV2 (squared coefficient of variation) of one fitted group: 1/mu + disp (disp = phi), the Poisson plus
+## overdispersion terms. Returns NA unless mu and disp are finite and positive (disp = 0 is a Poisson-like
+## fit with no identifiable dispersion), so the bootstrap
 ## SD and the permutation null see only valid values. The single CV2 formula for the bootstrap,
 ## the permutation null and the observed fits.
 .cv2_of <- function(mu, disp) {
-  if (is.finite(mu) && mu > 0 && is.finite(disp) && disp > 0) 1 / mu + 1 / disp else NA_real_
+  if (is.finite(mu) && mu > 0 && is.finite(disp) && disp > 0) 1 / mu + disp else NA_real_
 }
 
 ## Adds burst size (bsize = mean - bfreq) and kinetic balance (kbal = bfreq - bsize = 2*bfreq - mean),
 ## both on the log2 scale, with propagated SEs, to the finished bootstrap table. bfreq is the NB
-## dispersion contrast under its biological name. Because bsize is defined by that subtraction,
+## theta contrast (the negative of the log2 phi contrast) under its biological name. Because bsize is defined by that subtraction,
 ## bfreq and bsize are structurally anti-correlated whenever bfreq varies more than the mean
 ## (see the structural bfreq-bsize check in analysis.R Section 3.6). kbal together with the mean carries the same information as
 ## bfreq and bsize without that dependence, so kbal against the mean asks whether a gene's overall
-## change leans toward frequency or size. Fitting code keeps the field name "disp".
+## change leans toward frequency or size. Fitting code keeps the field name "disp" for phi and "theta" for 1/phi.
 add_burst_contrasts <- function(df) {
   ## Loops over the reportable modes; BOOT.CONTRASTS has columns only for .OUT_MODES (cis_n and
   ## trans_n are folded into cis and trans through .BFREQ_SOURCE).
@@ -894,12 +896,12 @@ perm_pval <- function(obs, null) {
 ## trans is the remainder. Correlations are shrunk (Schaefer-Strimmer)
 ## and uncertainty comes from the same cell resampling as elsewhere.
 
-## Pearson residuals (y - mu*e) / sqrt(mu*e + (mu*e)^2 / k) from the offset NB fit, genes x cells.
+## Pearson residuals (y - mu*e) / sqrt(mu*e + phi*(mu*e)^2) from the offset NB fit, genes x cells.
 ## The exposure offset removes depth and the NB SD puts genes on a common variance scale, so
 ## correlations between residuals reflect co-fluctuation. Non-finite entries (zero fitted mean) are set to 0.
 nb_residuals <- function(mat, exposure, fit) {
   fitted <- outer(fit$MU, exposure)
-  v <- fitted + ifelse(is.finite(fit$DISP), fitted^2 / fit$DISP, 0)
+  v <- fitted + fitted^2 * ifelse(is.finite(fit$DISP), fit$DISP, 0)
   r <- (mat - fitted) / sqrt(v)
   r[!is.finite(r)] <- 0
   r
@@ -987,8 +989,8 @@ make_coexpr_draws <- function(nSC, nSE, nH, B, seed = 1) {
     H  = sample.int(nH,  nH,  replace = TRUE)))
 }
 
-## Per-gene reliability: the fraction of a gene's total NB variance (mu + mu^2/k) that is biological
-## rather than Poisson sampling noise, rho = mu / (mu + k), from the MU/DISP already fitted for
+## Per-gene reliability: the fraction of a gene's total NB variance (mu + phi mu^2) that is biological
+## rather than Poisson sampling noise, rho = phi mu / (1 + phi mu), from the MU/DISP already fitted for
 ## every gene. A pairwise correlation is attenuated by about sqrt(rho_i * rho_j), so rho predicts how
 ## noisy a pair's residual correlation is and is a natural basis for an inclusion floor.
 ## fits: named list of per-dataset fit data.frames (MU, DISP columns, rownames = gene). Reliability
@@ -996,8 +998,8 @@ make_coexpr_draws <- function(nSC, nSE, nH, B, seed = 1) {
 ## worst context. Returns a named vector over genes.
 gene_reliability <- function(fits, genes) {
   rho_mat <- sapply(fits, function(fr) {
-    mu <- fr[genes, "MU"]; k <- fr[genes, "DISP"]
-    mu / (mu + k)     # DISP = Inf (Poisson limit) correctly gives rho = 0
+    mu <- fr[genes, "MU"]; phi <- fr[genes, "DISP"]
+    phi * mu / (1 + phi * mu)     # DISP = 0 (Poisson limit) correctly gives rho = 0
   })
   setNames(apply(rho_mat, 1, min, na.rm = TRUE), genes)
 }
@@ -1188,7 +1190,7 @@ classify_reg <- function(p_cis, p_trans, est_cis, est_trans, sig = 0.05, colors 
 ## parents are haploid and the hybrid is diploid. On the mean axis the hybrid mean rate is the
 ## unweighted average of the two allele fits on the parental per-genome scale, so an additive
 ## gene sits at the midparent and the calls need no ploidy correction. On
-## the noise axis HYB.COMB averages the intrinsic noise of two alleles, which raises DISP
+## the noise axis HYB.COMB averages the intrinsic noise of two alleles, which lowers DISP and raises BFREQ
 ## in the hybrid relative to both parents; noise-axis calls therefore use the
 ## ploidy-adjusted estimates (the BURST.CONTRASTS block in analysis.R) and the _q_ploidy q-values
 ## (bfreq, bsize, kbal, cv2; dom_class_vec selects them), while the mean axis uses _q.
@@ -1961,7 +1963,7 @@ intrinsic_extrinsic_components <- function(mats, expos) {
   data.frame(gene = rownames(mats$HYC.SC), intr = intr, extr = extr, good = good, row.names = NULL)
 }
 
-## Expected log2 rise in DISP (bfreq) when a diploid hybrid's two alleles are
+## Expected log2 rise in BFREQ (theta = 1/DISP) when a diploid hybrid's two alleles are
 ## summed inside one cell and compared with a haploid parent.
 ## Derivation. Write allele k of a gene in one cell as its mean times
 ## (1 + e + i_k). The term e is the cell's extrinsic deviation and both alleles
@@ -1979,9 +1981,9 @@ intrinsic_extrinsic_components <- function(mats, expos) {
 ## var = E + (w1^2 + w2^2) * I. Because w1^2 + w2^2 is at most 1, the sum is
 ## quieter than either allele. It equals 1/2 for equal alleles and approaches 1
 ## when one allele dominates, since one allele leaves nothing to average.
-## DISP is the inverse of latent CV2, so the rise in log2 DISP is
+## BFREQ is the inverse of latent CV2, so the rise in log2 BFREQ is
 ## s = -log2((E + (w1^2 + w2^2) * I) / (E + I))
-##   = -log2(1 - (1 - w1^2 - w2^2) * phi), with phi = I / (I + E).
+##   = -log2(1 - (1 - w1^2 - w2^2) * phi), with phi = I / (I + E) the intrinsic fraction.
 ## Equal alleles with fully private noise give s = 1. Fully shared noise gives 0.
 ## E and I come from intrinsic_extrinsic_components(), which removes Poisson
 ## shot noise. The average I treats the two alleles' private variances as equal.
@@ -2350,9 +2352,9 @@ score_promoters_nupop <- function(seqs, occ_list, window = TATA.WINDOW) {
 ## Tests whether the direction of each promoter feature's between-species
 ## shift matches the direction predicted from the per-species relationship
 ## in NOISE.VALIDATE (Section 6.2): a higher TATA score or longer
-## poly(dA:dT) tract goes with lower DISP (burstier, noisier expression).
-## bfreq_cis_est = log2(DISP_Sc) - log2(DISP_Se), so a positive value means
-## Se has the lower DISP and is the noisier allele, and the prediction is
+## poly(dA:dT) tract goes with lower BFREQ (burstier, noisier expression).
+## bfreq_cis_est = log2(BFREQ_Sc) - log2(BFREQ_Se), so a positive value means
+## Se has the lower BFREQ and is the noisier allele, and the prediction is
 ## that Se carries the larger feature value, delta (Se - Sc) > 0. A gene is
 ## concordant when sign(delta) == sign(<quantity>_cis_est). For quantity
 ## "bsize" or "kbal" the same sign rule is applied to that contrast, so
@@ -2558,33 +2560,33 @@ promoter_noise_candidates <- function(BURST.CONTRASTS, PR, ARCH, reg_class, quan
 ## Tests whether a promoter feature associates with a species' own
 ## absolute noise level, independent of any cross-species comparison.
 ## fit is one of SPLIT.FITS' per-species data frames (Section 2);
-## response names the column to test, DISP (burst frequency, the
+## response names the column to test, BFREQ (burst frequency theta, the
 ## default and the axis used throughout the rest of this section) or
-## BSIZE (MU/DISP, already computed on every fit object by
+## BSIZE (MU*DISP, already computed on every fit object by
 ## fit_counts_offset()); score is a named vector of a single
 ## feature (tata_score or polyat_len) for the same species, keyed the
 ## same way as fit's row names.
 ##
 ## covariate names the column held fixed while testing the feature, MU by
-## default. With response = "BSIZE" pass covariate = "DISP": since
-## BSIZE = MU/DISP, testing BSIZE against covariate MU is algebraically
-## forced to reproduce the DISP-against-MU result with the coefficient sign
-## flipped, log(BSIZE) = log(MU) - log(DISP),
-## so conditioning on log(MU) leaves only -log(DISP) for the feature to
+## default. With response = "BSIZE" pass covariate = "BFREQ": since
+## BSIZE = MU*DISP = MU/BFREQ, testing BSIZE against covariate MU is algebraically
+## forced to reproduce the BFREQ-against-MU result with the coefficient sign
+## flipped, log(BSIZE) = log(MU) - log(BFREQ),
+## so conditioning on log(MU) leaves only -log(BFREQ) for the feature to
 ## explain, the same one degree of freedom as before under a different
-## name, not an independent test. Conditioning on DISP instead asks the
+## name, not an independent test. Conditioning on BFREQ instead asks the
 ## question that is actually different from the frequency test: among
 ## genes that fire at the same rate, does the feature predict how much
-## comes out per burst. That is not degenerate with the DISP-on-MU test,
-## since DISP and MU are two distinct, only partially correlated
+## comes out per burst. That is not degenerate with the BFREQ-on-MU test,
+## since BFREQ and MU are two distinct, only partially correlated
 ## quantities across genes.
 ##
-## For response = "DISP" (covariate = "MU"): lower DISP means burstier,
+## For response = "BFREQ" (theta = 1/DISP; covariate = "MU"): lower BFREQ means burstier,
 ## noisier expression, so the published relationship (TATA-containing
 ## and long poly(dA:dT) promoters are noisier: Newman 2006, Blake 2006,
 ## Hornung 2012, Carey 2013) predicts a negative coefficient on the
 ## feature once MU is held fixed. For response = "BSIZE"
-## (covariate = "DISP"), no direction is asserted here; the molecular
+## (covariate = "BFREQ"), no direction is asserted here; the molecular
 ## literature motivating a promoter-architecture effect on burst
 ## frequency doesn't make an equally clear prediction for burst
 ## amplitude, so this is run as an open check rather than one with an
@@ -2598,7 +2600,7 @@ promoter_noise_candidates <- function(BURST.CONTRASTS, PR, ARCH, reg_class, quan
 ## the thousands, since even a tiny slope clears significance easily at
 ## that sample size; r2_partial is the number that actually answers
 ## "how much of the variance is this."
-architecture_noise_check <- function(fit, score, feature, response = "DISP", covariate = "MU") {
+architecture_noise_check <- function(fit, score, feature, response = "BFREQ", covariate = "MU") {
   ## Confirms the two fit columns and the feature score are numeric before
   ## modelling, and names the column and its class when one is not
   for (col in c(response, covariate)) {
@@ -3163,8 +3165,8 @@ map_to_orf <- function(ids, label = "") {
 ##      min_cells_expr of the remaining cells. The thresholds are arguments because the sources differ
 ##      widely in depth and cell number.
 ##   3. Exposure is each cell's library size divided by the source's mean library size, so MU is in
-##      counts per typical cell (the unit MIX.SC uses) and CV2 = 1/MU + 1/DISP is at this dataset's own
-##      depth. BFREQ = DISP and BSIZE = MU/DISP, the definitions documented for NB.SC.
+##      counts per typical cell (the unit MIX.SC uses) and CV2 = 1/MU + DISP is at this dataset's own
+##      depth. BFREQ = 1/DISP (theta) and BSIZE = MU*DISP, the definitions documented for NB.SC.
 ## cl is optional and passed to fit_counts_offset(): NULL fits on one core; a PSOCK cluster from
 ## parallel::makeCluster() splits genes across workers (the driver reuses one cluster for all sources).
 fit_scrna_source <- function(mat, raw_ids, label, min_cell_count, min_cells_expr, cl = NULL) {
@@ -3234,12 +3236,12 @@ fstar_from_r <- function(r) {
   out
 }
 
-## gene_pass_group: genes passing the filters in one group g: a finite NB dispersion, a mean count at or
+## gene_pass_group: genes passing the filters in one group g: a positive finite NB dispersion (phi = 0 is the Poisson limit), a mean count at or
 ## above the group's depth-scaled floor, and expression in at least n_min cells. Returns a logical vector
 ## over the rows of fits[[g]].
 gene_pass_group <- function(g, fits, floor_mean, n_min) {
   fit <- fits[[g]]
-  is.finite(fit$DISP) & fit$DISP < THETA.CAP & fit$MEAN_CT >= floor_mean[[g]] & fit$N_EXPR >= n_min
+  is.finite(fit$DISP) & fit$DISP > 0 & fit$MEAN_CT >= floor_mean[[g]] & fit$N_EXPR >= n_min
 }
 
 ## perm_label_draw: one permutation's relabelings for every mode. total, trans, dpar and inh shuffle
@@ -3502,10 +3504,10 @@ pilot_split_se_one <- function(g, B, expos, mats, seed) {
     if (is.finite(f.me["mu"])   && f.me["mu"]   > 0) logmu[b, "MIX.SE"] <- log(f.me["mu"])
     if (is.finite(f.hc["mu"])   && f.hc["mu"]   > 0) logmu[b, "HYB.SC"] <- log(f.hc["mu"])
     if (is.finite(f.he["mu"])   && f.he["mu"]   > 0) logmu[b, "HYB.SE"] <- log(f.he["mu"])
-    if (is.finite(f.mc["disp"]) && f.mc["disp"] > 0) logsz[b, "MIX.SC"] <- log(f.mc["disp"])
-    if (is.finite(f.me["disp"]) && f.me["disp"] > 0) logsz[b, "MIX.SE"] <- log(f.me["disp"])
-    if (is.finite(f.hc["disp"]) && f.hc["disp"] > 0) logsz[b, "HYB.SC"] <- log(f.hc["disp"])
-    if (is.finite(f.he["disp"]) && f.he["disp"] > 0) logsz[b, "HYB.SE"] <- log(f.he["disp"])
+    if (is.finite(f.mc["theta"]) && f.mc["theta"] > 0) logsz[b, "MIX.SC"] <- log(f.mc["theta"])
+    if (is.finite(f.me["theta"]) && f.me["theta"] > 0) logsz[b, "MIX.SE"] <- log(f.me["theta"])
+    if (is.finite(f.hc["theta"]) && f.hc["theta"] > 0) logsz[b, "HYB.SC"] <- log(f.hc["theta"])
+    if (is.finite(f.he["theta"]) && f.he["theta"] > 0) logsz[b, "HYB.SE"] <- log(f.he["theta"])
   }
   allele_cov <- function(m) {
     ok <- is.finite(m[, "HYB.SC"]) & is.finite(m[, "HYB.SE"])
@@ -3527,13 +3529,15 @@ pilot_split_se_one <- function(g, B, expos, mats, seed) {
 }
 
 ## fit_group_values: gene g's fitted values in every group of fits (a list of per-group data frames with MU and
-## DISP columns): lists named by group holding mu, disp and the squared coefficient of variation cv2.
+## DISP columns): lists named by group holding mu, disp (phi), theta (1/phi, the burst-frequency quantity) and the
+## squared coefficient of variation cv2.
 fit_group_values <- function(fits, g) {
   rows <- vector("list", length(fits)); names(rows) <- names(fits)
   for (grp in names(fits)) rows[[grp]] <- fits[[grp]][g, ]
-  mu   <- lapply(rows, `[[`, "MU")
-  disp <- lapply(rows, `[[`, "DISP")
-  list(mu = mu, disp = disp, cv2 = Map(.cv2_of, mu, disp))
+  mu    <- lapply(rows, `[[`, "MU")
+  disp  <- lapply(rows, `[[`, "DISP")
+  theta <- lapply(disp, function(p) 1 / p)
+  list(mu = mu, disp = disp, theta = theta, cv2 = Map(.cv2_of, mu, disp))
 }
 
 ## boot_contrasts_one: one gene's bootstrap contrasts across all modes (the unit of work a cluster worker does). draws holds every resample
@@ -3551,9 +3555,9 @@ boot_contrasts_one <- function(g, expos, fits, mats, draws) {
       key <- .DRAW.KEY[[grp]]
       f[[grp]] <- .fit_one(mats[[grp]][g, d[[key]]], expos[[grp]][d[[key]]])
     }
-    mu_all <- lapply(f, `[[`, "mu"); disp_all <- lapply(f, `[[`, "disp")
+    mu_all <- lapply(f, `[[`, "mu"); disp_all <- lapply(f, `[[`, "disp"); theta_all <- lapply(f, `[[`, "theta")
     gv.mu <- lapply(mu_all, unname)
-    gv.bf <- lapply(disp_all, unname)
+    gv.bf <- lapply(theta_all, unname)
     gv.cv <- Map(.cv2_of, mu_all, disp_all)
     for (k in seq_along(modes)) {
       grp <- .MODES[[modes[k]]]
@@ -3570,7 +3574,7 @@ boot_contrasts_one <- function(g, expos, fits, mats, draws) {
   bdry <- setNames(colMeans(is.na(M[, scol, drop = FALSE])), modes)
   fv <- fit_group_values(fits, g)
   pm <- vapply(modes, .contrast_value, numeric(1), fv$mu,   "MU")
-  ps <- vapply(modes, .contrast_value, numeric(1), fv$disp, "BFREQ")
+  ps <- vapply(modes, .contrast_value, numeric(1), fv$theta, "BFREQ")
   pc <- vapply(modes, .contrast_value, numeric(1), fv$cv2,  "CV2")
   out <- list(gene = g)
   for (md in .OUT_MODES) {
@@ -3614,7 +3618,7 @@ permute_contrasts_one <- function(g, expos, fits, mats, perms, ploidy_shift, see
   Ns <- matrix(NA_real_, B, length(modes), dimnames = list(NULL, modes))
   Nc <- matrix(NA_real_, B, length(modes), dimnames = list(NULL, modes))
   fv   <- fit_group_values(fits, g)
-  gvmu <- fv$mu; gvbf <- fv$disp; gvcv <- fv$cv2
+  gvmu <- fv$mu; gvbf <- fv$theta; gvcv <- fv$cv2
   obs.m <- vapply(modes, .contrast_value, numeric(1), gvmu, "MU")
   obs.s <- vapply(modes, .contrast_value, numeric(1), gvbf, "BFREQ")
   obs.c <- vapply(modes, .contrast_value, numeric(1), gvcv, "CV2")
@@ -3645,25 +3649,25 @@ permute_contrasts_one <- function(g, expos, fits, mats, perms, ploidy_shift, see
   for (b in seq_len(B)) {
     p <- perms[[b]]
     sp <- .fit_split(c(cMIXsc, cMIXse), c(expos$MIX.SC, expos$MIX.SE), p$total, nSC)
-    Nm[b,"total"] <- rat(sp$a, sp$b, "mu"); Ns[b,"total"] <- rat(sp$a, sp$b, "disp"); Nc[b,"total"] <- ratcv2(sp$a, sp$b)
+    Nm[b,"total"] <- rat(sp$a, sp$b, "mu"); Ns[b,"total"] <- rat(sp$a, sp$b, "theta"); Nc[b,"total"] <- ratcv2(sp$a, sp$b)
 
     ## cis swap: a swapped allele carries its own offset, so every count keeps the offset of its haplotype
     sc  <- ifelse(p$cis, cHYCse, cHYCsc);        se  <- ifelse(p$cis, cHYCsc, cHYCse)
     esc <- ifelse(p$cis, expos$HYC.SE, expos$HYC.SC); ese <- ifelse(p$cis, expos$HYC.SC, expos$HYC.SE)
     fa <- .fit_one(sc, esc); fb <- .fit_one(se, ese)
-    Nm[b,"cis"] <- rat(fa, fb, "mu"); Ns[b,"cis"] <- rat(fa, fb, "disp"); Nc[b,"cis"] <- ratcv2(fa, fb)
+    Nm[b,"cis"] <- rat(fa, fb, "mu"); Ns[b,"cis"] <- rat(fa, fb, "theta"); Nc[b,"cis"] <- ratcv2(fa, fb)
 
     ## Noise-split (f_disp) version of the cis null, used only for
     ## the bfreq_cis/cv2_cis output columns, mirroring cis_n in .MODES
     sc.n  <- ifelse(p$cis_n, cHYCse.N, cHYCsc.N);          se.n  <- ifelse(p$cis_n, cHYCsc.N, cHYCse.N)
     esc.n <- ifelse(p$cis_n, expos$HYC.SE.N, expos$HYC.SC.N); ese.n <- ifelse(p$cis_n, expos$HYC.SC.N, expos$HYC.SE.N)
     fa.n <- .fit_one(sc.n, esc.n); fb.n <- .fit_one(se.n, ese.n)
-    Nm[b,"cis_n"] <- rat(fa.n, fb.n, "mu"); Ns[b,"cis_n"] <- rat(fa.n, fb.n, "disp"); Nc[b,"cis_n"] <- ratcv2(fa.n, fb.n)
+    Nm[b,"cis_n"] <- rat(fa.n, fb.n, "mu"); Ns[b,"cis_n"] <- rat(fa.n, fb.n, "theta"); Nc[b,"cis_n"] <- ratcv2(fa.n, fb.n)
 
     sSC <- .fit_split(c(cMIXsc, cHYTsc), c(expos$MIX.SC, expos$HYT.SC), p$transSC, nSC)
     sSE <- .fit_split(c(cMIXse, cHYTse), c(expos$MIX.SE, expos$HYT.SE), p$transSE, nSE)
     Nm[b,"trans"] <- rat(sSC$a, sSE$a, "mu")   - rat(sSC$b, sSE$b, "mu")
-    Ns[b,"trans"] <- rat(sSC$a, sSE$a, "disp") - rat(sSC$b, sSE$b, "disp")
+    Ns[b,"trans"] <- rat(sSC$a, sSE$a, "theta") - rat(sSC$b, sSE$b, "theta")
     Nc[b,"trans"] <- ratcv2(sSC$a, sSE$a)      - ratcv2(sSC$b, sSE$b)
 
     ## Noise-split version of the trans null, used only for the
@@ -3671,24 +3675,24 @@ permute_contrasts_one <- function(g, expos, fits, mats, perms, ploidy_shift, see
     sSC.n <- .fit_split(c(cMIXsc, cHYTsc.N), c(expos$MIX.SC, expos$HYT.SC.N), p$transSC_n, nSC)
     sSE.n <- .fit_split(c(cMIXse, cHYTse.N), c(expos$MIX.SE, expos$HYT.SE.N), p$transSE_n, nSE)
     Nm[b,"trans_n"] <- rat(sSC.n$a, sSE.n$a, "mu")   - rat(sSC.n$b, sSE.n$b, "mu")
-    Ns[b,"trans_n"] <- rat(sSC.n$a, sSE.n$a, "disp") - rat(sSC.n$b, sSE.n$b, "disp")
+    Ns[b,"trans_n"] <- rat(sSC.n$a, sSE.n$a, "theta") - rat(sSC.n$b, sSE.n$b, "theta")
     Nc[b,"trans_n"] <- ratcv2(sSC.n$a, sSE.n$a)      - ratcv2(sSC.n$b, sSE.n$b)
 
     synth <- rbinom(nHYB, cMIXsc[p$dom_i], rho.sc) + rbinom(nHYB, cMIXse[p$dom_j], rho.se)
     es    <- rho.sc * e.sc[p$dom_i] + rho.se * e.se[p$dom_j]
     fs <- .fit_one(synth, es)
     if (is.finite(fs["mu"])   && fs["mu"]   > 0) Nm[b,"dom"] <- l2(fs["mu"])   - mp.m
-    if (is.finite(fs["disp"]) && fs["disp"] > 0) Ns[b,"dom"] <- l2(fs["disp"]) - mp.s
+    if (is.finite(fs["theta"]) && fs["theta"] > 0) Ns[b,"dom"] <- l2(fs["theta"]) - mp.s
     fs.cv <- .cv2_of(fs[["mu"]], fs[["disp"]])
     if (is.finite(fs.cv) && fs.cv > 0) Nc[b,"dom"] <- l2(fs.cv) - mp.c
     d1 <- .fit_split(c(cHYBc, cMIXsc), c(expos$HYB.COMB, expos$MIX.SC), p$dparSC, nHYB)
-    Nm[b,"dpar_sc"] <- rat(d1$a, d1$b, "mu"); Ns[b,"dpar_sc"] <- rat(d1$a, d1$b, "disp"); Nc[b,"dpar_sc"] <- ratcv2(d1$a, d1$b)
+    Nm[b,"dpar_sc"] <- rat(d1$a, d1$b, "mu"); Ns[b,"dpar_sc"] <- rat(d1$a, d1$b, "theta"); Nc[b,"dpar_sc"] <- ratcv2(d1$a, d1$b)
     d2 <- .fit_split(c(cHYBc, cMIXse), c(expos$HYB.COMB, expos$MIX.SE), p$dparSE, nHYB)
-    Nm[b,"dpar_se"] <- rat(d2$a, d2$b, "mu"); Ns[b,"dpar_se"] <- rat(d2$a, d2$b, "disp"); Nc[b,"dpar_se"] <- ratcv2(d2$a, d2$b)
+    Nm[b,"dpar_se"] <- rat(d2$a, d2$b, "mu"); Ns[b,"dpar_se"] <- rat(d2$a, d2$b, "theta"); Nc[b,"dpar_se"] <- ratcv2(d2$a, d2$b)
     i1 <- .fit_split(c(cHYBsc, cMIXsc), c(expos$HYB.SC, expos$MIX.SC), p$inhSC, nHYB)
-    Nm[b,"inh_sc"] <- rat(i1$a, i1$b, "mu"); Ns[b,"inh_sc"] <- rat(i1$a, i1$b, "disp"); Nc[b,"inh_sc"] <- ratcv2(i1$a, i1$b)
+    Nm[b,"inh_sc"] <- rat(i1$a, i1$b, "mu"); Ns[b,"inh_sc"] <- rat(i1$a, i1$b, "theta"); Nc[b,"inh_sc"] <- ratcv2(i1$a, i1$b)
     i2 <- .fit_split(c(cHYBse, cMIXse), c(expos$HYB.SE, expos$MIX.SE), p$inhSE, nHYB)
-    Nm[b,"inh_se"] <- rat(i2$a, i2$b, "mu"); Ns[b,"inh_se"] <- rat(i2$a, i2$b, "disp"); Nc[b,"inh_se"] <- ratcv2(i2$a, i2$b)
+    Nm[b,"inh_se"] <- rat(i2$a, i2$b, "mu"); Ns[b,"inh_se"] <- rat(i2$a, i2$b, "theta"); Nc[b,"inh_se"] <- ratcv2(i2$a, i2$b)
   }
   out <- list(gene = g)
   for (md in .OUT_MODES) {
@@ -3932,7 +3936,7 @@ power_grid_row <- function(i, ALPHA, CELL.RATIO, EXPOSURE.CV, GRID, MEAN.READS, 
   ## size_log2_ratio: log2 ratio of the NB size (disp, the burst-frequency axis) between two
   ## .fit_one() results, NA if either side is non-positive or non-finite.
   size_log2_ratio <- function(fit_a, fit_b) {
-    a <- fit_a[["disp"]]; b <- fit_b[["disp"]]
+    a <- fit_a[["theta"]]; b <- fit_b[["theta"]]
     if (is.finite(a) && a > 0 && is.finite(b) && b > 0) log2(a) - log2(b) else NA_real_
   }
 
@@ -4190,12 +4194,12 @@ sim_parent_cells <- function(n, mu, phi, omega, phi_ref, eps, lib, D, family, co
   out
 }
 
-## fit_phi_pair: both estimators on one (counts, exposure) pair, returned as phi (not theta). mle: 1/theta from
-## .fit_one(), failed (NA) when theta is Inf or NA. mom: sum[(y - m)^2 - m] / sum(m^2) with m = mu-hat * exposure and
+## fit_phi_pair: both estimators on one (counts, exposure) pair, returned as phi. mle: the dispersion from
+## .fit_one(), failed (NA) when it is 0 (theta = Inf) or NA. mom: sum[(y - m)^2 - m] / sum(m^2) with m = mu-hat * exposure and
 ## the same mu_hat = sum(y) / sum(exposure), failed (NA) when not above zero. A failed fit returns NA.
 fit_phi_pair <- function(y, expo) {
-  theta <- .fit_one(y, expo)[["disp"]]
-  mle <- if (is.finite(theta) && theta > 0) 1 / theta else NA_real_
+  phi <- .fit_one(y, expo)[["disp"]]
+  mle <- if (is.finite(phi) && phi > 0) phi else NA_real_
   keep <- is.finite(y) & is.finite(expo) & expo > 0
   y <- y[keep]; e <- expo[keep]
   mom <- NA_real_
@@ -4499,12 +4503,12 @@ cis_direct_row <- function(i, GRID, TRUTH, LIB.HYB, DEPTH.REF, N.OBS, NREP, NBOO
     h  <- sim_hybrid_cells(nh, sp$par, LIB.HYB, DEPTH.REF, g$family)
     x1 <- h$s_hc; x2 <- h$s_he                                 # each allele's own haplotype offset
     ib <- matrix(sample.int(nh, nh * NBOOT, replace = TRUE), nh, NBOOT)   # all indices before any fit
-    th <- c(.fit_one(h$y_hc, x1)[["disp"]], .fit_one(h$y_he, x2)[["disp"]])
-    R$e2[r] <- if (all(is.finite(th)) && all(th > 0)) log2(th[2]) - log2(th[1]) else NA_real_   # log2 phi_Hc - log2 phi_He
+    ph <- c(.fit_one(h$y_hc, x1)[["disp"]], .fit_one(h$y_he, x2)[["disp"]])
+    R$e2[r] <- if (all(is.finite(ph)) && all(ph > 0)) log2(ph[1]) - log2(ph[2]) else NA_real_   # log2 phi_Hc - log2 phi_He
     bo <- rep(NA_real_, NBOOT)
     for (b in seq_len(NBOOT)) {
-      tb <- c(.fit_one(h$y_hc[ib[, b]], x1[ib[, b]])[["disp"]], .fit_one(h$y_he[ib[, b]], x2[ib[, b]])[["disp"]])
-      if (all(is.finite(tb)) && all(tb > 0)) bo[b] <- log2(tb[2]) - log2(tb[1])
+      pb <- c(.fit_one(h$y_hc[ib[, b]], x1[ib[, b]])[["disp"]], .fit_one(h$y_he[ib[, b]], x2[ib[, b]])[["disp"]])
+      if (all(is.finite(pb)) && all(pb > 0)) bo[b] <- log2(pb[1]) - log2(pb[2])
     }
     if (sum(is.finite(bo)) >= 0.5 * NBOOT) {
       R$b_se[r] <- sd(bo, na.rm = TRUE); R[r, c("b_lo", "b_hi")] <- quantile(bo, c(0.025, 0.975), na.rm = TRUE, names = FALSE)

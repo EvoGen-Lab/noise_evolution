@@ -126,7 +126,7 @@ if (VAR.ZETA / (VAR.EPS[["HC"]] + VAR.EPS[["HE"]]) > 1.5 || VAR.ZETA / (VAR.EPS[
   warning("the log-odds measurement variance and the sum of the Hc and He offset error variances differ by more than half; the two alleles' errors may be correlated")
 
 ## ---- gene range: means and dispersions of the parental fits ----------------------------
-## mu is the mean count at median depth (sum y / sum of the offsets) and phi = 1 / theta from the pipeline's
+## mu is the mean count at median depth (sum y / sum of the offsets) and phi (the dispersion) comes from the pipeline's
 ## single estimator. The grid values are quantiles of the genes that have a finite phi, and each
 ## gene is assigned to its nearest grid value on the log scale to give the grid's weights.
 FITS <- rbind(
@@ -134,7 +134,7 @@ FITS <- rbind(
   t(apply(MIX.SE, 1, .fit_one, expo = EXPO.MIX.SE)))
 GOOD   <- is.finite(FITS[, "mu"]) & FITS[, "mu"] > 0
 MU.HAT <- FITS[GOOD, "mu"]
-PHI.HAT <- 1 / FITS[GOOD & is.finite(FITS[, "disp"]) & FITS[, "disp"] > 0, "disp"]
+PHI.HAT <- FITS[GOOD & is.finite(FITS[, "disp"]) & FITS[, "disp"] > 0, "disp"]
 MU.GRID  <- signif(quantile(MU.HAT, MU.PROBS, names = FALSE), 2)
 PHI.GRID <- signif(quantile(PHI.HAT, PHI.PROBS, names = FALSE), 2)
 MU.W  <- tabulate(max.col(-abs(outer(log(MU.HAT), log(MU.GRID), "-"))), length(MU.GRID)) / length(MU.HAT)
