@@ -330,23 +330,31 @@ HYB.COMB <- HYB.SC + HYB.SE
 # Per-cell offsets of the negative binomial fits. DEPTH.REF is the median library
 # size, so a fitted mean is the expected count of a cell at the median depth.
 DEPTH.REF <- median(c(colSums(MIX.SC), colSums(MIX.SE), colSums(HYB.SC) + colSums(HYB.SE)))
-# A haploid parent is one genome, so its offset is its library size over DEPTH.REF.
-EXPO.MIX.SC <- colSums(MIX.SC)/DEPTH.REF
-EXPO.MIX.SE <- colSums(MIX.SE)/DEPTH.REF
 
-# A hybrid allele is normalized by its own haplotype offset, so Hc and He sit on the per-genome
-# scale of the parents. The offset is a median-based size factor (scran::computeSumFactors, which
-# pools cells and takes medians of gene ratios), computed on that allele's counts alone. A size
-# factor has mean one; multiplying it by the allele's mean library over DEPTH.REF anchors it to the
-# library scale of the parents, so the fitted mean rates of one genome sum to DEPTH.REF.
+# Every offset is a median-based size factor (scran::computeSumFactors), computed once per genome on the
+# parent cells and the hybrid-allele cells of that genome together: Sc is MIX.SC with HYB.SC, Se is MIX.SE
+# with HYB.SE. The factors pool cells and take medians of gene ratios, so a few highly expressed genes with
+# strong allelic effects cannot shift the scale of every other gene. Cells are clustered by group (parent or
+# hybrid allele): pools form within a group, and the same medians put the two groups on one scale.
+# A size factor is a relative scale. Multiplying a genome's factors by one constant anchors them to the
+# library scale of its parent: the parental offsets then average (mean parent library) / DEPTH.REF, and the
+# hybrid-allele offsets sit on that same scale, which puts Hc, He and the parents on one per-genome scale.
 if (!requireNamespace("scran", quietly = TRUE))
-  stop("Section 2 computes the haplotype offsets with scran::computeSumFactors; install scran (Bioconductor) in the project library.")
-SIZE.FACTOR.HC <- scran::computeSumFactors(HYB.SC)
-SIZE.FACTOR.HE <- scran::computeSumFactors(HYB.SE)
-stopifnot(length(SIZE.FACTOR.HC) == ncol(HYB.SC), length(SIZE.FACTOR.HE) == ncol(HYB.SE),
-          all(is.finite(SIZE.FACTOR.HC) & SIZE.FACTOR.HC > 0), all(is.finite(SIZE.FACTOR.HE) & SIZE.FACTOR.HE > 0))
-EXPO.HYB.SC <- SIZE.FACTOR.HC / mean(SIZE.FACTOR.HC) * mean(colSums(HYB.SC))/DEPTH.REF    # s_Hc
-EXPO.HYB.SE <- SIZE.FACTOR.HE / mean(SIZE.FACTOR.HE) * mean(colSums(HYB.SE))/DEPTH.REF    # s_He
+  stop("Section 2 computes the offsets with scran::computeSumFactors; install scran (Bioconductor) in the project library.")
+GENOME.MATS <- list(SC = list(parent = MIX.SC, allele = HYB.SC), SE = list(parent = MIX.SE, allele = HYB.SE))
+GENOME.EXPOS <- list()
+for (gen in names(GENOME.MATS)) {
+  par.m <- GENOME.MATS[[gen]]$parent; allele.m <- GENOME.MATS[[gen]]$allele
+  n.par <- ncol(par.m); n.all <- ncol(allele.m)
+  sf <- scran::computeSumFactors(cbind(par.m, allele.m), clusters = rep(c("parent", "allele"), c(n.par, n.all)))
+  stopifnot(length(sf) == n.par + n.all, all(is.finite(sf) & sf > 0))
+  anchor <- mean(colSums(par.m)) / DEPTH.REF / mean(sf[seq_len(n.par)])
+  GENOME.EXPOS[[gen]] <- list(parent = sf[seq_len(n.par)] * anchor, allele = sf[n.par + seq_len(n.all)] * anchor)
+}
+EXPO.MIX.SC <- GENOME.EXPOS$SC$parent
+EXPO.MIX.SE <- GENOME.EXPOS$SE$parent
+EXPO.HYB.SC <- GENOME.EXPOS$SC$allele      # s_Hc
+EXPO.HYB.SE <- GENOME.EXPOS$SE$allele      # s_He
 # The summed hybrid HYB.COMB is offset by the sum of its two haplotype offsets.
 EXPO.HYB    <- EXPO.HYB.SC + EXPO.HYB.SE
 
