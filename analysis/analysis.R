@@ -473,23 +473,43 @@ NCELLS <- c(MIX.SC = ncol(MIX.SC), MIX.SE = ncol(MIX.SE), HYC.SC = ncol(HYC.SC),
 # depth, and detection in an absolute number of cells set from the smallest
 # dataset, in every one of the 13 datasets
 SPLIT.DEPTH <- vapply(SPLIT.FIT.MATS, function(m) sum(m) / ncol(m), numeric(1))
+FILTER.GROUPS <- names(SPLIT.FITS)
+stopifnot(all(FILTER.GROUPS %in% names(NCELLS)), all(FILTER.GROUPS %in% names(SPLIT.DEPTH)))
+FILTER.MIN.MEAN      <- 0.001
+FILTER.MIN.EXPR.FRAC <- 0.1
+FILTER.FLOOR <- FILTER.MIN.MEAN * SPLIT.DEPTH[FILTER.GROUPS] / min(SPLIT.DEPTH[FILTER.GROUPS])   # mean floor, scaled by depth
+FILTER.NMIN  <- ceiling(FILTER.MIN.EXPR.FRAC * min(NCELLS[FILTER.GROUPS]))                          # detected-cell floor, one number
 GENES <- local({
   fits <- SPLIT.FITS
-  ncells <- NCELLS
-  depth <- SPLIT.DEPTH
-  min_mean <- 0.001
-  min_expr_frac <- 0.1
-  groups <- names(fits)
-  stopifnot(all(groups %in% names(ncells)), all(groups %in% names(depth)))
   genes <- rownames(fits[[1]])
-  for (g in groups)
+  for (g in FILTER.GROUPS)
     if (!identical(rownames(fits[[g]]), genes))
       stop("fit frames are not gene-aligned; reorder to a common gene set first")
-  floor_mean <- min_mean * depth[groups] / min(depth[groups])
-  n_min <- ceiling(min_expr_frac * min(ncells[groups]))
-  pass <- Reduce(`&`, lapply(groups, gene_pass_group, fits = fits, floor_mean = floor_mean, n_min = n_min))
+  pass <- Reduce(`&`, lapply(FILTER.GROUPS, gene_pass_group, fits = fits, floor_mean = FILTER.FLOOR, n_min = FILTER.NMIN))
   genes[which(pass)]
 })
+
+# How many genes the filter removes, so the reach of every noise result is stated. FILTER.COUNTS lists, per dataset, the
+# genes failing each filter (the reasons overlap). FILTER.SUMMARY counts across the 13 datasets: all genes fitted, genes kept
+# (GENES), genes with zero dispersion (phi = 0, the Poisson limit) in at least one dataset and in every dataset, and genes
+# lost to dispersion alone, which pass the mean and detection floors in every dataset but have no positive phi in some.
+FILTER.COUNTS <- do.call(rbind, lapply(FILTER.GROUPS, gene_filter_counts, fits = SPLIT.FITS, floor_mean = FILTER.FLOOR, n_min = FILTER.NMIN))
+FILTER.SUMMARY <- local({
+  fits <- SPLIT.FITS
+  disp_pos  <- sapply(FILTER.GROUPS, function(g) is.finite(fits[[g]]$DISP) & fits[[g]]$DISP > 0)
+  disp_zero <- sapply(FILTER.GROUPS, function(g) is.finite(fits[[g]]$DISP) & fits[[g]]$DISP == 0)
+  floors_ok <- sapply(FILTER.GROUPS, function(g) fits[[g]]$MEAN_CT >= FILTER.FLOOR[[g]] & fits[[g]]$N_EXPR >= FILTER.NMIN)
+  data.frame(
+    genes_fitted = nrow(disp_pos), genes_kept = length(GENES),
+    zero_disp_any_dataset = sum(rowSums(disp_zero) > 0), zero_disp_every_dataset = sum(rowSums(disp_zero) == ncol(disp_zero)),
+    lost_to_dispersion_only = sum(rowSums(floors_ok) == ncol(floors_ok) & rowSums(disp_pos) < ncol(disp_pos)),
+    lost_to_mean_or_detection = sum(rowSums(floors_ok) < ncol(floors_ok)))
+})
+print(FILTER.COUNTS, row.names = FALSE)
+print(FILTER.SUMMARY, row.names = FALSE)
+stopifnot(FILTER.SUMMARY$genes_kept + FILTER.SUMMARY$lost_to_dispersion_only + FILTER.SUMMARY$lost_to_mean_or_detection == FILTER.SUMMARY$genes_fitted)
+write.csv(FILTER.COUNTS,  file.path(TABLE.DIR, "gene_filter_counts_by_dataset.csv"), row.names = FALSE)
+write.csv(FILTER.SUMMARY, file.path(TABLE.DIR, "gene_filter_summary.csv"),           row.names = FALSE)
 
 # Create bootstrap and permutation input files  
 CONTRAST.MATS <- list(
@@ -676,7 +696,7 @@ dev.off()
 
 # Checkpoint: the fitted NB models, per-gene contrasts, and every Section 2
 # object that later sections read.
-save(GENES, HYB.COMB, CONTRAST.FITS, CONTRAST.MATS, CONTRAST.EXPOS, SPLIT.FITS,
+save(GENES, FILTER.COUNTS, FILTER.SUMMARY, HYB.COMB, CONTRAST.FITS, CONTRAST.MATS, CONTRAST.EXPOS, SPLIT.FITS,
      BOOT.CONTRASTS, BURST.CONTRASTS, PERM.RESULTS, PR, PLOIDY.SHIFT, N.PERM,
      HYB.SC, HYB.SE, EXPO.MIX.SC, EXPO.MIX.SE, EXPO.HYB.SC, EXPO.HYB.SE, EXPO.HYB, C.HAT, C.BAR, SHARE.TABLE,
      WEIGHT.CHECK, ALLELE.DISP,

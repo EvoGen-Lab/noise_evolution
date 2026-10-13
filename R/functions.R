@@ -135,6 +135,7 @@
 ###     qc_cell_cutoff() - library-size cell filter for one dataset s (a list with lib, the per-cell library.
 ###     fstar_from_r() - closed-form split fraction f* = [(2+r) - sqrt(r^2+4)] / (2r) for r = B*Nh/A.
 ###     gene_pass_group() - genes passing the filters in one group g: a finite NB dispersion, a mean count at or.
+###     gene_filter_counts() - One row per dataset: how many genes fail each gene filter (no fit, zero dispersion, low mean, low detection) and how many pass.
 ###     perm_label_draw() - one permutation's relabelings for every mode; cis and trans label the hybrid cells per original cell so the mean and noise splits agree on shared cells.
 ###     eiv_mode_ci_row() - errors-in-variables correlation for one mode m with a gene-resampling bootstrap CI.
 ###     seed_check_rows() - Summary rows (correlation, SE ratio median and IQR, count) of a two-seed bootstrap SE comparison, for the gene-level and co-expression checks.
@@ -3167,6 +3168,17 @@ fstar_from_r <- function(r) {
 gene_pass_group <- function(g, fits, floor_mean, n_min) {
   fit <- fits[[g]]
   is.finite(fit$DISP) & fit$DISP > 0 & fit$MEAN_CT >= floor_mean[[g]] & fit$N_EXPR >= n_min
+}
+
+## gene_filter_counts: how many genes of dataset g fail each filter of gene_pass_group(), as one row. The reasons overlap (a
+## gene can fail several), so they do not sum to the genes lost. no_fit: no usable NB fit (no counts, or the fit failed);
+## zero_disp: DISP = 0, the Poisson limit where the data show no excess dispersion; low_mean and low_detect: below the
+## depth-scaled mean floor or detected in fewer than n_min cells.
+gene_filter_counts <- function(g, fits, floor_mean, n_min) {
+  fit <- fits[[g]]
+  data.frame(dataset = g, genes = nrow(fit), no_fit = sum(!is.finite(fit$DISP)), zero_disp = sum(is.finite(fit$DISP) & fit$DISP == 0),
+             low_mean = sum(fit$MEAN_CT < floor_mean[[g]], na.rm = TRUE), low_detect = sum(fit$N_EXPR < n_min, na.rm = TRUE),
+             pass = sum(gene_pass_group(g, fits, floor_mean, n_min)), row.names = NULL)
 }
 
 ## perm_label_draw: one permutation's relabelings for every mode. total and dpar shuffle pooled
