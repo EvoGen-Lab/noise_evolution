@@ -12,7 +12,7 @@
 ###     3.1 Regulatory classification
 ###     3.2 Significance histograms for total, cis, and trans effects
 ###     3.3 Dominance classification
-###     3.4 Mean against burst frequency and burst size, parents and hybrids
+###     3.4 Mean against dispersion and burst size, parents and hybrids
 ###     3.5 Class relationship heatmaps
 ###     3.6 Gene-identity overlap
 ###   4. CO-EXPRESSION
@@ -27,7 +27,7 @@
 ###     4.9 Axis validation against the null
 ###     4.10 Total Axis 1
 ###     4.11 Total Axis 2
-###     4.12 Burst frequency/size consistency among co-expressed genes
+###     4.12 Dispersion/size consistency among co-expressed genes
 ###     4.13 Cis and trans candidate axes
 ###   5. INTRINSIC / EXTRINSIC NOISE
 ###     5.1 Reliability calibration
@@ -504,7 +504,7 @@ CONTRAST.EXPOS <- SPLIT.FIT.EXPOS       # offsets keyed by dataset, as the fits 
 
 CONTRAST.FITS <- lapply(SPLIT.FITS, function(fr) data.frame(MU = as.numeric(as.character(fr[GENES, "MU"])), DISP = as.numeric(as.character(fr[GENES, "DISP"])), row.names = GENES))
 
-# Expected rise in bfreq when HYB.COMB sums the two hybrid alleles, per gene
+# Expected fall in disp (log2 phi) when HYB.COMB sums the two hybrid alleles, per gene
 # in log2 units (0 to 1). The permutation job reads the dpar noise contrasts
 # against it, and the BURST.CONTRASTS block below removes it from the dpar estimates.
 PLOIDY.SHIFT <- ploidy_shift(CONTRAST.MATS, CONTRAST.EXPOS)[GENES]
@@ -538,10 +538,10 @@ BOOT.CONTRASTS <- BOOT.CONTRASTS.REPS[[1]]
 load(file.path(OUTPUT.DIR, "gene_perm_output.rda"))            # PERM.RESULTS
 ## ---- end cluster round trip ----
 
-## One row per mode: n, raw and attenuation-corrected mean-bfreq correlation, and its bootstrap CI.
+## One row per mode: n, raw and attenuation-corrected mean-disp correlation, and its bootstrap CI.
 ## Benjamini-Hochberg FDR across genes for every permutation p-value
 ## column. Each contrast and quantity (for example mean_cis or
-## bfreq_dpar_sc) is its own family of genes, so a q-value answers
+## disp_dpar_sc) is its own family of genes, so a q-value answers
 ## "what fraction of genes called in THIS contrast are expected to be
 ## false". p.adjust() leaves NAs in place, so genes with undefined fits
 ## are not counted as tests. Downstream classifiers read the _q columns.
@@ -551,10 +551,9 @@ load(file.path(OUTPUT.DIR, "gene_perm_output.rda"))            # PERM.RESULTS
 ## raw twin as <col>_raw, and the column ploidy_shift records the shift applied.
 ## Mean columns pass through untouched. SEs stay as bootstrapped.
 # BURST.CONTRASTS holds, per gene, the bootstrap point estimate and SE for the mean
-# and burst-frequency (bfreq) contrasts in each of the six modes, plus derived
-# quantities per mode: bsize (burst size, mean minus bfreq in log2 space) and kbal.
-# bfreq is the log2 contrast of theta = 1/phi, so the log2 contrast of the dispersion phi
-# is its negative.
+# and dispersion (disp, log2 phi) contrasts in each of the six modes, plus derived
+# quantities per mode: bsize (burst size, mean plus disp in log2 space) and kbal
+# (kinetic balance, minus mean minus 2 disp).
 # The dpar noise estimates then leave the HYB.COMB allele-summing shift behind
 # (ploidy_adjust_dpar), with the raw values kept in the _est_raw columns.
 BURST.CONTRASTS <- local({
@@ -568,9 +567,9 @@ BURST.CONTRASTS <- local({
   for (sp in c("sc", "se")) {
     par  <- fits[[if (sp == "sc") "MIX.SC" else "MIX.SE"]][df$gene, ]
     cv_p <- 1 / par$MU + par$DISP
-    est <- setNames(paste0(c("bfreq", "bsize", "kbal", "cv2"), "_dpar_", sp, "_est"), c("bfreq", "bsize", "kbal", "cv2"))
+    est <- setNames(paste0(c("disp", "bsize", "kbal", "cv2"), "_dpar_", sp, "_est"), c("disp", "bsize", "kbal", "cv2"))
     for (q in names(est)) df[[paste0(est[[q]], "_raw")]] <- df[[est[[q]]]]
-    df[[est[["bfreq"]]]] <- df[[est[["bfreq"]]]] - s
+    df[[est[["disp"]]]] <- df[[est[["disp"]]]] + s
     df[[est[["bsize"]]]] <- df[[est[["bsize"]]]] + s
     df[[est[["kbal"]]]]  <- df[[est[["kbal"]]]]  - 2 * s
     df[[est[["cv2"]]]]   <- ifelse(is.finite(cv_h) & cv_h > 0 & is.finite(cv_p) & cv_p > 0, log2(cv_h) - log2(cv_p), NA_real_)
@@ -596,13 +595,13 @@ local({
 })
 
 # Diagnostic panel, before classification exists: top row cis vs trans
-# (mean, burst frequency, burst size), middle row mean vs burst
+# (mean, dispersion, burst size), middle row mean vs burst
 # frequency (total, cis, trans), bottom row burst kinetics (total, cis,
 # trans)
 fig_pdf("extra/contrasts_panels.pdf", 13, 13, useDingbats = TRUE)
 par(mfrow = c(3, 3), mar = c(4, 4, 3, 1))
-for (panel in list(c("cis_trans", "mean"), c("cis_trans", "bfreq"), c("cis_trans", "bsize"),
-                   c("mean_bfreq", "total"), c("mean_bfreq", "cis"), c("mean_bfreq", "trans"),
+for (panel in list(c("cis_trans", "mean"), c("cis_trans", "disp"), c("cis_trans", "bsize"),
+                   c("mean_disp", "total"), c("mean_disp", "cis"), c("mean_disp", "trans"),
                    c("burst_kinetics", "total"), c("burst_kinetics", "cis"), c("burst_kinetics", "trans")))
   plot_contrast_scatter(BURST.CONTRASTS, panel[1], panel[2])
 dev.off()
@@ -613,7 +612,7 @@ BURST.CONTRASTS2 <- add_burst_contrasts(BOOT.CONTRASTS.REPS[[2]])
 
 fig_pdf("extra/S_gene_seed_compare.pdf", 6, 9)
 par(mfrow = c(3, 2))
-SEED.CHECK <- setNames(lapply(c("total", "cis", "trans"), function(m) list(mean = gene_seed_compare(BURST.CONTRASTS, BURST.CONTRASTS2, "mean", m), bfreq = gene_seed_compare(BURST.CONTRASTS, BURST.CONTRASTS2, "bfreq", m))), c("total", "cis", "trans"))
+SEED.CHECK <- setNames(lapply(c("total", "cis", "trans"), function(m) list(mean = gene_seed_compare(BURST.CONTRASTS, BURST.CONTRASTS2, "mean", m), disp = gene_seed_compare(BURST.CONTRASTS, BURST.CONTRASTS2, "disp", m))), c("total", "cis", "trans"))
 dev.off()
 
 # Expect correlation 0.9+ and a tight SE ratio 
@@ -692,15 +691,15 @@ set.seed(SEED.SECTION + 3)
 ##############################################################################
 # Built on BURST.CONTRASTS (effects) and PERM.RESULTS (p-values)
 
-## 3.1 Regulatory classification: mean, burst frequency, burst size,
+## 3.1 Regulatory classification: mean, dispersion, burst size,
 ## kinetic balance
-# REG.VEC$kbal classifies kbal (= bfreq - bsize), the rotated quantity that
-# replaces a direct bfreq-vs-bsize comparison everywhere one would
-# otherwise be tempted below: bfreq and bsize are not independent
-# (bsize = mean - bfreq by construction), so classifying and comparing
-# them side by side mostly re-tests the size of bfreq's own variance
+# REG.VEC$kbal classifies kbal (= -mean - 2 disp, the log2 of theta / b), the rotated quantity that
+# replaces a direct disp-vs-bsize comparison everywhere one would
+# otherwise be tempted below: disp and bsize are not independent
+# (bsize = mean + disp by construction), so classifying and comparing
+# them side by side mostly re-tests the size of disp's own variance
 # across genes, not biology. kbal and mean are the well-posed pair.
-QUANTITIES <- c("mean", "bfreq", "bsize", "kbal")
+QUANTITIES <- c("mean", "disp", "bsize", "kbal")
 REG.VEC <- lapply(setNames(QUANTITIES, QUANTITIES), function(q) reg_class_vec(BURST.CONTRASTS, PR, q))
 
 ## Figure 1: cis vs trans scatter above class counts, mean/burst
@@ -708,9 +707,9 @@ REG.VEC <- lapply(setNames(QUANTITIES, QUANTITIES), function(q) reg_class_vec(BU
 fig_pdf("main/01_cis_trans.pdf", 13, 10)
 par(mfrow = c(2, 3), mar = c(5, 4.5, 2, 1))
 plot_cis_trans_class(BURST.CONTRASTS, PR, "mean")
-plot_cis_trans_class(BURST.CONTRASTS, PR, "bfreq")
+plot_cis_trans_class(BURST.CONTRASTS, PR, "disp")
 plot_cis_trans_class(BURST.CONTRASTS, PR, "bsize")
-for (q in c("mean", "bfreq", "bsize")) class_count_barplot(REG.VEC[[q]], REG.CLASS, COLOR.LIST.1, QUANTITY.LABEL[[q]])
+for (q in c("mean", "disp", "bsize")) class_count_barplot(REG.VEC[[q]], REG.CLASS, COLOR.LIST.1, QUANTITY.LABEL[[q]])
 dev.off()
 
 # BH FDR level for the class-overlap heatmaps below
@@ -725,19 +724,19 @@ class_overlap_triptych("main/02_overlap_regulatory.pdf", REG.VEC, REG.CLASS, wid
 ## 3.2 Significance histograms for total, cis, and trans effects
 fig_pdf("extra/S_reg_sig_hist.pdf", 12, 10)
 par(mfrow = c(3, 3))
-SIG.HIST.YMAX <- list(total = c(mean = 300, bfreq = 600, bsize = 300), cis = c(mean = 400, bfreq = 600, bsize = 400), trans = c(mean = 400, bfreq = 400, bsize = 400))
+SIG.HIST.YMAX <- list(total = c(mean = 300, disp = 600, bsize = 300), cis = c(mean = 400, disp = 600, bsize = 400), trans = c(mean = 400, disp = 400, bsize = 400))
 for (md in c("total", "cis", "trans"))
-  for (q in c("mean", "bfreq", "bsize")) sig_hist_panel(BURST.CONTRASTS, PR, md, q, SIG.HIST.YMAX[[md]][[q]])
+  for (q in c("mean", "disp", "bsize")) sig_hist_panel(BURST.CONTRASTS, PR, md, q, SIG.HIST.YMAX[[md]][[q]])
 dev.off()
 
-## 3.3 Dominance classification: mean, burst frequency, burst size,
+## 3.3 Dominance classification: mean, dispersion, burst size,
 ## kinetic balance
 # dpar contrasts compare the hybrid with one haploid parent. On the mean axis
 # the hybrid mean rate is the unweighted average of the two allele fits, each
 # on the per-genome scale of the parents (its own haplotype offset), so an
 # additive gene sits at the midparent. On the noise axis the summed hybrid
 # (HYB.COMB, offset s_Hc + s_He) is fitted, and the sum of two
-# alleles averages their intrinsic noise, so bfreq rises in the hybrid and cv2
+# alleles averages their intrinsic noise, so disp falls in the hybrid and cv2
 # falls. The BURST.CONTRASTS block removes that shift from the dpar estimates
 DOM.VEC <- lapply(setNames(QUANTITIES, QUANTITIES), function(q) dom_class_vec(BURST.CONTRASTS, PR, q))
 CLASS.VEC <- list(REG = REG.VEC, DOM = DOM.VEC)
@@ -745,53 +744,53 @@ CLASS.VEC <- list(REG = REG.VEC, DOM = DOM.VEC)
 # Sensitivity to the size of the shift. The _q_ind calls use s = 1 for every
 # gene, the upper bound for fully independent equal alleles. Classes that hold
 # under both bases do not depend on how private the allele noise is.
-DOM.BFREQ.IND <- dom_class_vec(BURST.CONTRASTS, PR, "bfreq", basis = "ind")
+DOM.DISP.IND <- dom_class_vec(BURST.CONTRASTS, PR, "disp", basis = "ind")
 PLOIDY.CHECK <- data.frame(
   median_shift = median(PLOIDY.SHIFT, na.rm = TRUE),
-  raw_sc = median(BURST.CONTRASTS$bfreq_dpar_sc_est_raw, na.rm = TRUE),
-  adj_sc = median(BURST.CONTRASTS$bfreq_dpar_sc_est,     na.rm = TRUE),
-  raw_se = median(BURST.CONTRASTS$bfreq_dpar_se_est_raw, na.rm = TRUE),
-  adj_se = median(BURST.CONTRASTS$bfreq_dpar_se_est,     na.rm = TRUE))
+  raw_sc = median(BURST.CONTRASTS$disp_dpar_sc_est_raw, na.rm = TRUE),
+  adj_sc = median(BURST.CONTRASTS$disp_dpar_sc_est,     na.rm = TRUE),
+  raw_se = median(BURST.CONTRASTS$disp_dpar_se_est_raw, na.rm = TRUE),
+  adj_se = median(BURST.CONTRASTS$disp_dpar_se_est,     na.rm = TRUE))
 PLOIDY.CHECK   
-table(own = DOM.VEC$bfreq, ind = DOM.BFREQ.IND)
+table(own = DOM.VEC$disp, ind = DOM.DISP.IND)
 
-## 3.4 Mean against burst frequency and burst size, parents and hybrids
-# Burst size is the composite of the two (bsize = mean - bfreq in log2
+## 3.4 Mean against dispersion and burst size, parents and hybrids
+# Burst size is the composite of the two (bsize = mean + disp in log2
 # space)
 # The mean axis of dpar shares the parental scale, so the three views compare
 # directly.
-fig_pdf("extra/S_mean_vs_bfreq_bsize_all_modes.pdf", 13, 18)
+fig_pdf("extra/S_mean_vs_disp_bsize_all_modes.pdf", 13, 18)
 par(mfrow = c(3, 2), mar = c(4.5, 4.5, 2, 1))
-plot_mean_bfreq_class(BURST.CONTRASTS, PR, "total",   reg_class = REG.VEC$mean, dom_class = DOM.VEC$mean, y_quantity = "bfreq", main = "mean vs burst frequency: parents")
-plot_mean_bfreq_class(BURST.CONTRASTS, PR, "total",   reg_class = REG.VEC$mean, dom_class = DOM.VEC$mean, y_quantity = "bsize", main = "mean vs burst size: parents")
-plot_mean_bfreq_class(BURST.CONTRASTS, PR, "dpar_sc", reg_class = REG.VEC$mean, dom_class = DOM.VEC$mean, y_quantity = "bfreq", main = "mean vs burst frequency: hybrid vs Sc")
-plot_mean_bfreq_class(BURST.CONTRASTS, PR, "dpar_sc", reg_class = REG.VEC$mean, dom_class = DOM.VEC$mean, y_quantity = "bsize", main = "mean vs burst size: hybrid vs Sc")
-plot_mean_bfreq_class(BURST.CONTRASTS, PR, "dpar_se", reg_class = REG.VEC$mean, dom_class = DOM.VEC$mean, y_quantity = "bfreq", main = "mean vs burst frequency: hybrid vs Se")
-plot_mean_bfreq_class(BURST.CONTRASTS, PR, "dpar_se", reg_class = REG.VEC$mean, dom_class = DOM.VEC$mean, y_quantity = "bsize", main = "mean vs burst size: hybrid vs Se")
+plot_mean_disp_class(BURST.CONTRASTS, PR, "total",   reg_class = REG.VEC$mean, dom_class = DOM.VEC$mean, y_quantity = "disp", main = "mean vs dispersion: parents")
+plot_mean_disp_class(BURST.CONTRASTS, PR, "total",   reg_class = REG.VEC$mean, dom_class = DOM.VEC$mean, y_quantity = "bsize", main = "mean vs burst size: parents")
+plot_mean_disp_class(BURST.CONTRASTS, PR, "dpar_sc", reg_class = REG.VEC$mean, dom_class = DOM.VEC$mean, y_quantity = "disp", main = "mean vs dispersion: hybrid vs Sc")
+plot_mean_disp_class(BURST.CONTRASTS, PR, "dpar_sc", reg_class = REG.VEC$mean, dom_class = DOM.VEC$mean, y_quantity = "bsize", main = "mean vs burst size: hybrid vs Sc")
+plot_mean_disp_class(BURST.CONTRASTS, PR, "dpar_se", reg_class = REG.VEC$mean, dom_class = DOM.VEC$mean, y_quantity = "disp", main = "mean vs dispersion: hybrid vs Se")
+plot_mean_disp_class(BURST.CONTRASTS, PR, "dpar_se", reg_class = REG.VEC$mean, dom_class = DOM.VEC$mean, y_quantity = "bsize", main = "mean vs burst size: hybrid vs Se")
 dev.off()
 
-## Figure 3, supplement: mean against burst frequency and burst size,
+## Figure 3, supplement: mean against dispersion and burst size,
 # per-class slopes for the parental (total) contrast. Points neutral
 # gray. Solid lines mark regulatory classes, dashed lines mark dominance. 
-fig_pdf(file.path("extended", "S_03_mean_vs_bfreq_bsize.pdf"), 13, 6)
+fig_pdf(file.path("extended", "S_03_mean_vs_disp_bsize.pdf"), 13, 6)
 par(mfrow = c(1, 2), mar = c(4.5, 4.5, 2, 1))
-plot_mean_bfreq_class(BURST.CONTRASTS, PR, "total", reg_class = REG.VEC$mean, dom_class = DOM.VEC$mean, y_quantity = "bfreq")
-plot_mean_bfreq_class(BURST.CONTRASTS, PR, "total", reg_class = REG.VEC$mean, dom_class = DOM.VEC$mean, y_quantity = "bsize")
+plot_mean_disp_class(BURST.CONTRASTS, PR, "total", reg_class = REG.VEC$mean, dom_class = DOM.VEC$mean, y_quantity = "disp")
+plot_mean_disp_class(BURST.CONTRASTS, PR, "total", reg_class = REG.VEC$mean, dom_class = DOM.VEC$mean, y_quantity = "bsize")
 dev.off()
 
-## Figure 5: dominance scatter above class counts, mean/burst frequency/burst size. 
+## Figure 5: dominance scatter above class counts, mean/dispersion/burst size. 
 fig_pdf("main/05_dominance.pdf", 13, 10)
 par(mfrow = c(2, 3), mar = c(5, 4.5, 2, 1))
 plot_dom_class(BURST.CONTRASTS, PR, "mean",  frame = "parent")
-plot_dom_class(BURST.CONTRASTS, PR, "bfreq", frame = "parent")
+plot_dom_class(BURST.CONTRASTS, PR, "disp", frame = "parent")
 plot_dom_class(BURST.CONTRASTS, PR, "bsize", frame = "parent")
-for (q in c("mean", "bfreq", "bsize")) class_count_barplot(DOM.VEC[[q]], DOM.CLASS, COLOR.LIST.2, QUANTITY.LABEL[[q]])
+for (q in c("mean", "disp", "bsize")) class_count_barplot(DOM.VEC[[q]], DOM.CLASS, COLOR.LIST.2, QUANTITY.LABEL[[q]])
 dev.off()
 
 ## Figure 6: dominance class overlap heatmaps, all three pairings.
 class_overlap_triptych("main/06_overlap_dominance.pdf", DOM.VEC, DOM.CLASS, width = 22.5, height = 7.5, mar = c(9, 9, 1, 1))
 
-## Figure 4: rotated burst kinetics. Left, net mean change (x) against kinetic balance (y = bfreq - bsize)
+## Figure 4: rotated burst kinetics. Left, net mean change (x) against kinetic balance (y = -mean - 2 disp)
 ## with SE bars, read from the mean_ and kbal_ columns add_burst_contrasts() stores. The rotation
 ## separates the two burst kinetics: movement along x is a change in total mean, movement along y is a
 ## shift between frequency and size. A gene is significant when its kinetic balance has permutation
@@ -865,8 +864,8 @@ dev.off()
 ## 3.5 Class relationship heatmaps
 # log2 observed/expected, BH-corrected significance. 
 HEATMAP.PANELS <- data.frame(
-  y_kind = c(rep("REG", 3), rep("DOM", 3), "REG", "REG", "REG"), y_q = c("mean", "mean", "mean", "mean", "mean", "mean", "mean", "bfreq", "kbal"),
-  x_kind = c(rep("REG", 3), rep("DOM", 3), "DOM", "DOM", "DOM"), x_q = c("bfreq", "bsize", "kbal", "bfreq", "bsize", "kbal", "mean", "bfreq", "kbal"))
+  y_kind = c(rep("REG", 3), rep("DOM", 3), "REG", "REG", "REG"), y_q = c("mean", "mean", "mean", "mean", "mean", "mean", "mean", "disp", "kbal"),
+  x_kind = c(rep("REG", 3), rep("DOM", 3), "DOM", "DOM", "DOM"), x_q = c("disp", "bsize", "kbal", "disp", "bsize", "kbal", "mean", "disp", "kbal"))
 class_heatmap_grid("extra/S_class_heatmaps.pdf", HEATMAP.PANELS, CLASS.VEC, OVERLAP.FDR, width = 13, height = 13, mfrow = c(3, 3))
 
 ## 3.6 Gene-identity overlap
@@ -874,47 +873,47 @@ class_heatmap_grid("extra/S_class_heatmaps.pdf", HEATMAP.PANELS, CLASS.VEC, OVER
 # agreement between two class vectors across the whole table), a
 # permutation null on kappa, and a per-class Jaccard overlap on gene
 # membership.
-REG.OVERLAP.MEAN.BFREQ  <- class_identity_overlap(clean_reg(REG.VEC$mean),  clean_reg(REG.VEC$bfreq), levels = REG.CLASS, nperm = 2000)
+REG.OVERLAP.MEAN.DISP  <- class_identity_overlap(clean_reg(REG.VEC$mean),  clean_reg(REG.VEC$disp), levels = REG.CLASS, nperm = 2000)
 REG.OVERLAP.MEAN.BSIZE  <- class_identity_overlap(clean_reg(REG.VEC$mean),  clean_reg(REG.VEC$bsize), levels = REG.CLASS, nperm = 2000)
-REG.OVERLAP.BFREQ.BSIZE <- class_identity_overlap(clean_reg(REG.VEC$bfreq), clean_reg(REG.VEC$bsize), levels = REG.CLASS, nperm = 2000)
+REG.OVERLAP.DISP.BSIZE <- class_identity_overlap(clean_reg(REG.VEC$disp), clean_reg(REG.VEC$bsize), levels = REG.CLASS, nperm = 2000)
 REG.OVERLAP.MEAN.KBAL   <- class_identity_overlap(clean_reg(REG.VEC$mean),  clean_reg(REG.VEC$kbal),  levels = REG.CLASS, nperm = 2000)
 
-# Structural bfreq-bsize correlation: for one mode, compares the observed bfreq-vs-bsize correlation with the
-# one forced by bsize = mean - bfreq. Algebra gives Cov(bfreq, bsize) = Cov(bfreq, mean) - Var(bfreq).
-# Setting Cov(bfreq, mean) = 0 yields the correlation expected with no biological coupling,
-# rho_null = -Var(bfreq) / sqrt(Var(bfreq) * Var(bsize)). Vm, Vs and Cms come from eiv_components(),
+# Structural disp-bsize correlation: for one mode, compares the observed disp-vs-bsize correlation with the
+# one forced by bsize = mean + disp. Algebra gives Cov(disp, bsize) = Cov(disp, mean) + Var(disp).
+# Setting Cov(disp, mean) = 0 yields the correlation expected with no biological coupling,
+# rho_null = Var(disp) / sqrt(Var(disp) * Var(bsize)). Vm, Vs and Cms come from eiv_components(),
 # so the attenuation-corrected observed correlation is compared with that null on the same scale.
-# STRUCT.BFREQ.BSIZE is a flat list with the fixed fields listed in STRUCT.FIELDS below.
-STRUCT.FIELDS <- c("n", "Vm", "Vf", "Vs_bsize", "rho_bfreq_bsize_observed", "rho_bfreq_bsize_null", "excess_over_null")
-STRUCT.BFREQ.BSIZE      <- local({
+# STRUCT.DISP.BSIZE is a flat list with the fixed fields listed in STRUCT.FIELDS below.
+STRUCT.FIELDS <- c("n", "Vm", "Vf", "Vs_bsize", "rho_disp_bsize_observed", "rho_disp_bsize_null", "excess_over_null")
+STRUCT.DISP.BSIZE      <- local({
   mode <- "total"
   e <- eiv_components(BURST.CONTRASTS, mode)
-  Vm <- unname(e["Vm"]); Vf <- unname(e["Vs"]); Cmf <- unname(e["Cms"])   # Vs/Cms here are bfreq's, not bsize's
-  Vs_bsize <- Vm + Vf - 2 * Cmf
-  rho_obs  <- suppressWarnings((Cmf - Vf) / sqrt(Vf * Vs_bsize))
-  rho_null <- suppressWarnings(-Vf / sqrt(Vf * Vs_bsize))
+  Vm <- unname(e["Vm"]); Vf <- unname(e["Vs"]); Cmf <- unname(e["Cms"])   # Vs/Cms here are disp's, not bsize's
+  Vs_bsize <- Vm + Vf + 2 * Cmf
+  rho_obs  <- suppressWarnings((Cmf + Vf) / sqrt(Vf * Vs_bsize))
+  rho_null <- suppressWarnings(Vf / sqrt(Vf * Vs_bsize))
   list(n = unname(e["n"]), Vm = Vm, Vf = Vf, Vs_bsize = Vs_bsize,
-       rho_bfreq_bsize_observed = rho_obs, rho_bfreq_bsize_null = rho_null,
+       rho_disp_bsize_observed = rho_obs, rho_disp_bsize_null = rho_null,
        excess_over_null = rho_obs - rho_null)
 })
-stopifnot("bfreq_bsize_structural() fields differ from STRUCT.FIELDS; update the function and the call sites together" =
-          identical(names(STRUCT.BFREQ.BSIZE), STRUCT.FIELDS))
+stopifnot("disp_bsize_structural() fields differ from STRUCT.FIELDS; update the function and the call sites together" =
+          identical(names(STRUCT.DISP.BSIZE), STRUCT.FIELDS))
 
 REG.OVERLAP.SUMMARY <- rbind(
-  summarize_class_overlap(REG.OVERLAP.MEAN.BFREQ,  label = "Mean vs burst frequency"),
+  summarize_class_overlap(REG.OVERLAP.MEAN.DISP,  label = "Mean vs dispersion"),
   summarize_class_overlap(REG.OVERLAP.MEAN.BSIZE,  label = "Mean vs burst size"),
-  summarize_class_overlap(REG.OVERLAP.BFREQ.BSIZE, label = "Burst frequency vs burst size (structural, see STRUCT.BFREQ.BSIZE)"),
+  summarize_class_overlap(REG.OVERLAP.DISP.BSIZE, label = "Dispersion vs burst size (structural, see STRUCT.DISP.BSIZE)"),
   summarize_class_overlap(REG.OVERLAP.MEAN.KBAL,   label = "Mean vs frequency-size balance"))
 print(REG.OVERLAP.SUMMARY)
-cat(sprintf("Bfreq-vs-bsize correlation: observed (attenuation-corrected) rho = %.3f, expected from the mean/bfreq variance imbalance alone (Cov(mean,bfreq) = 0) rho = %.3f, excess over that null = %.3f\n",
-  STRUCT.BFREQ.BSIZE[["rho_bfreq_bsize_observed"]], STRUCT.BFREQ.BSIZE[["rho_bfreq_bsize_null"]], STRUCT.BFREQ.BSIZE[["excess_over_null"]]))
-write.csv(REG.OVERLAP.SUMMARY, file.path(TABLE.DIR, "gene_identity_overlap_mean_bfreq_bsize.csv"), row.names = FALSE)
+cat(sprintf("Disp-vs-bsize correlation: observed (attenuation-corrected) rho = %.3f, expected from the mean/disp variance imbalance alone (Cov(mean,disp) = 0) rho = %.3f, excess over that null = %.3f\n",
+  STRUCT.DISP.BSIZE[["rho_disp_bsize_observed"]], STRUCT.DISP.BSIZE[["rho_disp_bsize_null"]], STRUCT.DISP.BSIZE[["excess_over_null"]]))
+write.csv(REG.OVERLAP.SUMMARY, file.path(TABLE.DIR, "gene_identity_overlap_mean_disp_bsize.csv"), row.names = FALSE)
 
 fig_pdf("extra/S_reg_overlap_kappa_null.pdf", 20, 5)
 par(mfrow = c(1, 4))
-for (ov in list(list(ov = REG.OVERLAP.MEAN.BFREQ,  lab = "mean vs burst frequency"),
+for (ov in list(list(ov = REG.OVERLAP.MEAN.DISP,  lab = "mean vs dispersion"),
                 list(ov = REG.OVERLAP.MEAN.BSIZE,  lab = "mean vs burst size"),
-                list(ov = REG.OVERLAP.BFREQ.BSIZE, lab = "burst frequency vs burst size (structural)"),
+                list(ov = REG.OVERLAP.DISP.BSIZE, lab = "dispersion vs burst size (structural)"),
                 list(ov = REG.OVERLAP.MEAN.KBAL,   lab = "mean vs frequency-size balance"))) {
   hist(ov$ov$kappa_null, breaks = 40, col = COLOR.GREY[["light"]], border = "white", main = paste0("Permutation null: ", ov$lab), xlab = "kappa (reshuffled labels)", xlim = range(c(ov$ov$kappa_null, ov$ov$kappa)))
   abline(v = ov$ov$kappa, col = COLOR.ACCENT, lwd = 2, lty = 2)
@@ -924,8 +923,8 @@ dev.off()
 
 # Checkpoint
 save(REG.VEC, DOM.VEC,
-     REG.OVERLAP.MEAN.BFREQ, REG.OVERLAP.MEAN.BSIZE, REG.OVERLAP.BFREQ.BSIZE, REG.OVERLAP.MEAN.KBAL,
-     STRUCT.BFREQ.BSIZE, REG.OVERLAP.SUMMARY,
+     REG.OVERLAP.MEAN.DISP, REG.OVERLAP.MEAN.BSIZE, REG.OVERLAP.DISP.BSIZE, REG.OVERLAP.MEAN.KBAL,
+     STRUCT.DISP.BSIZE, REG.OVERLAP.SUMMARY,
      file = ckpt_path(3))
 
 console_start(4)
@@ -1435,27 +1434,27 @@ CB.CLASS$pair_type <- with(CB.CLASS, ifelse(is.na(grp_i) | is.na(grp_j), NA, ife
 
 table(CB.CLASS$pair_type, CB.CLASS$class)
 
-## 4.12 Burst frequency/size consistency among co-expressed genes
-# Does a gene's burst-frequency class agree with its burst-size class as
+## 4.12 Dispersion/size consistency among co-expressed genes
+# Does a gene's dispersion class agree with its burst-size class as
 # often within the co-expressed subset as it does genome-wide, or does
 # the co-expressed population behave differently? CO.MEAN.KBAL
 # is the comparison that isolates a real shift, since kbal does not
-# inherit the same structural link to bfreq that bsize does.
+# inherit the same structural link to disp that bsize does.
 CO.IDX         <- match(CO.GENES, BURST.CONTRASTS$gene)
 CO.VEC         <- lapply(REG.VEC, function(v) v[CO.IDX])
 
-BFREQ.BSIZE.OVERLAP.CO <- class_identity_overlap(clean_reg(CO.VEC$bfreq), clean_reg(CO.VEC$bsize), levels = REG.CLASS, nperm = 2000)
+DISP.BSIZE.OVERLAP.CO <- class_identity_overlap(clean_reg(CO.VEC$disp), clean_reg(CO.VEC$bsize), levels = REG.CLASS, nperm = 2000)
 MEAN.KBAL.OVERLAP.CO   <- class_identity_overlap(clean_reg(CO.VEC$mean),  clean_reg(CO.VEC$kbal),  levels = REG.CLASS, nperm = 2000)
 
-cat(sprintf("Bfreq vs bsize class concordance (structural, see STRUCT.BFREQ.BSIZE): genome-wide = %.3f (n = %d, kappa = %.3f, p = %.4f), CO.GENES = %.3f (n = %d, kappa = %.3f, p = %.4f)\n",
-  REG.OVERLAP.BFREQ.BSIZE$concordance, REG.OVERLAP.BFREQ.BSIZE$n_genes, REG.OVERLAP.BFREQ.BSIZE$kappa, REG.OVERLAP.BFREQ.BSIZE$kappa_p,
-  BFREQ.BSIZE.OVERLAP.CO$concordance,  BFREQ.BSIZE.OVERLAP.CO$n_genes,  BFREQ.BSIZE.OVERLAP.CO$kappa,  BFREQ.BSIZE.OVERLAP.CO$kappa_p))
+cat(sprintf("Disp vs bsize class concordance (structural, see STRUCT.DISP.BSIZE): genome-wide = %.3f (n = %d, kappa = %.3f, p = %.4f), CO.GENES = %.3f (n = %d, kappa = %.3f, p = %.4f)\n",
+  REG.OVERLAP.DISP.BSIZE$concordance, REG.OVERLAP.DISP.BSIZE$n_genes, REG.OVERLAP.DISP.BSIZE$kappa, REG.OVERLAP.DISP.BSIZE$kappa_p,
+  DISP.BSIZE.OVERLAP.CO$concordance,  DISP.BSIZE.OVERLAP.CO$n_genes,  DISP.BSIZE.OVERLAP.CO$kappa,  DISP.BSIZE.OVERLAP.CO$kappa_p))
 cat(sprintf("Mean vs frequency-size balance class concordance: genome-wide = %.3f (n = %d, kappa = %.3f, p = %.4f), CO.GENES = %.3f (n = %d, kappa = %.3f, p = %.4f)\n",
   REG.OVERLAP.MEAN.KBAL$concordance, REG.OVERLAP.MEAN.KBAL$n_genes, REG.OVERLAP.MEAN.KBAL$kappa, REG.OVERLAP.MEAN.KBAL$kappa_p,
   MEAN.KBAL.OVERLAP.CO$concordance,  MEAN.KBAL.OVERLAP.CO$n_genes,  MEAN.KBAL.OVERLAP.CO$kappa,  MEAN.KBAL.OVERLAP.CO$kappa_p))
 
 class_heatmap_grid("extra/S_coexpr_burst_mechanism_heatmap.pdf",
-                   data.frame(y_kind = "REG", y_q = c("bfreq", "mean"), x_kind = "REG", x_q = c("bsize", "kbal")),
+                   data.frame(y_kind = "REG", y_q = c("disp", "mean"), x_kind = "REG", x_q = c("bsize", "kbal")),
                    list(REG = CO.VEC), OVERLAP.FDR, width = 10, height = 5, mfrow = c(1, 2), kind_words = c(REG = ""), suffix = " (CO.GENES)")
 
 AXIS.POLE.GROUPS <- list(Axis1.Ribosome    = POS.LOAD.GENES,
@@ -1464,7 +1463,7 @@ AXIS.POLE.GROUPS <- list(Axis1.Ribosome    = POS.LOAD.GENES,
                         Axis2.Bulk        = AXIS2.BULK.GENES)
 
 # Fraction of each pole classified any-trans on each burst-kinetics axis
-t(sapply(AXIS.POLE.GROUPS, pole_trans_fractions, contrasts = BURST.CONTRASTS, bfreq_class = REG.VEC$bfreq, bsize_class = REG.VEC$bsize, kbal_class = REG.VEC$kbal))
+t(sapply(AXIS.POLE.GROUPS, pole_trans_fractions, contrasts = BURST.CONTRASTS, disp_class = REG.VEC$disp, bsize_class = REG.VEC$bsize, kbal_class = REG.VEC$kbal))
 
 ## 4.13 Cis and trans candidate axes
 # Runs the detailed enrichment on
@@ -1488,7 +1487,7 @@ for (ax_mode in c("cis", "trans")) {
 # Checkpoint
 save(RESID, PLOIDY.F, COEXPR.POINT, CB, CB2, CB.CLASS, CB.DOM.CLASS,
      RANK.CHECK.LIST, CANDIDATE.LIST, EXTRA.AXES.LIST, VALIDATED.LIST,
-     AXIS1.CT, AXIS2.CT, BFREQ.BSIZE.OVERLAP.CO, AXIS1.ENRICH, NEG.TAIL.ENRICH,
+     AXIS1.CT, AXIS2.CT, DISP.BSIZE.OVERLAP.CO, AXIS1.ENRICH, NEG.TAIL.ENRICH,
      file = ckpt_path(4))
 
 console_start(5)
@@ -1645,7 +1644,7 @@ NOISE.DECOMP.CLEAN <- NOISE.DECOMP[!NOISE.DECOMP$clipped, ]
 ## 5.4 Regulatory and dominance class summaries
 # Mean and variance of the extrinsic fraction within each class of the
 # existing five-class regulatory scheme and six-class dominance scheme,
-# for mean, burst frequency, and burst size
+# for mean, dispersion, and burst size
 class_idx       <- match(NOISE.DECOMP$gene,       BURST.CONTRASTS$gene)
 class_idx_clean <- match(NOISE.DECOMP.CLEAN$gene, BURST.CONTRASTS$gene)
 
@@ -1659,7 +1658,7 @@ EXTFRAC.BY.CLASS.CLEAN
 # Ambiguous classifications can arise where a significant permutation
 # p-value pairs with an unresolved bootstrap sign, on any of the three
 # quantities. Exclude these from the ANOVA/Tukey tests and GO analysis.
-AMBIG.GENES <- BURST.CONTRASTS$gene[Reduce(`|`, lapply(c(REG.VEC[c("mean", "bfreq", "bsize")], DOM.VEC[c("mean", "bfreq", "bsize")]), function(v) v == "Ambiguous"))]
+AMBIG.GENES <- BURST.CONTRASTS$gene[Reduce(`|`, lapply(c(REG.VEC[c("mean", "disp", "bsize")], DOM.VEC[c("mean", "disp", "bsize")]), function(v) v == "Ambiguous"))]
 
 NOISE.DECOMP.NOAMBIG       <- NOISE.DECOMP[!(NOISE.DECOMP$gene %in% AMBIG.GENES), ]
 NOISE.DECOMP.CLEAN.NOAMBIG <- NOISE.DECOMP.CLEAN[!(NOISE.DECOMP.CLEAN$gene %in% AMBIG.GENES), ]
@@ -1726,21 +1725,21 @@ dev.off()
 ## 5.5 Burst kinetics relationship
 # Tests whether genes with a larger species difference in burst
 # frequency or burst size also carry a different extrinsic fraction.
-BFREQ.EXTFRAC.COR <- cor.test(abs(BURST.CONTRASTS$bfreq_total_est[class_idx]), NOISE.DECOMP$extrinsic_frac, method = "spearman", exact = FALSE)
+DISP.EXTFRAC.COR <- cor.test(abs(BURST.CONTRASTS$disp_total_est[class_idx]), NOISE.DECOMP$extrinsic_frac, method = "spearman", exact = FALSE)
 BSIZE.EXTFRAC.COR <- cor.test(abs(BURST.CONTRASTS$bsize_total_est[class_idx]), NOISE.DECOMP$extrinsic_frac, method = "spearman", exact = FALSE)
 KBAL.EXTFRAC.COR  <- cor.test(abs(BURST.CONTRASTS$kbal_total_est[class_idx]),  NOISE.DECOMP$extrinsic_frac, method = "spearman", exact = FALSE)
-BFREQ.EXTFRAC.COR.CLEAN <- cor.test(abs(BURST.CONTRASTS$bfreq_total_est[class_idx_clean]), NOISE.DECOMP.CLEAN$extrinsic_frac, method = "spearman", exact = FALSE)
+DISP.EXTFRAC.COR.CLEAN <- cor.test(abs(BURST.CONTRASTS$disp_total_est[class_idx_clean]), NOISE.DECOMP.CLEAN$extrinsic_frac, method = "spearman", exact = FALSE)
 BSIZE.EXTFRAC.COR.CLEAN <- cor.test(abs(BURST.CONTRASTS$bsize_total_est[class_idx_clean]), NOISE.DECOMP.CLEAN$extrinsic_frac, method = "spearman", exact = FALSE)
 KBAL.EXTFRAC.COR.CLEAN  <- cor.test(abs(BURST.CONTRASTS$kbal_total_est[class_idx_clean]),  NOISE.DECOMP.CLEAN$extrinsic_frac, method = "spearman", exact = FALSE)
 
-BFREQ.EXTFRAC.COR;       BSIZE.EXTFRAC.COR;       KBAL.EXTFRAC.COR
-BFREQ.EXTFRAC.COR.CLEAN; BSIZE.EXTFRAC.COR.CLEAN; KBAL.EXTFRAC.COR.CLEAN
+DISP.EXTFRAC.COR;       BSIZE.EXTFRAC.COR;       KBAL.EXTFRAC.COR
+DISP.EXTFRAC.COR.CLEAN; BSIZE.EXTFRAC.COR.CLEAN; KBAL.EXTFRAC.COR.CLEAN
 
 # Checkpoint
 save(NOISE.DECOMP, NOISE.DECOMP.CLEAN, NOISE.DECOMP.NOAMBIG, NOISE.DECOMP.CLEAN.NOAMBIG, AMBIG.GENES,
      EXTFRAC.BY.CLASS, EXTFRAC.BY.CLASS.CLEAN, ANOVA.BY.CLASS, ANOVA.BY.CLASS.CLEAN,
-     BFREQ.EXTFRAC.COR, BSIZE.EXTFRAC.COR, KBAL.EXTFRAC.COR,
-     BFREQ.EXTFRAC.COR.CLEAN, BSIZE.EXTFRAC.COR.CLEAN, KBAL.EXTFRAC.COR.CLEAN,
+     DISP.EXTFRAC.COR, BSIZE.EXTFRAC.COR, KBAL.EXTFRAC.COR,
+     DISP.EXTFRAC.COR.CLEAN, BSIZE.EXTFRAC.COR.CLEAN, KBAL.EXTFRAC.COR.CLEAN,
      file = ckpt_path(5))
 
 console_start(6)
@@ -1794,12 +1793,11 @@ attr(OCC.SC, "failed_regions"); attr(OCC.SE, "failed_regions")
 SCORE.SC <- merge(SCORE.SC, OCC.SC, by = "gene")
 SCORE.SE <- merge(SCORE.SE, OCC.SE, by = "gene")
 
-## 6.2 Validation: does each feature associate with burst frequency?
+## 6.2 Validation: does each feature associate with dispersion?
 # Uses each species' own allele within the hybrid (SPLIT.FITS$HYC.SC.N/
-# HYC.SE.N, Section 2.2). Each feature is tested against burst frequency (BFREQ = theta) with
+# HYC.SE.N, Section 2.2). Each feature is tested against dispersion (DISP = phi) with
 # mean expression (MU) as the covariate. Burst size is not tested separately: with MU as
-# the covariate, log BSIZE = log MU - log BFREQ makes the BSIZE test the BFREQ test with the
-# sign of the slope reversed.
+# the covariate, log BSIZE = log MU + log DISP makes the BSIZE test the DISP test.
 TATA.SC      <- setNames(SCORE.SC$tata_score, SCORE.SC$gene)
 TATA.SE      <- setNames(SCORE.SE$tata_score, SCORE.SE$gene)
 POLYAT.SC    <- setNames(SCORE.SC$polyat_len, SCORE.SC$gene)
@@ -1808,12 +1806,12 @@ OCC.SC.SCORE <- setNames(SCORE.SC$occ_score,  SCORE.SC$gene)
 OCC.SE.SCORE <- setNames(SCORE.SE$occ_score,  SCORE.SE$gene)
 
 NOISE.VALIDATE <- rbind(
-  cbind(species = "Sc", parameter = "bfreq", architecture_noise_check(SPLIT.FITS$HYC.SC.N, TATA.SC,      "TATA score",                   response = "BFREQ")),
-  cbind(species = "Sc", parameter = "bfreq", architecture_noise_check(SPLIT.FITS$HYC.SC.N, POLYAT.SC,    "poly(dA:dT) length",           response = "BFREQ")),
-  cbind(species = "Sc", parameter = "bfreq", architecture_noise_check(SPLIT.FITS$HYC.SC.N, OCC.SC.SCORE, "nucleosome occupancy (NuPoP)", response = "BFREQ")),
-  cbind(species = "Se", parameter = "bfreq", architecture_noise_check(SPLIT.FITS$HYC.SE.N, TATA.SE,      "TATA score",                   response = "BFREQ")),
-  cbind(species = "Se", parameter = "bfreq", architecture_noise_check(SPLIT.FITS$HYC.SE.N, POLYAT.SE,    "poly(dA:dT) length",           response = "BFREQ")),
-  cbind(species = "Se", parameter = "bfreq", architecture_noise_check(SPLIT.FITS$HYC.SE.N, OCC.SE.SCORE, "nucleosome occupancy (NuPoP)", response = "BFREQ")))
+  cbind(species = "Sc", parameter = "disp", architecture_noise_check(SPLIT.FITS$HYC.SC.N, TATA.SC,      "TATA score",                   response = "DISP")),
+  cbind(species = "Sc", parameter = "disp", architecture_noise_check(SPLIT.FITS$HYC.SC.N, POLYAT.SC,    "poly(dA:dT) length",           response = "DISP")),
+  cbind(species = "Sc", parameter = "disp", architecture_noise_check(SPLIT.FITS$HYC.SC.N, OCC.SC.SCORE, "nucleosome occupancy (NuPoP)", response = "DISP")),
+  cbind(species = "Se", parameter = "disp", architecture_noise_check(SPLIT.FITS$HYC.SE.N, TATA.SE,      "TATA score",                   response = "DISP")),
+  cbind(species = "Se", parameter = "disp", architecture_noise_check(SPLIT.FITS$HYC.SE.N, POLYAT.SE,    "poly(dA:dT) length",           response = "DISP")),
+  cbind(species = "Se", parameter = "disp", architecture_noise_check(SPLIT.FITS$HYC.SE.N, OCC.SE.SCORE, "nucleosome occupancy (NuPoP)", response = "DISP")))
 print(NOISE.VALIDATE)
 
 ## 6.3 Between-species divergence in architecture
@@ -1851,36 +1849,36 @@ ARCH <- local({
 })
 ARCH <- ARCH[match(BURST.CONTRASTS$gene, ARCH$gene), ]
 
-## 6.4 Directional concordance: does the promoter shift point the right way? (burst frequency primary, burst size secondary)
+## 6.4 Directional concordance: does the promoter shift point the right way? (dispersion primary, burst size secondary)
 # Tests whether the allele with the stronger promoter feature carries the predicted noise
-# direction, across all three features (promoter_direction_test()). Burst frequency is the
-# primary, prespecified test: sign(delta) = sign(bfreq_cis_est), since a stronger TATA box or
-# longer poly(dA:dT) tract goes with lower DISP (Section 6.2). Burst size is the secondary test
-# with the sign flipped, sign(delta) = -sign(bsize_cis_est), from log BSIZE = log MU - log DISP: a feature
-# acting through DISP at fixed mean moves BSIZE the other way. The bsize test follows from the
-# bfreq prediction and is read with the mean contrast in mind. Frequency-size balance (kbal) has no independent
+# direction, across all three features (promoter_direction_test()). Dispersion is the
+# primary, prespecified test: sign(delta) = -sign(disp_cis_est), since a stronger TATA box or
+# longer poly(dA:dT) tract goes with higher DISP (Section 6.2). Burst size is the secondary test,
+# sign(delta) = -sign(bsize_cis_est), from log BSIZE = log MU + log DISP: a feature
+# raising DISP at fixed mean moves BSIZE the same way. The bsize test follows from the
+# disp prediction and is read with the mean contrast in mind. Frequency-size balance (kbal) has no independent
 # prediction and is not tested (.PROMOTER_PREDICTED_SIGN).
-PROM.DIRECTION.TEST.BFREQ <- promoter_direction_test(BURST.CONTRASTS, ARCH, REG.VEC$bfreq, quantity = "bfreq")
+PROM.DIRECTION.TEST.DISP <- promoter_direction_test(BURST.CONTRASTS, ARCH, REG.VEC$disp, quantity = "disp")
 PROM.DIRECTION.TEST.BSIZE <- promoter_direction_test(BURST.CONTRASTS, ARCH, REG.VEC$bsize, quantity = "bsize")
-print(PROM.DIRECTION.TEST.BFREQ)
+print(PROM.DIRECTION.TEST.DISP)
 print(PROM.DIRECTION.TEST.BSIZE)
 
 # Does concordance rise toward the largest promoter shifts? Bins the
 # same gene set by |delta| magnitude and checks whether concordance
-# rises from the smallest bin toward the largest, for burst frequency
+# rises from the smallest bin toward the largest, for dispersion
 # (primary) and burst size (predicted sign flipped)
-TATA.CONCORD.BINS.BFREQ   <- concordance_by_magnitude(ARCH$tata_delta,        BURST.CONTRASTS$bfreq_cis_est, REG.VEC$bfreq, quantity = "bfreq")
-POLYAT.CONCORD.BINS.BFREQ <- concordance_by_magnitude(ARCH$polyat_delta,      BURST.CONTRASTS$bfreq_cis_est, REG.VEC$bfreq, quantity = "bfreq")
-OCC.CONCORD.BINS.BFREQ    <- concordance_by_magnitude(ARCH$occ_access_delta,  BURST.CONTRASTS$bfreq_cis_est, REG.VEC$bfreq, quantity = "bfreq")
+TATA.CONCORD.BINS.DISP   <- concordance_by_magnitude(ARCH$tata_delta,        BURST.CONTRASTS$disp_cis_est, REG.VEC$disp, quantity = "disp")
+POLYAT.CONCORD.BINS.DISP <- concordance_by_magnitude(ARCH$polyat_delta,      BURST.CONTRASTS$disp_cis_est, REG.VEC$disp, quantity = "disp")
+OCC.CONCORD.BINS.DISP    <- concordance_by_magnitude(ARCH$occ_access_delta,  BURST.CONTRASTS$disp_cis_est, REG.VEC$disp, quantity = "disp")
 TATA.CONCORD.BINS.BSIZE   <- concordance_by_magnitude(ARCH$tata_delta,        BURST.CONTRASTS$bsize_cis_est, REG.VEC$bsize, quantity = "bsize")
 POLYAT.CONCORD.BINS.BSIZE <- concordance_by_magnitude(ARCH$polyat_delta,      BURST.CONTRASTS$bsize_cis_est, REG.VEC$bsize, quantity = "bsize")
 OCC.CONCORD.BINS.BSIZE    <- concordance_by_magnitude(ARCH$occ_access_delta,  BURST.CONTRASTS$bsize_cis_est, REG.VEC$bsize, quantity = "bsize")
-cat("\n-- TATA score: concordance by magnitude, burst frequency --\n")
-print(TATA.CONCORD.BINS.BFREQ)
-cat("\n-- poly(dA:dT) length: concordance by magnitude, burst frequency --\n")
-print(POLYAT.CONCORD.BINS.BFREQ)
-cat("\n-- nucleosome occupancy (NuPoP): concordance by magnitude, burst frequency --\n")
-print(OCC.CONCORD.BINS.BFREQ)
+cat("\n-- TATA score: concordance by magnitude, dispersion --\n")
+print(TATA.CONCORD.BINS.DISP)
+cat("\n-- poly(dA:dT) length: concordance by magnitude, dispersion --\n")
+print(POLYAT.CONCORD.BINS.DISP)
+cat("\n-- nucleosome occupancy (NuPoP): concordance by magnitude, dispersion --\n")
+print(OCC.CONCORD.BINS.DISP)
 cat("\n-- TATA score: concordance by magnitude, burst size (predicted sign flipped) --\n")
 print(TATA.CONCORD.BINS.BSIZE)
 cat("\n-- poly(dA:dT) length: concordance by magnitude, burst size (predicted sign flipped) --\n")
@@ -1890,34 +1888,34 @@ print(OCC.CONCORD.BINS.BSIZE)
 
 fig_pdf("extra/S_promoter_concordance_by_magnitude.pdf", 13, 9)
 par(mfrow = c(2, 3))
-plot_concordance_by_magnitude(TATA.CONCORD.BINS.BFREQ,   main = "TATA (burst frequency)")
-plot_concordance_by_magnitude(POLYAT.CONCORD.BINS.BFREQ, main = "poly(dA:dT) (burst frequency)")
-plot_concordance_by_magnitude(OCC.CONCORD.BINS.BFREQ,    main = "nucleosome occupancy (burst frequency)")
+plot_concordance_by_magnitude(TATA.CONCORD.BINS.DISP,   main = "TATA (dispersion)")
+plot_concordance_by_magnitude(POLYAT.CONCORD.BINS.DISP, main = "poly(dA:dT) (dispersion)")
+plot_concordance_by_magnitude(OCC.CONCORD.BINS.DISP,    main = "nucleosome occupancy (dispersion)")
 plot_concordance_by_magnitude(TATA.CONCORD.BINS.BSIZE,   main = "TATA (burst size, sign flipped)")
 plot_concordance_by_magnitude(POLYAT.CONCORD.BINS.BSIZE, main = "poly(dA:dT) (burst size, sign flipped)")
 plot_concordance_by_magnitude(OCC.CONCORD.BINS.BSIZE,    main = "nucleosome occupancy (burst size, sign flipped)")
 dev.off()
 
-## 6.5 Candidate genes (burst frequency, burst size)
+## 6.5 Candidate genes (dispersion, burst size)
 # Intersects a significant cis component of divergence (Cis, Cis +
 # Trans, or Compensatory) with a large shift in a promoter feature,
 # ranked by |<quantity>_cis_est|. The concordant column follows the predicted sign of each quantity
-# (burst frequency: same sign as the cis estimate; burst size: opposite sign).
-PROM.NOISE.CANDIDATES.BFREQ <- promoter_noise_candidates(BURST.CONTRASTS, PR, ARCH, REG.VEC$bfreq, quantity = "bfreq")
+# (dispersion and burst size: both opposite in sign to the cis estimate).
+PROM.NOISE.CANDIDATES.DISP <- promoter_noise_candidates(BURST.CONTRASTS, PR, ARCH, REG.VEC$disp, quantity = "disp")
 PROM.NOISE.CANDIDATES.BSIZE <- promoter_noise_candidates(BURST.CONTRASTS, PR, ARCH, REG.VEC$bsize, quantity = "bsize")
-write.csv(PROM.NOISE.CANDIDATES.BFREQ$tata,   file.path(TABLE.DIR, "tata_bfreq_candidates.csv"),   row.names = FALSE)
-write.csv(PROM.NOISE.CANDIDATES.BFREQ$polyat, file.path(TABLE.DIR, "polyat_bfreq_candidates.csv"), row.names = FALSE)
-write.csv(PROM.NOISE.CANDIDATES.BFREQ$occ,    file.path(TABLE.DIR, "occ_bfreq_candidates.csv"),    row.names = FALSE)
+write.csv(PROM.NOISE.CANDIDATES.DISP$tata,   file.path(TABLE.DIR, "tata_disp_candidates.csv"),   row.names = FALSE)
+write.csv(PROM.NOISE.CANDIDATES.DISP$polyat, file.path(TABLE.DIR, "polyat_disp_candidates.csv"), row.names = FALSE)
+write.csv(PROM.NOISE.CANDIDATES.DISP$occ,    file.path(TABLE.DIR, "occ_disp_candidates.csv"),    row.names = FALSE)
 write.csv(PROM.NOISE.CANDIDATES.BSIZE$tata,   file.path(TABLE.DIR, "tata_bsize_candidates.csv"),   row.names = FALSE)
 write.csv(PROM.NOISE.CANDIDATES.BSIZE$polyat, file.path(TABLE.DIR, "polyat_bsize_candidates.csv"), row.names = FALSE)
 write.csv(PROM.NOISE.CANDIDATES.BSIZE$occ,    file.path(TABLE.DIR, "occ_bsize_candidates.csv"),    row.names = FALSE)
 
 # Checkpoint
 save(SCORE.SC, SCORE.SE, ARCH, NOISE.VALIDATE,
-     PROM.DIRECTION.TEST.BFREQ, PROM.DIRECTION.TEST.BSIZE,
-     TATA.CONCORD.BINS.BFREQ, POLYAT.CONCORD.BINS.BFREQ, OCC.CONCORD.BINS.BFREQ,
+     PROM.DIRECTION.TEST.DISP, PROM.DIRECTION.TEST.BSIZE,
+     TATA.CONCORD.BINS.DISP, POLYAT.CONCORD.BINS.DISP, OCC.CONCORD.BINS.DISP,
      TATA.CONCORD.BINS.BSIZE, POLYAT.CONCORD.BINS.BSIZE, OCC.CONCORD.BINS.BSIZE,
-     PROM.NOISE.CANDIDATES.BFREQ, PROM.NOISE.CANDIDATES.BSIZE,
+     PROM.NOISE.CANDIDATES.DISP, PROM.NOISE.CANDIDATES.BSIZE,
      file = ckpt_path(6))
 
 console_start(7)
@@ -2215,18 +2213,18 @@ cat(sprintf("Sc parent: within/between ratio, n = %d genes (%d with within = 0),
 
 BF.MIX.SC         <- CONTRAST.FITS$MIX.SC
 MU.LOG2.MIX.SC    <- setNames(log2(BF.MIX.SC$MU), rownames(BF.MIX.SC))
-BFREQ.LOG2.MIX.SC <- setNames(-log2(BF.MIX.SC$DISP), rownames(BF.MIX.SC))
+DISP.LOG2.MIX.SC <- setNames(log2(BF.MIX.SC$DISP), rownames(BF.MIX.SC))
 BSIZE.LOG2.MIX.SC <- setNames(log2(BF.MIX.SC$MU * BF.MIX.SC$DISP), rownames(BF.MIX.SC))
 
 fig_pdf("extra/S_within_between_vs_burst_MIX.SC.pdf", 15, 5)
 par(mfrow = c(1, 3), mar = c(5, 4.5, 2, 1))
 WB.VS.MU.MIX.SC    <- plot_within_between_vs_quantity(WB.MIX.SC, MU.LOG2.MIX.SC,    xlab = "log2(mean)")
-WB.VS.BFREQ.MIX.SC <- plot_within_between_vs_quantity(WB.MIX.SC, BFREQ.LOG2.MIX.SC, xlab = "log2(burst frequency)")
+WB.VS.DISP.MIX.SC <- plot_within_between_vs_quantity(WB.MIX.SC, DISP.LOG2.MIX.SC, xlab = "log2(dispersion)")
 WB.VS.BSIZE.MIX.SC <- plot_within_between_vs_quantity(WB.MIX.SC, BSIZE.LOG2.MIX.SC, xlab = "log2(burst size)")
 dev.off()
 
 cat(sprintf("Sc parent: within/between vs mean,       n = %d, Spearman rho = %.3f\n", WB.VS.MU.MIX.SC$n,    WB.VS.MU.MIX.SC$rho))
-cat(sprintf("Sc parent: within/between vs burst freq, n = %d, Spearman rho = %.3f\n", WB.VS.BFREQ.MIX.SC$n, WB.VS.BFREQ.MIX.SC$rho))
+cat(sprintf("Sc parent: within/between vs dispersion, n = %d, Spearman rho = %.3f\n", WB.VS.DISP.MIX.SC$n, WB.VS.DISP.MIX.SC$rho))
 cat(sprintf("Sc parent: within/between vs burst size, n = %d, Spearman rho = %.3f\n", WB.VS.BSIZE.MIX.SC$n, WB.VS.BSIZE.MIX.SC$rho))
 
 CL.MIX.SE <- Idents(YSC$MIX.SE)[colnames(CONTRAST.MATS$MIX.SE)]
@@ -2241,18 +2239,18 @@ cat(sprintf("Se parent: within/between ratio, n = %d genes (%d with within = 0),
 
 BF.MIX.SE         <- CONTRAST.FITS$MIX.SE
 MU.LOG2.MIX.SE    <- setNames(log2(BF.MIX.SE$MU), rownames(BF.MIX.SE))
-BFREQ.LOG2.MIX.SE <- setNames(-log2(BF.MIX.SE$DISP), rownames(BF.MIX.SE))
+DISP.LOG2.MIX.SE <- setNames(log2(BF.MIX.SE$DISP), rownames(BF.MIX.SE))
 BSIZE.LOG2.MIX.SE <- setNames(log2(BF.MIX.SE$MU * BF.MIX.SE$DISP), rownames(BF.MIX.SE))
 
 fig_pdf("extra/S_within_between_vs_burst_MIX.SE.pdf", 15, 5)
 par(mfrow = c(1, 3), mar = c(5, 4.5, 2, 1))
 WB.VS.MU.MIX.SE    <- plot_within_between_vs_quantity(WB.MIX.SE, MU.LOG2.MIX.SE,    xlab = "log2(mean)")
-WB.VS.BFREQ.MIX.SE <- plot_within_between_vs_quantity(WB.MIX.SE, BFREQ.LOG2.MIX.SE, xlab = "log2(burst frequency)")
+WB.VS.DISP.MIX.SE <- plot_within_between_vs_quantity(WB.MIX.SE, DISP.LOG2.MIX.SE, xlab = "log2(dispersion)")
 WB.VS.BSIZE.MIX.SE <- plot_within_between_vs_quantity(WB.MIX.SE, BSIZE.LOG2.MIX.SE, xlab = "log2(burst size)")
 dev.off()
 
 cat(sprintf("Se parent: within/between vs mean,       n = %d, Spearman rho = %.3f\n", WB.VS.MU.MIX.SE$n,    WB.VS.MU.MIX.SE$rho))
-cat(sprintf("Se parent: within/between vs burst freq, n = %d, Spearman rho = %.3f\n", WB.VS.BFREQ.MIX.SE$n, WB.VS.BFREQ.MIX.SE$rho))
+cat(sprintf("Se parent: within/between vs dispersion, n = %d, Spearman rho = %.3f\n", WB.VS.DISP.MIX.SE$n, WB.VS.DISP.MIX.SE$rho))
 cat(sprintf("Se parent: within/between vs burst size, n = %d, Spearman rho = %.3f\n", WB.VS.BSIZE.MIX.SE$n, WB.VS.BSIZE.MIX.SE$rho))
 
 ## Cross-species scatter of within_between_decomp()'s ratio (log10), one
@@ -2289,7 +2287,7 @@ cat(sprintf("Within/between ratio, Sc vs Se parent, n = %d genes, Spearman rho =
 CLASS.LEVELS <- list(REG = REG.CLASS, DOM = DOM.CLASS)
 CLASS.COLORS <- list(REG = COLOR.LIST.1, DOM = COLOR.LIST.2)
 for (kind in c("REG", "DOM"))
-  for (q in c("mean", "bfreq", "bsize"))
+  for (q in c("mean", "disp", "bsize"))
     report_within_between_by_class(WB.MIX.SC, WB.MIX.SE, CLASS.VEC[[kind]][[q]], BURST.CONTRASTS$gene,
       CLASS.LEVELS[[kind]], CLASS.COLORS[[kind]], "Sc parent", "Se parent",
       sprintf("%s class (%s)", c(REG = "regulatory", DOM = "dominance")[[kind]], QUANTITY.LABEL[[q]]),
@@ -2376,7 +2374,7 @@ set.seed(SEED.SECTION + 8)
 GO.SIG  <- 0.05
 GO.FDR <- 0.2   # Benjamini-Hochberg cutoff on each enrichment test's adjusted p-value (p.adjust); the Storey q-value is not used
 
-## 8.1 Overall parental divergence: mean, burst frequency, burst size
+## 8.1 Overall parental divergence: mean, dispersion, burst size
 # Baseline sets per quantity: any gene with a significant parent-vs-
 # parent difference, split by direction
 MEAN.LFC       <- setNames(BURST.CONTRASTS$mean_total_est, BURST.CONTRASTS$gene)
@@ -2385,11 +2383,11 @@ SIG.MEAN.TOTAL <- setNames(PR$mean_total_q, BURST.CONTRASTS$gene)[names(MEAN.ORD
 MEAN.SC.UP     <- names(MEAN.ORD)[SIG.MEAN.TOTAL < GO.SIG & MEAN.ORD > 0]
 MEAN.SE.UP     <- names(MEAN.ORD)[SIG.MEAN.TOTAL < GO.SIG & MEAN.ORD < 0]
 
-BFREQ.LFC       <- setNames(BURST.CONTRASTS$bfreq_total_est, BURST.CONTRASTS$gene)
-BFREQ.ORD       <- sort(BFREQ.LFC, decreasing = TRUE)
-SIG.BFREQ.TOTAL <- setNames(PR$bfreq_total_q, BURST.CONTRASTS$gene)[names(BFREQ.ORD)]
-BFREQ.SC.UP     <- names(BFREQ.ORD)[SIG.BFREQ.TOTAL < GO.SIG & BFREQ.ORD > 0]
-BFREQ.SE.UP     <- names(BFREQ.ORD)[SIG.BFREQ.TOTAL < GO.SIG & BFREQ.ORD < 0]
+DISP.LFC       <- setNames(BURST.CONTRASTS$disp_total_est, BURST.CONTRASTS$gene)
+DISP.ORD       <- sort(DISP.LFC, decreasing = TRUE)
+SIG.DISP.TOTAL <- setNames(PR$disp_total_q, BURST.CONTRASTS$gene)[names(DISP.ORD)]
+DISP.SC.UP     <- names(DISP.ORD)[SIG.DISP.TOTAL < GO.SIG & DISP.ORD > 0]
+DISP.SE.UP     <- names(DISP.ORD)[SIG.DISP.TOTAL < GO.SIG & DISP.ORD < 0]
 
 BSIZE.LFC       <- setNames(BURST.CONTRASTS$bsize_total_est, BURST.CONTRASTS$gene)
 BSIZE.ORD       <- sort(BSIZE.LFC, decreasing = TRUE)
@@ -2398,7 +2396,7 @@ BSIZE.SC.UP     <- names(BSIZE.ORD)[SIG.BSIZE.TOTAL < GO.SIG & BSIZE.ORD > 0]
 BSIZE.SE.UP     <- names(BSIZE.ORD)[SIG.BSIZE.TOTAL < GO.SIG & BSIZE.ORD < 0]
 
 GO.SETS <- list(Mean_Total_Sc  = MEAN.SC.UP,  Mean_Total_Se  = MEAN.SE.UP,
-                Bfreq_Total_Sc = BFREQ.SC.UP, Bfreq_Total_Se = BFREQ.SE.UP,
+                Disp_Total_Sc = DISP.SC.UP, Disp_Total_Se = DISP.SE.UP,
                 Bsize_Total_Sc = BSIZE.SC.UP, Bsize_Total_Se = BSIZE.SE.UP)
 
 ## 8.2 Regulatory classes, each split by direction: mean, burst
@@ -2407,30 +2405,30 @@ GO.SETS <- list(Mean_Total_Sc  = MEAN.SC.UP,  Mean_Total_Se  = MEAN.SE.UP,
 # Compensatory) x two directions (Sc-higher, Se-higher), for each of
 # four quantities.
 REG.SETS.MEAN  <- build_reg_go_sets(BURST.CONTRASTS, PR, universe = BURST.CONTRASTS$gene, quantity = "mean",  sig = GO.SIG)
-REG.SETS.BFREQ <- build_reg_go_sets(BURST.CONTRASTS, PR, universe = BURST.CONTRASTS$gene, quantity = "bfreq", sig = GO.SIG)
+REG.SETS.DISP <- build_reg_go_sets(BURST.CONTRASTS, PR, universe = BURST.CONTRASTS$gene, quantity = "disp", sig = GO.SIG)
 REG.SETS.BSIZE <- build_reg_go_sets(BURST.CONTRASTS, PR, universe = BURST.CONTRASTS$gene, quantity = "bsize", sig = GO.SIG)
 REG.SETS.KBAL  <- build_reg_go_sets(BURST.CONTRASTS, PR, universe = BURST.CONTRASTS$gene, quantity = "kbal",  sig = GO.SIG)
 names(REG.SETS.MEAN)  <- paste0("Mean_",  names(REG.SETS.MEAN))
-names(REG.SETS.BFREQ) <- paste0("Bfreq_", names(REG.SETS.BFREQ))
+names(REG.SETS.DISP) <- paste0("Disp_", names(REG.SETS.DISP))
 names(REG.SETS.BSIZE) <- paste0("Bsize_", names(REG.SETS.BSIZE))
 names(REG.SETS.KBAL)  <- paste0("Kbal_",  names(REG.SETS.KBAL))
-GO.SETS <- c(GO.SETS, REG.SETS.MEAN, REG.SETS.BFREQ, REG.SETS.BSIZE, REG.SETS.KBAL)
+GO.SETS <- c(GO.SETS, REG.SETS.MEAN, REG.SETS.DISP, REG.SETS.BSIZE, REG.SETS.KBAL)
 
-## 8.3 Any-cis / any-trans, pooled across class: mean, burst frequency,
+## 8.3 Any-cis / any-trans, pooled across class: mean, dispersion,
 ## burst size, frequency-size balance
 ANY.SETS.MEAN  <- c(build_component_go_sets(BURST.CONTRASTS, PR, universe = BURST.CONTRASTS$gene, component = "cis",   quantity = "mean",  sig = GO.SIG),
                     build_component_go_sets(BURST.CONTRASTS, PR, universe = BURST.CONTRASTS$gene, component = "trans", quantity = "mean",  sig = GO.SIG))
-ANY.SETS.BFREQ <- c(build_component_go_sets(BURST.CONTRASTS, PR, universe = BURST.CONTRASTS$gene, component = "cis",   quantity = "bfreq", sig = GO.SIG),
-                    build_component_go_sets(BURST.CONTRASTS, PR, universe = BURST.CONTRASTS$gene, component = "trans", quantity = "bfreq", sig = GO.SIG))
+ANY.SETS.DISP <- c(build_component_go_sets(BURST.CONTRASTS, PR, universe = BURST.CONTRASTS$gene, component = "cis",   quantity = "disp", sig = GO.SIG),
+                    build_component_go_sets(BURST.CONTRASTS, PR, universe = BURST.CONTRASTS$gene, component = "trans", quantity = "disp", sig = GO.SIG))
 ANY.SETS.BSIZE <- c(build_component_go_sets(BURST.CONTRASTS, PR, universe = BURST.CONTRASTS$gene, component = "cis",   quantity = "bsize", sig = GO.SIG),
                     build_component_go_sets(BURST.CONTRASTS, PR, universe = BURST.CONTRASTS$gene, component = "trans", quantity = "bsize", sig = GO.SIG))
 ANY.SETS.KBAL  <- c(build_component_go_sets(BURST.CONTRASTS, PR, universe = BURST.CONTRASTS$gene, component = "cis",   quantity = "kbal",  sig = GO.SIG),
                     build_component_go_sets(BURST.CONTRASTS, PR, universe = BURST.CONTRASTS$gene, component = "trans", quantity = "kbal",  sig = GO.SIG))
 names(ANY.SETS.MEAN)  <- paste0("Mean_",  names(ANY.SETS.MEAN))
-names(ANY.SETS.BFREQ) <- paste0("Bfreq_", names(ANY.SETS.BFREQ))
+names(ANY.SETS.DISP) <- paste0("Disp_", names(ANY.SETS.DISP))
 names(ANY.SETS.BSIZE) <- paste0("Bsize_", names(ANY.SETS.BSIZE))
 names(ANY.SETS.KBAL)  <- paste0("Kbal_",  names(ANY.SETS.KBAL))
-GO.SETS <- c(GO.SETS, ANY.SETS.MEAN, ANY.SETS.BFREQ, ANY.SETS.BSIZE, ANY.SETS.KBAL)
+GO.SETS <- c(GO.SETS, ANY.SETS.MEAN, ANY.SETS.DISP, ANY.SETS.BSIZE, ANY.SETS.KBAL)
 
 ## 8.4 Run enrichment for every set
 INTR.SETS       <- frac_group_sets(NOISE.DECOMP.NOAMBIG$gene,       NOISE.DECOMP.NOAMBIG$intrinsic_frac)
@@ -2438,7 +2436,7 @@ INTR.SETS.CLEAN <- frac_group_sets(NOISE.DECOMP.CLEAN.NOAMBIG$gene, NOISE.DECOMP
 GO.INPUTS <- list(GO.SETS = GO.SETS, GO.UNIVERSE = BURST.CONTRASTS$gene,
                   INTR.SETS = INTR.SETS, INTR.UNIVERSE = NOISE.DECOMP.NOAMBIG$gene,
                   INTR.SETS.CLEAN = INTR.SETS.CLEAN, INTR.UNIVERSE.CLEAN = NOISE.DECOMP.CLEAN.NOAMBIG$gene,
-                  GSE.LISTS = list(MEAN = MEAN.ORD, BFREQ = BFREQ.ORD, BSIZE = BSIZE.ORD),
+                  GSE.LISTS = list(MEAN = MEAN.ORD, DISP = DISP.ORD, BSIZE = BSIZE.ORD),
                   GO.FDR = GO.FDR, SEED.GO = 1)
 if (!exists("KEGG.DATA")) KEGG.DATA <- kegg_local("sce")
 
@@ -2489,7 +2487,7 @@ sapply(INTR.GO.CLEAN, function(s) sapply(s, n_sig_terms, q = GO.FDR))
 save(GO.SETS, GO.ENRICH, GO.SUMMARY,
      INTR.SETS, INTR.SETS.CLEAN, INTR.GO, INTR.GO.CLEAN,
      GO.GSE.MEAN.BP, GO.GSE.MEAN.MF, GO.GSE.MEAN.CC,
-     GO.GSE.BFREQ.BP, GO.GSE.BFREQ.MF, GO.GSE.BFREQ.CC,
+     GO.GSE.DISP.BP, GO.GSE.DISP.MF, GO.GSE.DISP.CC,
      GO.GSE.BSIZE.BP, GO.GSE.BSIZE.MF, GO.GSE.BSIZE.CC,
      file = ckpt_path(8))
 

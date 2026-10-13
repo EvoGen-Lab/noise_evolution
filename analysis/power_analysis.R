@@ -71,7 +71,7 @@ EXPOSURE.CV <- 0.8
 
 NJ <- 1000 # Simulated datasets per row
 NI <- N.PERM # Permutations per dataset, matched to the gene-level analysis
-PI1 <- min(0.5, max(0.02, mean(PR$bfreq_total_q < ALPHA, na.rm = TRUE)))
+PI1 <- min(0.5, max(0.02, mean(PR$disp_total_q < ALPHA, na.rm = TRUE)))
 cat(sprintf("PI1 (fraction of genes called by BH at q < %.2f, parental burst frequency) = %.3f\n", ALPHA, PI1))
 N.MIX <- 50 # Random mixtures averaged per grid cell
 SEED.BASE <- 1

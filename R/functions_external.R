@@ -10,7 +10,7 @@
 ### Stewart-Ornstein) enter through add_burst_terms(); count-matrix sources
 ### (Gasch, Nadal-Ribelles, Jackson, Jariani) are read, QC'd, mapped to ORFs and
 ### fitted with the same offset NB model. All sources then share one
-### (ORF, Mean, CV2, Fano, BFREQ, BSIZE) layout, so cor_row() compares any pair.
+### (ORF, Mean, CV2, Fano, DISP, BSIZE) layout, so cor_row() compares any pair.
 ###
 ### Outline (function name - purpose):
 ###     cor_row() - Spearman rank correlation between two vectors, with pairwise-complete filtering; returns one row (n, rho, p).
@@ -20,10 +20,10 @@
 ###     fread_matrix() - Fast row-named numeric matrix reader (fread based) with column selection.
 ###     to_numeric_matrix() - Coerces a table to a numeric matrix, reporting and dropping non-numeric columns.
 ###     map_to_orf() - Resolves gene identifiers to systematic ORF names (NA when unresolved).
-###     fit_scrna_source() - One published scRNA-seq source: ORF collapse, cell/gene QC and offset NB fit, returned on the NB.SC layout (ORF, Mean, CV2, Fano, BFREQ, BSIZE).
+###     fit_scrna_source() - One published scRNA-seq source: ORF collapse, cell/gene QC and offset NB fit, returned on the NB.SC layout (ORF, Mean, CV2, Fano, DISP, BSIZE).
 ###     mean_adjusted_noise() - Loess residual of log CV^2 on log mean: noise relative to genes of similar abundance.
 ###     noise_corr_rows() - Spearman correlation of mean, CV2, burst frequency and burst size between a source and MIX.SC or between two sources.
-###     raw_source_table() - the ORF, Mean, CV2, BFREQ and BSIZE columns of one fitted source, in the layout shared.
+###     raw_source_table() - the ORF, Mean, CV2, DISP and BSIZE columns of one fitted source, in the layout shared.
 ###     add_cv2_adj() - adds CV2_ADJ, the loess residual of log CV2 on log mean (mean_adjusted_noise()), to one.
 ###     adj_corr_row() - agreement of source src's mean-adjusted noise (CV2_ADJ) with MIX.SC's (nb_sc) over the.
 ###############################################################
@@ -53,8 +53,8 @@ cor_row <- function(x, y) {
 ## scale = "count" (counts or molecules): Fano <= 1 (sub-Poissonian) is read as
 ## measurement noise and gives NA burst terms.
 ## scale = "relative" (arbitrary-unit fluorescence): mean * CV^2 carries the
-## instrument's gain c, so Fano > 1 gating, Fano - 1 and mean / (Fano - 1) are not
-## unit-free (the last is not even rank-invariant to c). BFREQ is NA, and BSIZE holds the
+## instrument's gain c, so Fano > 1 gating, Fano - 1 and (Fano - 1) / mean are not
+## unit-free (the last is not even rank-invariant to c). DISP is NA, and BSIZE holds the
 ## implied Fano factor itself, which ranks the genes exactly as Fano - 1 does, so only
 ## rank statistics (Spearman) on BSIZE are meaningful. CV^2 and the mean-adjusted noise
 ## are the unit-free comparisons for these sources.
@@ -65,11 +65,11 @@ add_burst_terms <- function(d, scale = c("count", "relative")) {
   d$Fano_implied <- fano
   if (scale == "relative") {
     d$BSIZE <- fano
-    d$BFREQ <- NA_real_
+    d$DISP <- NA_real_
   } else {
     ok <- fano > 1
     d$BSIZE <- ifelse(ok, fano - 1, NA_real_)
-    d$BFREQ <- ifelse(ok, d$Mean / (fano - 1), NA_real_)
+    d$DISP <- ifelse(ok, (fano - 1) / d$Mean, NA_real_)
   }
   d
 }
@@ -187,7 +187,7 @@ map_to_orf <- function(ids, label = "") {
 }
 
 ## fit_scrna_source: takes the raw genes-by-cells count matrix of one published single-cell source to a
-## data.frame keyed by ORF, with the Mean/CV2/Fano/BFREQ/BSIZE content NB.SC carries, so every source
+## data.frame keyed by ORF, with the Mean/CV2/Fano/DISP/BSIZE content NB.SC carries, so every source
 ## merges against NB.SC the same way.
 ##   1. Row names raw_ids resolve to systematic ORFs (map_to_orf); rows that never map are dropped and rows
 ##      sharing an ORF are summed (TSS- or isoform-level rows collapse to one gene-level row).
@@ -196,7 +196,7 @@ map_to_orf <- function(ids, label = "") {
 ##      widely in depth and cell number.
 ##   3. Exposure is each cell's library size divided by the source's mean library size, so MU is in
 ##      counts per typical cell (the unit MIX.SC uses) and CV2 = 1/MU + DISP is at this dataset's own
-##      depth. BFREQ = 1/DISP (theta) and BSIZE = MU*DISP, the definitions documented for NB.SC.
+##      depth. DISP is phi and BSIZE = MU*DISP, the definitions documented for NB.SC.
 ## cl is optional and passed to fit_counts_offset(): NULL fits on one core; a PSOCK cluster from
 ## parallel::makeCluster() splits genes across workers (the driver reuses one cluster for all sources).
 fit_scrna_source <- function(mat, raw_ids, label, min_cell_count, min_cells_expr, cl = NULL) {
@@ -217,7 +217,7 @@ fit_scrna_source <- function(mat, raw_ids, label, min_cell_count, min_cells_expr
     Mean  = fit$MU,
     CV2   = fit$CV^2,
     Fano  = fit$FANO,
-    BFREQ = fit$BFREQ,
+    DISP  = fit$DISP,
     BSIZE = fit$BSIZE,
     stringsAsFactors = FALSE
   )
@@ -251,13 +251,13 @@ mean_adjusted_noise <- function(mean, cv2, span = 0.3) {
 ## or the comparison.
 noise_corr_rows <- function(key, tables, kind = c("vs_mix", "pairwise")) {
   kind <- match.arg(kind)
-  stats <- c("mean", "CV2", "burst_frequency", "burst_size")
+  stats <- c("mean", "CV2", "dispersion", "burst_size")
   if (kind == "vs_mix") {
     d <- tables[[key]]
-    x <- c("MU", "CV2.x", "BFREQ.x", "BSIZE.x"); y <- c("Mean", "CV2.y", "BFREQ.y", "BSIZE.y")
+    x <- c("MU", "CV2.x", "DISP.x", "BSIZE.x"); y <- c("Mean", "CV2.y", "DISP.y", "BSIZE.y")
   } else {
     d <- merge(tables[[key[1]]], tables[[key[2]]], by = "ORF")
-    x <- paste0(c("Mean", "CV2", "BFREQ", "BSIZE"), ".x"); y <- paste0(c("Mean", "CV2", "BFREQ", "BSIZE"), ".y")
+    x <- paste0(c("Mean", "CV2", "DISP", "BSIZE"), ".x"); y <- paste0(c("Mean", "CV2", "DISP", "BSIZE"), ".y")
   }
   out <- do.call(rbind, unname(Map(cor_row, lapply(d[x], log), lapply(d[y], log))))
   if (kind == "vs_mix") out$source <- key else out$comparison <- paste(key[1], "vs", key[2])
@@ -265,10 +265,10 @@ noise_corr_rows <- function(key, tables, kind = c("vs_mix", "pairwise")) {
   out
 }
 
-## raw_source_table: the ORF, Mean, CV2, BFREQ and BSIZE columns of one fitted source, in the layout shared
+## raw_source_table: the ORF, Mean, CV2, DISP and BSIZE columns of one fitted source, in the layout shared
 ## by all published sources.
 raw_source_table <- function(d) {
-  data.frame(ORF = d$ORF, Mean = d$Mean, CV2 = d$CV2, BFREQ = d$BFREQ, BSIZE = d$BSIZE,
+  data.frame(ORF = d$ORF, Mean = d$Mean, CV2 = d$CV2, DISP = d$DISP, BSIZE = d$BSIZE,
              stringsAsFactors = FALSE)
 }
 

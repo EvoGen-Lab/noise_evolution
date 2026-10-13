@@ -104,12 +104,11 @@ STEWART <- STEWART[!is.na(STEWART$ORF) & !is.na(STEWART$Mean) & !is.na(STEWART$C
 # NB-implied CV^2 and Fano factor for MIX.SC
 NB.SC$CV2   <- 1 / NB.SC$MU + NB.SC$DISP
 NB.SC$Fano  <- 1 + NB.SC$MU * NB.SC$DISP
-NB.SC$BFREQ <- 1 / NB.SC$DISP       # burst frequency theta = 1 / phi
 NB.SC$BSIZE <- NB.SC$MU * NB.SC$DISP  # burst size, equivalently Fano - 1
 
 # Implied burst frequency and burst size for each external source, via
 # add_burst_terms(). The three protein sources report fluorescence in instrument units, so they use
-# scale = "relative": BFREQ is NA and BSIZE (the implied Fano factor) carries rank information only,
+# scale = "relative": DISP is NA and BSIZE (the implied Fano factor) carries rank information only,
 # which leaves CV^2 and the mean-adjusted noise (9.5) as their unit-free comparisons.
 NEWMAN  <- add_burst_terms(NEWMAN,  scale = "relative")
 KEREN   <- add_burst_terms(KEREN,   scale = "relative")
@@ -210,9 +209,9 @@ NEW.CORR <- NEW.CORR[, c("source", "statistic", "n", "rho", "p")]
 print(NEW.CORR, row.names = FALSE)
 
 # Pairwise agreement among all seven published sources
-EXT.RAW <- list(Newman = NEWMAN[, c("ORF", "Mean", "CV2", "BFREQ", "BSIZE")],
-                Keren  = KEREN[,  c("ORF", "Mean", "CV2", "BFREQ", "BSIZE")],
-                StewartOrnstein = STEWART[, c("ORF", "Mean", "CV2", "BFREQ", "BSIZE")])
+EXT.RAW <- list(Newman = NEWMAN[, c("ORF", "Mean", "CV2", "DISP", "BSIZE")],
+                Keren  = KEREN[,  c("ORF", "Mean", "CV2", "DISP", "BSIZE")],
+                StewartOrnstein = STEWART[, c("ORF", "Mean", "CV2", "DISP", "BSIZE")])
 NEW.RAW <- lapply(NEW.SOURCES, raw_source_table)
 ALL.RAW <- c(EXT.RAW, NEW.RAW)
 

@@ -7,11 +7,10 @@
 ### Inputs  : gene_perm_inputs.rda  (CONTRAST.MATS, CONTRAST.EXPOS, CONTRAST.FITS GENES, ...)
 ### Output  : gene_perm_output.rda
 ###           PERM.RESULTS, one row per gene: mean_<mode>_obs / _p,
-###           bfreq_<mode>_obs / _p (the NB dispersion parameter,
-###           reported under its biological name), bsize_<mode>_obs / _p
-###           (mean minus bfreq, its own null), kbal_<mode>_obs / _p
-###           (bfreq minus bsize, its own null), and cv2_<mode>_obs / _p
-###           (1/mean + 1/bfreq, its own null).
+###           disp_<mode>_obs / _p (the NB dispersion phi), bsize_<mode>_obs / _p
+###           (mean plus disp, its own null), kbal_<mode>_obs / _p
+###           (minus bsize minus disp, its own null), and cv2_<mode>_obs / _p
+###           (1/mean + phi, its own null).
 ###           For dpar_sc and dpar_se, the noise quantities also get
 ###           _p_ploidy and _p_ind columns, testing the contrast against
 ###           the ploidy-expected value using this gene's own shift and
@@ -54,9 +53,9 @@ results <- vector("list", length(chunks))
 t0 <- Sys.time(); done <- 0
 for (k in seq_along(chunks)) {
   ## One gene's permutation null: refits the relabeled groups for every mode and permutation, compares
-  ## the observed contrasts (mean, bfreq, CV2, bsize, kbal) with the null by a two-sided permutation p, and
+  ## the observed contrasts (mean, disp, CV2, bsize, kbal) with the null by a two-sided permutation p, and
   ## adds ploidy-adjusted p-values for the dpar contrasts. bsize and kbal nulls recombine the mean and
-  ## bfreq null draws of the same permutation; for cis and trans those draws come from relabelings of the
+  ## disp null draws of the same permutation; for cis and trans those draws come from relabelings of the
   ## same cells (perm_label_draw()).
   results[[k]] <- mclapply(chunks[[k]], permute_contrasts_one, mc.cores = NUM.CORES, mc.preschedule = FALSE, expos = CONTRAST.EXPOS, fits = CONTRAST.FITS, mats = CONTRAST.MATS, perms = PERMS, ploidy_shift = PLOIDY.SHIFT, seed = SEED.PERM)
   bad <- vapply(results[[k]], function(x) inherits(x, "try-error") || is.null(x), logical(1))

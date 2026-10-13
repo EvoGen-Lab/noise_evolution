@@ -33,19 +33,19 @@
 ###     qc_gene_keep() - Cross-dataset gene QC with one relative abundance floor anchored to the shallowest dataset and an absolute detection floor, and sets the pilot gene pool.
 ###   3. PAIRED PER-GENE BOOTSTRAP OF CONTRASTS
 ###     make_draws() - Builds the resampling index draws used by the paired per-gene bootstrap: parents resampled whole, hybrid cells resampled within the four strata of the mean-split by noise-split overlap and every hybrid dataset assembled from the same resampled cell IDs.
-###     add_burst_contrasts() - Derives burst-frequency, burst-size, and kinetic-balance contrasts from the mean and size contrasts already in a data frame.
+###     add_burst_contrasts() - Derives burst-size and kinetic-balance contrasts from the mean and size contrasts already in a data frame.
 ###     .contrast_value() - Log2 contrast for one mode (total, cis, trans, dom, dpar) from a named list of per-group fitted values.
 ###     .cv2_of() - CV2 (1/mu + 1/disp) of one fitted group; NA unless mu and disp are finite and positive.
 ###   4. DISATTENUATED MEAN-DISP COUPLING (population summary)
-###     eiv_components() - Errors-in-variables mean-bfreq coupling for one mode: attenuation-corrected variances, covariance and correlation, plus the raw correlation.
+###     eiv_components() - Errors-in-variables mean-disp coupling for one mode: attenuation-corrected variances, covariance and correlation, plus the raw correlation.
 ###   5. PLOTTING HELPERS AND GENE-LEVEL PLOTS
 ###     umap_plot() - UMAP with the shared cluster palette and on-plot labels.
 ###     fig_pdf() - Opens a PDF under FIGURE.DIR with the pipeline's figure settings.
 ###     class_count_barplot() - Gene (or pair) counts per class, bars colored by class.
-###     class_overlap_triptych() - Figure of three class-overlap heatmaps: mean class against burst frequency, burst size and frequency-size balance class, on one shared color range.
+###     class_overlap_triptych() - Figure of three class-overlap heatmaps: mean class against dispersion, burst size and frequency-size balance class, on one shared color range.
 ###     class_heatmap_grid() - Figure of class-overlap heatmaps for a table of class-vector pairs (regulatory vectors cleaned with clean_reg()).
 ###     .se_scatter() - Shared SE-bar scatter body of the three gene-level scatters below.
-###     plot_contrast_scatter() - Gene-level contrast scatter with SE bars: cis vs trans for one quantity, mean vs burst frequency or rotated burst kinetics for one mode.
+###     plot_contrast_scatter() - Gene-level contrast scatter with SE bars: cis vs trans for one quantity, mean vs dispersion or rotated burst kinetics for one mode.
 ###     sig_hist_panel() - Histogram of one contrast (quantity, mode) with the genes significant at q < sig shaded by direction.
 ###   6. PERMUTATION NULL  (per-gene significance for the contrasts)
 ###     perm_pval() - Two-sided permutation p-value with add-one continuity correction, shared with the power grid.
@@ -71,13 +71,13 @@
 ###     reg_class_vec() - Vector form of classify_reg(), aligned to BURST.CONTRASTS's rows, for a given quantity.
 ###     dom_class_vec() - Vector form of classify_dom(), aligned to BURST.CONTRASTS's rows, for a given quantity.
 ###     class_stats() - Applies a per-class summary (class_mean_var, class_anova) to every regulatory and dominance class vector, named REG.MEAN ... DOM.KBAL.
-###     ploidy_shift() - Per-gene expected log2 rise in bfreq when HYB.COMB sums two alleles (from allele weights and the intrinsic fraction).
+###     ploidy_shift() - Per-gene expected log2 rise in disp when HYB.COMB sums two alleles (from allele weights and the intrinsic fraction).
 ###     .overlap_lor() - Log2((observed + 0.5) / (expected + 0.5)) of a class contingency table; one definition for the heatmap colours and shared_overlap_rng().
 ###     class_overlap_heatmap() - Log2(observed/expected) association heatmap between two class vectors with BH-adjusted significance; levels auto-derived from the data or fixed so panels share axes (Figures 2 and 6, diagnostics).
 ###     class_identity_overlap() - Cohen's kappa plus per-class Jaccard overlap between two class vectors on the same genes.
 ###     summarize_class_overlap() - One printable summary row (n, concordance, kappa, permutation p) per class-overlap comparison.
 ###     plot_cis_trans_class() - Cis vs trans scatter for one quantity, coloured by class, with SE bars drawn behind points.
-###     plot_mean_bfreq_class() - Mean divergence vs a burst-parameter divergence (bfreq/bsize/kbal/cv2) scatter with per-class regulatory and dominance slopes.
+###     plot_mean_disp_class() - Mean divergence vs a burst-parameter divergence (disp/bsize/kbal/cv2) scatter with per-class regulatory and dominance slopes.
 ###   8b. GO / KEGG enrichment for the regulatory classification
 ###     build_reg_go_sets() - Builds one GO gene set per (class, direction) pair for a given classification quantity.
 ###     build_component_go_sets() - Builds pooled any-cis or any-trans GO gene sets, direction-matched on that component's own sign.
@@ -107,11 +107,11 @@
 ###     nupop_cluster_inputs() - Packages one species' chromosomes and promoter coordinates for the NuPoP cluster job.
 ###     score_promoters_nupop() - Scores each promoter from the cluster occupancy tracks after confirming they match the current promoters.
 ###     .concordance_eligible() - Genes eligible for the concordance tests: cis-class, both values defined and nonzero (with the .CIS_CLASSES and .PROMOTER_PREDICTED_SIGN constants).
-###     promoter_direction_test() - Tests whether a promoter feature's between-species direction matches the predicted direction of cis divergence (burst frequency primary, burst size with the sign flipped).
+###     promoter_direction_test() - Tests whether a promoter feature's between-species direction matches the predicted direction of cis divergence (dispersion primary, burst size with its own predicted sign).
 ###     concordance_by_magnitude() - Splits an any-cis gene set into magnitude bins and computes concordance within each bin.
 ###     plot_concordance_by_magnitude() - Bar plot of concordance_by_magnitude()'s output, one bar per magnitude bin.
 ###     promoter_noise_candidates() - Lists genes with a cis noise component and a top-decile promoter-feature shift, with each gene's concordance flag, for manual inspection.
-###     architecture_noise_check() - Tests whether a promoter feature associates with a species' own BFREQ or BSIZE, controlling for a second fit column (MU by default).
+###     architecture_noise_check() - Tests whether a promoter feature associates with a species' own DISP or BSIZE, controlling for a second fit column (MU by default).
 ###   11. SEURAT CLUSTERING DIAGNOSTICS (data-driven feature count, resolution, and metric choices)
 ###     hvg_elbow() - Elbow point on the ranked standardized-variance curve from FindVariableFeatures(), for a data-driven nfeatures.
 ###     plot_hvg_elbow() - Diagnostic plot for hvg_elbow()'s output: full curve, chosen cutoff, and floor marked.
@@ -129,7 +129,7 @@
 ###   12. CLUSTER-BASED NOISE PARTITIONING (within/between-cluster variance vs. the intrinsic/extrinsic decomposition)
 ###     within_between_decomp() - Within- and between-cluster variance per gene, in shot-noise-corrected, mean-normalized rate space, from a Seurat cluster partition.
 ###     plot_within_between_hist() - Genome-wide distribution of within_between_decomp()'s ratio, one dataset, with the within = between line marked.
-###     plot_within_between_vs_quantity() - Scatter of within_between_decomp()'s ratio against one burst kinetics quantity (mean, burst frequency, or burst size), with Spearman rho reported.
+###     plot_within_between_vs_quantity() - Scatter of within_between_decomp()'s ratio against one burst kinetics quantity (mean, dispersion, or burst size), with Spearman rho reported.
 ###     report_within_between_by_class() - Plots the within/between ratio by class (with class_anova()'s omnibus test and Tukey comparisons) for two datasets side by side against one classification axis; writes the combined figure and prints both datasets' test statistics.
 ###   13b. FUNCTIONS APPLIED ACROSS ITEMS BY analysis.R
 ###     qc_cell_cutoff() - library-size cell filter for one dataset s (a list with lib, the per-cell library.
@@ -373,7 +373,7 @@ LOG.THETA.RANGE <- c(-4, 15)
 
 ## Fits every gene (row) of a genes x cells matrix against one shared exposure vector
 ## with neg_binom_fit_offset() and returns a per-gene table: DISP (dispersion phi = 1/theta), MU, their log
-## SEs, MEAN_CT, N_EXPR, and derived VAR, FANO, CV, BFREQ (theta = 1 / DISP) and BSIZE (MU * DISP).
+## SEs, MEAN_CT, N_EXPR, and derived VAR, FANO, CV and BSIZE (MU * DISP).
 ## cl is optional: NULL fits on one core; a PSOCK cluster from parallel::makeCluster() splits
 ## the genes into one chunk per worker, each chunk carrying all cells for its genes. A PSOCK
 ## worker starts with an empty workspace, so the functions the fit needs are sent to it here:
@@ -384,9 +384,9 @@ fit_counts_offset <- function(mat, exposure, cl = NULL) {
   stopifnot(ncol(mat) == length(exposure))
   if (is.null(cl))
     return(do.call(rbind, lapply(seq_len(nrow(mat)), function(i) {
-      ## One NB fit per gene. DISP is the dispersion phi (the noise); BFREQ is theta = 1 / phi, the NB size,
-      ## which behaves as burst frequency. BSIZE = MU * DISP (mean count per burst) is a separate derived
-      ## quantity. Since DISP = 1 / BFREQ, a contrast of log2 DISP is the negative of the log2 BFREQ contrast.
+      ## One NB fit per gene. DISP is the dispersion phi (the noise); theta = 1 / phi, the NB size, behaves as
+      ## burst frequency. BSIZE = MU * DISP (mean count per burst) is a separate derived quantity. Every noise
+      ## contrast in the pipeline is a contrast of DISP, so a log2 DISP contrast is the negative of the log2 theta contrast.
       y <- mat[i, ]
       f <- neg_binom_fit_offset(y, exposure)
       disp <- f[["disp"]]; mu <- f[["mu"]]
@@ -394,7 +394,7 @@ fit_counts_offset <- function(mat, exposure, cl = NULL) {
         DISP = disp, MU = mu, DISP_LOGSE = f[["disp_logse"]], MU_LOGSE = f[["mu_logse"]],
         MEAN_CT = sum(y) / length(y), N_EXPR = sum(y > 0),
         VAR = mu + mu^2 * disp, FANO = 1 + mu * disp, CV = sqrt(disp + 1 / mu),
-        BFREQ = f[["theta"]], BSIZE = mu * disp,
+        BSIZE = mu * disp,
         row.names = rownames(mat)[i])
     })))
 
@@ -521,7 +521,7 @@ make_draws <- function(ncells, B, seed = 1, hyc, hyc_n) {
   }))
 }
 
-## Contrast definitions. .MODES lists, for each mode, the groups of its noise-axis contrasts (BFREQ and CV2) and
+## Contrast definitions. .MODES lists, for each mode, the groups of its noise-axis contrasts (DISP and CV2) and
 ## serves as their finite-input gate; .MODES.MEAN lists the groups of the mean-axis contrast, which differs from
 ## .MODES for dom and dpar. Each contrast is a formula on a named list of fitted values.
 ## Divergence: total, cis, trans. Dominance, midparent form: dom (arithmetic midparent for mean, geometric for
@@ -542,21 +542,21 @@ make_draws <- function(ncells, B, seed = 1, hyc, hyc_n) {
 ##               per-genome scale of the parents. dpar compares it with one parent and dom with the arithmetic
 ##               midparent (mu_Pc + mu_Pe) / 2, so an additive gene sits at zero whatever the mean transcriptome
 ##               share. The summed fit HYB.COMB enters the noise axis only.
-## Noise axis (reported as BFREQ = theta = 1/DISP, the NB size, which has no summing rule)
+## Noise axis (DISP = phi, the NB dispersion, which has no summing rule)
 ##   total, cis, trans  Ratios again, so a ploidy effect shared by both
 ##               species (cell size, cell-cycle timing) cancels.
 ##   dom         The midparent is geometric, the mean of the two log2 values.
 ##               Its observed noise contrast and null keep the raw HYB.COMB
 ##               scale, so the noise axis of dom stays descriptive.
 ##   dpar        HYB.COMB sums two alleles per cell, which averages their
-##               private (intrinsic) noise, lowers DISP (phi) and raises BFREQ (theta) in the hybrid.
+##               private (intrinsic) noise and lowers DISP in the hybrid.
 ##               For alleles with count shares w1 and w2 (w1 is the Hc share of the summed count) and intrinsic
-##               fraction phi_i, the summed pair keeps the shared noise and
-##               scales the private noise by w1^2 + w2^2. The expected rise
-##               in log2 BFREQ is s = -log2(1 - (1 - w1^2 - w2^2) * phi_i),
+##               fraction omega, the summed pair keeps the shared noise and
+##               scales the private noise by w1^2 + w2^2. The expected change
+##               in log2 DISP is -s, with s = -log2(1 - (1 - w1^2 - w2^2) * omega),
 ##               between 0 and 1 (ploidy_shift). ploidy_adjust_dpar removes
-##               s from the dpar estimates as follows. bfreq falls by s,
-##               bsize (mean - bfreq) rises by s, kbal (bfreq - bsize)
+##               s from the dpar estimates as follows. disp rises by s,
+##               bsize (mean + disp) rises by s, kbal (-mean - 2 disp)
 ##               falls by 2s, and cv2 recomputes with the latent term scaled
 ##               by 2^s. The mean axis needs no adjustment. The bootstrap SEs
 ##               stay as fitted, so the shift enters as a fixed per-gene
@@ -568,10 +568,10 @@ make_draws <- function(ncells, B, seed = 1, hyc, hyc_n) {
 ## cis_n and trans_n are internal only, not reported directly. They
 ## are cis and trans computed from the HYC.N/HYT.N split (chosen to
 ## balance noise-axis power) rather than the HYC/HYT split (chosen to
-## balance mean-axis power). A single output column pair, bfreq_cis
-## and bfreq_trans, draws its value from these instead of from cis and
+## balance mean-axis power). A single output column pair, disp_cis
+## and disp_trans, draws its value from these instead of from cis and
 ## trans, since the noise axis needs its own split, not the mean
-## axis's split reused. See .BFREQ_SOURCE and boot_contrasts_one() in gene_boot.R.
+## axis's split reused. See .DISP_SOURCE and boot_contrasts_one() in gene_boot.R.
 .MODES <- list(
   total   = c("MIX.SC","MIX.SE"),
   cis     = c("HYC.SC","HYC.SE"),
@@ -593,12 +593,12 @@ make_draws <- function(ncells, B, seed = 1, hyc, hyc_n) {
 ## from, never reported under their own name
 .OUT_MODES <- c("total","cis","trans","dom","dpar_sc","dpar_se")
 
-## Which mode supplies the burst-frequency (noise axis) value for each
+## Which mode supplies the dispersion (noise axis) value for each
 ## reported mode. Identity for everything split-independent; cis and
 ## trans redirect to the noise-split version. mean_* always uses the
 ## mode's own name directly, never remapped, since MU (mean axis) is
 ## what the HYC/HYT split (f_mean) was chosen to balance.
-.BFREQ_SOURCE <- c(total = "total", cis = "cis_n", trans = "trans_n", dom = "dom", dpar_sc = "dpar_sc", dpar_se = "dpar_se")
+.DISP_SOURCE <- c(total = "total", cis = "cis_n", trans = "trans_n", dom = "dom", dpar_sc = "dpar_sc", dpar_se = "dpar_se")
 
 ## Maps each dataset to the draws-list element (see make_draws()) that resamples it. The four hybrid
 ## keys (HYC, HYT, HYC.N, HYT.N) and HYB are built from the same resampled hybrid cell IDs, so every
@@ -609,7 +609,7 @@ make_draws <- function(ncells, B, seed = 1, hyc, hyc_n) {
                HYB.COMB = "HYB", HYB.SC = "HYB", HYB.SE = "HYB")
 
 ## Log2 contrast for one mode from a named list gv of per-group fitted values. q selects the
-## quantity: "MU" (per-genome mean rate), "BFREQ" (theta = 1/phi, the NB size; geometric midparent for dom) or "CV2".
+## quantity: "MU" (per-genome mean rate), "DISP" (phi, the NB dispersion; geometric midparent for dom) or "CV2".
 ## total and cis are ratios within one ploidy state; trans is the parental ratio minus the hybrid allele
 ## ratio. On the mean axis dom and dpar use the unweighted average of the two allele rates as the
 ## hybrid mean (against the arithmetic midparent for dom); on the noise axes they use the summed fit HYB.COMB.
@@ -638,32 +638,31 @@ make_draws <- function(ncells, B, seed = 1, hyc, hyc_n) {
   if (is.finite(mu) && mu > 0 && is.finite(disp) && disp > 0) 1 / mu + disp else NA_real_
 }
 
-## Adds burst size (bsize = mean - bfreq) and kinetic balance (kbal = bfreq - bsize = 2*bfreq - mean),
-## both on the log2 scale, with propagated SEs, to the finished bootstrap table. bfreq is the NB
-## theta contrast (the negative of the log2 phi contrast) under its biological name. Because bsize is defined by that subtraction,
-## bfreq and bsize are structurally anti-correlated whenever bfreq varies more than the mean
-## (see the structural bfreq-bsize check in analysis.R Section 3.6). kbal together with the mean carries the same information as
-## bfreq and bsize without that dependence, so kbal against the mean asks whether a gene's overall
-## change leans toward frequency or size. Fitting code keeps the field name "disp" for phi and "theta" for 1/phi.
+## Adds burst size (bsize = mean + disp, since b = mu * phi) and kinetic balance (kbal = -mean - 2 * disp, since
+## kappa = theta / b = 1 / (mu * phi^2)), both on the log2 scale, with propagated SEs, to the finished bootstrap
+## table. disp is the log2 contrast of the dispersion phi. Because bsize is defined by that sum, disp and bsize
+## are structurally correlated whenever disp varies more than the mean (see the structural disp-bsize check in
+## analysis.R Section 3.6). kbal together with the mean carries the same information as disp and bsize without
+## that dependence, so kbal against the mean asks whether a gene's overall change leans toward frequency or size.
 add_burst_contrasts <- function(df) {
   ## Loops over the reportable modes; BOOT.CONTRASTS has columns only for .OUT_MODES (cis_n and
-  ## trans_n are folded into cis and trans through .BFREQ_SOURCE).
+  ## trans_n are folded into cis and trans through .DISP_SOURCE).
   for (ct in .OUT_MODES) {
     m  <- df[[paste0("mean_",ct,"_est")]];  sm <- df[[paste0("mean_",ct,"_se")]]
-    s  <- df[[paste0("bfreq_",ct,"_est")]]; ss <- df[[paste0("bfreq_",ct,"_se")]]
+    d  <- df[[paste0("disp_",ct,"_est")]];  sd_ <- df[[paste0("disp_",ct,"_se")]]
     r  <- df[[paste0("cor_",ct)]]
     ## cor_<ct> is measured from the bootstrap draws for every mode; a gene with too few finite draws
     ## (NA) enters the SE propagation as a zero covariance.
     r[!is.finite(r)] <- 0
-    bs    <- m - s
-    bs_se <- sqrt(pmax(0, sm^2 + ss^2 - 2 * r * sm * ss))
+    bs    <- m + d
+    bs_se <- sqrt(pmax(0, sm^2 + sd_^2 + 2 * r * sm * sd_))
     df[[paste0("bsize_",ct,"_est")]] <- bs
     df[[paste0("bsize_",ct,"_se")]]  <- bs_se
-    ## covFB = Cov(bfreq_est, bsize_est) = r*sm*ss - ss^2, the covariance of the two estimation
-    ## errors. It gives kbal = bfreq - bsize its SE for every mode.
-    covFB <- r * sm * ss - ss^2
-    df[[paste0("kbal_",ct,"_est")]] <- s - bs
-    df[[paste0("kbal_",ct,"_se")]]  <- sqrt(pmax(0, ss^2 + bs_se^2 - 2 * covFB))
+    ## covDB = Cov(disp_est, bsize_est) = r*sm*sd + sd^2, the covariance of the two estimation errors.
+    ## kbal = -(bsize + disp), so it gets its SE from the variances of bsize and disp and covDB.
+    covDB <- r * sm * sd_ + sd_^2
+    df[[paste0("kbal_",ct,"_est")]] <- -(bs + d)
+    df[[paste0("kbal_",ct,"_se")]]  <- sqrt(pmax(0, bs_se^2 + sd_^2 + 2 * covDB))
   }
   df
 }
@@ -676,13 +675,13 @@ add_burst_contrasts <- function(df) {
 ## ratio and carries no independent information.
 ## ============================================================
 
-## Errors-in-variables summary of mean vs bfreq divergence across genes for one mode. Subtracting the
+## Errors-in-variables summary of mean vs disp divergence across genes for one mode. Subtracting the
 ## mean squared bootstrap SE from the raw variances and covariance removes the measurement-noise
 ## attenuation, so rho_mean_disp estimates the correlation of the underlying contrasts.
 eiv_components <- function(BURST.CONTRASTS, mode = .OUT_MODES) {
   mode <- match.arg(mode)
   X  <- BURST.CONTRASTS[[paste0("mean_",mode,"_est")]]; sx <- BURST.CONTRASTS[[paste0("mean_",mode,"_se")]]
-  Y  <- BURST.CONTRASTS[[paste0("bfreq_",mode,"_est")]]; sy <- BURST.CONTRASTS[[paste0("bfreq_",mode,"_se")]]
+  Y  <- BURST.CONTRASTS[[paste0("disp_",mode,"_est")]]; sy <- BURST.CONTRASTS[[paste0("disp_",mode,"_se")]]
   r  <- BURST.CONTRASTS[[paste0("cor_",mode)]]
   ## cor_<mode> is measured from the bootstrap draws; a gene with too few finite draws (NA) enters as a
   ## zero covariance so it stays in the summary.
@@ -716,7 +715,7 @@ umap_plot <- function(obj, title = NULL, group.by = NULL) {
 }
 
 ## Labels of the burst quantities, shared by the figure functions below.
-QUANTITY.LABEL <- c(mean = "mean", bfreq = "burst frequency", bsize = "burst size", kbal = "frequency-size balance", cv2 = "CV2")
+QUANTITY.LABEL <- c(mean = "mean", disp = "dispersion", bsize = "burst size", kbal = "frequency-size balance", cv2 = "CV2")
 
 ## fig_pdf: opens a PDF at path (relative to FIGURE.DIR) with the pipeline's figure settings.
 fig_pdf <- function(path, width, height, useDingbats = FALSE) {
@@ -728,13 +727,13 @@ class_count_barplot <- function(cls, levels, cols, main, ylab = "# of genes") {
   barplot(table(factor(cls, levels = levels)), col = cols, las = 2, ylab = ylab, border = NA, main = main)
 }
 
-## class_overlap_triptych: figure of three class-overlap heatmaps, mean class (rows) against burst frequency,
+## class_overlap_triptych: figure of three class-overlap heatmaps, mean class (rows) against dispersion,
 ## burst size and frequency-size balance class (columns). classes is a list of class vectors named by quantity
 ## (REG.VEC or DOM.VEC), levels the class levels. The three heatmaps share one color range
 ## (shared_overlap_rng), so enrichment strength reads the same across panels. Cell text is the fold
 ## enrichment (obs/exp), * marks BH q < OVERLAP.FDR, and color is log2(obs/exp), diverging through white.
 class_overlap_triptych <- function(path, classes, levels, width, height, mar) {
-  others <- c("bfreq", "bsize", "kbal")
+  others <- c("disp", "bsize", "kbal")
   pairs <- vector("list", length(others))
   for (i in seq_along(others)) pairs[[i]] <- list(classes$mean, classes[[others[i]]])
   rng <- shared_overlap_rng(pairs, levels)
@@ -806,23 +805,23 @@ class_heatmap_grid <- function(path, panels, classes, fdr, width, height, mfrow,
 
 ## plot_contrast_scatter: one gene-level contrast scatter with SE bars, drawn by .se_scatter(). type picks
 ## the pairing and what its argument:
-##   "cis_trans"      what is a quantity ("mean", "bfreq", "bsize", "kbal", "cv2"): cis (x) vs trans (y) on one
+##   "cis_trans"      what is a quantity ("mean", "disp", "bsize", "kbal", "cv2"): cis (x) vs trans (y) on one
 ##                    symmetric range, so the dotted +/-45 degree lines (same direction, compensatory) are
 ##                    meaningful. lim overrides that range.
-##   "mean_bfreq"     what is a mode: mean (x) vs burst-frequency (NB dispersion, y) contrast on one symmetric
+##   "mean_disp"      what is a mode: mean (x) vs dispersion (NB phi, y) contrast on one symmetric
 ##                    range. The tilt of the cloud is not the true slope; the attenuation-corrected coupling is
 ##                    in the errors-in-variables table of analysis.R Section 3.
 ##   "burst_kinetics" what is a mode: rotated coordinates that separate net mean change from the
-##                    frequency/size balance: x = net mean change (mean contrast; bfreq + bsize equals it
-##                    exactly), y = kinetic balance (bfreq - bsize; right of zero is frequency-led, below is
+##                    frequency/size balance: x = net mean change (mean contrast; bsize - disp equals it
+##                    exactly), y = kinetic balance (-mean - 2 disp; above zero is frequency-led, below is
 ##                    amplitude-led). Each axis gets its own symmetric range. Both columns carry SEs
 ##                    propagated in add_burst_contrasts().
-plot_contrast_scatter <- function(BURST.CONTRASTS, type = c("cis_trans", "mean_bfreq", "burst_kinetics"), what, main = NULL, lim = NULL,
+plot_contrast_scatter <- function(BURST.CONTRASTS, type = c("cis_trans", "mean_disp", "burst_kinetics"), what, main = NULL, lim = NULL,
                                   bar_col = adjustcolor(COLOR.GREY[["dark"]], 0.33), pt_col = "black") {
   type <- match.arg(type)
   diagonals <- type != "burst_kinetics"
   if (type == "cis_trans") {
-    quantity <- match.arg(what, c("mean", "bfreq", "bsize", "kbal", "cv2"))
+    quantity <- match.arg(what, c("mean", "disp", "bsize", "kbal", "cv2"))
     lab <- QUANTITY.LABEL[[quantity]]
     if (is.null(main)) main <- lab
     cols <- paste0(quantity, c("_cis_est", "_cis_se", "_trans_est", "_trans_se"))
@@ -830,9 +829,9 @@ plot_contrast_scatter <- function(BURST.CONTRASTS, type = c("cis_trans", "mean_b
   } else {
     mode <- match.arg(what, .OUT_MODES)
     lim <- NULL
-    if (type == "mean_bfreq") {
+    if (type == "mean_disp") {
       if (is.null(main)) main <- paste0("mean vs noise: ", mode)
-      cols <- paste0(c("mean_", "mean_", "bfreq_", "bfreq_"), mode, c("_est", "_se", "_est", "_se"))
+      cols <- paste0(c("mean_", "mean_", "disp_", "disp_"), mode, c("_est", "_se", "_est", "_se"))
       xlab <- "mean (log2)"; ylab <- "dispersion (log2)"
     } else {
       if (is.null(main)) main <- paste0("burst kinetics: ", mode)
@@ -848,11 +847,11 @@ plot_contrast_scatter <- function(BURST.CONTRASTS, type = c("cis_trans", "mean_b
 ## sig_hist_panel: histogram of one contrast (quantity, mode) with the genes significant at q < sig shaded by
 ## direction (Sc-higher up, Se-higher dn). Breaks span the full range of the estimate, rounded outward to a
 ## multiple of brk, so every gene is counted and bin edges stay on one grid; the x window is only the visible
-## range. Burst frequency spans a narrower range and uses finer bins. ymax is the top of the y axis.
+## range. Dispersion spans a narrower range and uses finer bins. ymax is the top of the y axis.
 sig_hist_panel <- function(contrasts, pr, mode, quantity, ymax, sig = 0.05, up = SPECIES.COLOR[["Sc"]], dn = SPECIES.COLOR[["Se"]]) {
   x <- contrasts[[paste0(quantity, "_", mode, "_est")]]
   p <- pr[[paste0(quantity, "_", mode, "_q")]]
-  fine <- quantity == "bfreq"
+  fine <- quantity == "disp"
   brk  <- if (fine) 0.05 else 0.1
   xlim <- if (fine) c(-2.5, 2.5) else c(-5, 5)
   ylim <- c(0, ymax)
@@ -1147,7 +1146,7 @@ seed_compare_core <- function(se1, se2, main, count_label) {
 ## seen as a low seed-to-seed correlation or a wide SE-ratio spread. bc1, bc2: two
 ## add_burst_contrasts()-style data frames at the same N.BOOT and gene set that differ only in
 ## SEED.BOOT. Genes are matched by name, so row order need not agree.
-gene_seed_compare <- function(bc1, bc2, quantity = c("mean", "bfreq", "bsize", "kbal", "cv2"), mode = c("total", "cis", "trans", "dom", "dpar_sc", "dpar_se")) {
+gene_seed_compare <- function(bc1, bc2, quantity = c("mean", "disp", "bsize", "kbal", "cv2"), mode = c("total", "cis", "trans", "dom", "dpar_sc", "dpar_se")) {
   quantity <- match.arg(quantity); mode <- match.arg(mode)
   col <- paste0(quantity, "_", mode, "_se")
   m   <- match(bc1$gene, bc2$gene)
@@ -1223,10 +1222,10 @@ classify_reg <- function(p_cis, p_trans, est_cis, est_trans, sig = 0.05, colors 
 ## parents are haploid and the hybrid is diploid. On the mean axis the hybrid mean rate is the
 ## unweighted average of the two allele fits on the parental per-genome scale, so an additive
 ## gene sits at the midparent and the calls need no ploidy correction. On
-## the noise axis HYB.COMB averages the intrinsic noise of two alleles, which lowers DISP and raises BFREQ
+## the noise axis HYB.COMB averages the intrinsic noise of two alleles, which lowers DISP and raises DISP
 ## in the hybrid relative to both parents; noise-axis calls therefore use the
 ## ploidy-adjusted estimates (the BURST.CONTRASTS block in analysis.R) and the _q_ploidy q-values
-## (bfreq, bsize, kbal, cv2; dom_class_vec selects them), while the mean axis uses _q.
+## (disp, bsize, kbal, cv2; dom_class_vec selects them), while the mean axis uses _q.
 
 classify_dom <- function(p_dpar_sc, p_dpar_se, est_dpar_sc, est_dpar_se, sig = 0.05, colors = COLOR.LIST.2) {
   n   <- length(p_dpar_sc)
@@ -1260,7 +1259,7 @@ clean_reg <- function(v) {
 ## ---- per-gene class vectors aligned to BURST.CONTRASTS rows -------------------------
 ## reg_class_vec: classify_reg() for one quantity; q-values come from PR (matched by gene),
 ## estimates from BURST.CONTRASTS, and the returned class vector follows BURST.CONTRASTS row order.
-reg_class_vec <- function(BURST.CONTRASTS, PR, quantity = c("mean", "bfreq", "bsize", "kbal", "cv2"), sig = 0.05) {
+reg_class_vec <- function(BURST.CONTRASTS, PR, quantity = c("mean", "disp", "bsize", "kbal", "cv2"), sig = 0.05) {
   quantity <- match.arg(quantity)
   i <- match(BURST.CONTRASTS$gene, PR$gene)
   classify_reg(PR[[paste0(quantity, "_cis_q")]][i], PR[[paste0(quantity, "_trans_q")]][i], BURST.CONTRASTS[[paste0(quantity, "_cis_est")]], BURST.CONTRASTS[[paste0(quantity, "_trans_est")]], sig = sig)$class
@@ -1270,7 +1269,7 @@ reg_class_vec <- function(BURST.CONTRASTS, PR, quantity = c("mean", "bfreq", "bs
 ## the noise-axis q-values: "own" reads _q_ploidy (this gene's own ploidy shift) and "ind"
 ## reads _q_ind (a shift of 1). The mean axis always reads _q. A missing column stops with a
 ## message, so a permutation run without PLOIDY.SHIFT cannot pass through unnoticed.
-dom_class_vec <- function(BURST.CONTRASTS, PR, quantity = c("mean", "bfreq", "bsize", "kbal", "cv2"), sig = 0.05, basis = c("own", "ind")) {
+dom_class_vec <- function(BURST.CONTRASTS, PR, quantity = c("mean", "disp", "bsize", "kbal", "cv2"), sig = 0.05, basis = c("own", "ind")) {
   quantity <- match.arg(quantity); basis <- match.arg(basis)
   i   <- match(BURST.CONTRASTS$gene, PR$gene)
   sfx <- if (quantity == "mean") "_q" else if (basis == "own") "_q_ploidy" else "_q_ind"
@@ -1477,7 +1476,7 @@ se_alpha_col <- function(se, base_col = COLOR.GREY[["dark"]], lo = 0.05, hi = 0.
 ## regulatory class. All SE bars are drawn before the points so bars sit behind them; bar
 ## opacity follows se_alpha_col() so imprecise bars recede. Points are solid, matching the
 ## Figure 5 dominance panels.
-plot_cis_trans_class <- function(BURST.CONTRASTS, PR, quantity = c("mean", "bfreq", "bsize", "kbal", "cv2"), sig = 0.05, main = NULL, lim = NULL, bar_col = COLOR.GREY[["dark"]], colors = setNames(COLOR.LIST.1[seq_along(REG.CLASS)], REG.CLASS)) {
+plot_cis_trans_class <- function(BURST.CONTRASTS, PR, quantity = c("mean", "disp", "bsize", "kbal", "cv2"), sig = 0.05, main = NULL, lim = NULL, bar_col = COLOR.GREY[["dark"]], colors = setNames(COLOR.LIST.1[seq_along(REG.CLASS)], REG.CLASS)) {
   quantity <- match.arg(quantity)
   lab <- QUANTITY.LABEL[[quantity]]
   cx <- BURST.CONTRASTS[[paste0(quantity,"_cis_est")]];  sx <- BURST.CONTRASTS[[paste0(quantity,"_cis_se")]]
@@ -1503,13 +1502,13 @@ class_slope_lines <- function(x, y, cls, levels, cols, lty) {
 }
 
 ## ============================================================
-## plot_mean_bfreq_class: mean divergence (x) vs a burst-parameter divergence (y) at one mode,
+## plot_mean_disp_class: mean divergence (x) vs a burst-parameter divergence (y) at one mode,
 ## with per-class regression lines. Points are neutral grey; regulatory slopes are solid and
 ## dominance slopes dashed. Lines span the full panel (abline).
-plot_mean_bfreq_class <- function(BURST.CONTRASTS, PR, mode = "total", reg_class = NULL, dom_class = NULL, y_quantity = c("bfreq", "bsize", "kbal", "cv2"), class_quantity = c("mean", "bfreq", "bsize", "kbal", "cv2"), sig = 0.05, main = NULL, reg_colors = setNames(COLOR.LIST.1[seq_along(REG.CLASS)], REG.CLASS), dom_colors = setNames(COLOR.LIST.2[seq_along(DOM.CLASS)], DOM.CLASS)) {
+plot_mean_disp_class <- function(BURST.CONTRASTS, PR, mode = "total", reg_class = NULL, dom_class = NULL, y_quantity = c("disp", "bsize", "kbal", "cv2"), class_quantity = c("mean", "disp", "bsize", "kbal", "cv2"), sig = 0.05, main = NULL, reg_colors = setNames(COLOR.LIST.1[seq_along(REG.CLASS)], REG.CLASS), dom_colors = setNames(COLOR.LIST.2[seq_along(DOM.CLASS)], DOM.CLASS)) {
   y_quantity     <- match.arg(y_quantity)
   class_quantity <- match.arg(class_quantity)
-  y_lab <- c(bfreq = "burst frequency", bsize = "burst size", kbal = "frequency-size balance", cv2 = "CV2")[y_quantity]
+  y_lab <- c(disp = "dispersion", bsize = "burst size", kbal = "frequency-size balance", cv2 = "CV2")[y_quantity]
   x <- BURST.CONTRASTS[[paste0("mean_",mode,"_est")]]
   y <- BURST.CONTRASTS[[paste0(y_quantity,"_",mode,"_est")]]
   if (is.null(reg_class)) reg_class <- reg_class_vec(BURST.CONTRASTS, PR, class_quantity, sig)
@@ -1529,8 +1528,8 @@ plot_mean_bfreq_class <- function(BURST.CONTRASTS, PR, mode = "total", reg_class
 ## 8b. GO / KEGG enrichment for the regulatory classification
 ## ============================================================
 ## build_reg_go_sets: one gene set per (class, direction) pair for a given
-## classification quantity ("mean" or "bfreq"). Direction comes from the
-## sign of the parental total contrast (mean_total_est or bfreq_total_est)
+## classification quantity ("mean" or "disp"). Direction comes from the
+## sign of the parental total contrast (mean_total_est or disp_total_est)
 ## at the same sig threshold used for the class call, not from which
 ## component (cis or trans) drives the class, so "Sc" and "Se" always mean
 ## the same thing they mean everywhere else in this pipeline: which parent
@@ -1539,7 +1538,7 @@ plot_mean_bfreq_class <- function(BURST.CONTRASTS, PR, mode = "total", reg_class
 ## dropped from both sets (they still count in class totals elsewhere).
 ## Set names strip spaces/punctuation from the class label for safe list
 ## and file names, e.g. "Cis + Trans" -> "CisTrans_Sc".
-build_reg_go_sets <- function(BURST.CONTRASTS, PR, universe, quantity = c("mean", "bfreq", "bsize", "kbal", "cv2"), levels = REG.CLASS, sig = 0.05) {
+build_reg_go_sets <- function(BURST.CONTRASTS, PR, universe, quantity = c("mean", "disp", "bsize", "kbal", "cv2"), levels = REG.CLASS, sig = 0.05) {
   quantity <- match.arg(quantity)
   cls  <- reg_class_vec(BURST.CONTRASTS, PR, quantity, sig)
   est  <- BURST.CONTRASTS[[paste0(quantity, "_total_est")]]
@@ -1581,7 +1580,7 @@ build_reg_go_sets <- function(BURST.CONTRASTS, PR, universe, quantity = c("mean"
 ##
 ## Returns a two-element named list, "AnyCis_Sc"/"AnyCis_Se" or
 ## "AnyTrans_Sc"/"AnyTrans_Se" depending on `component`
-build_component_go_sets <- function(BURST.CONTRASTS, PR, universe, component = c("cis", "trans"), quantity = c("mean", "bfreq", "bsize", "kbal", "cv2"), sig = 0.05) {
+build_component_go_sets <- function(BURST.CONTRASTS, PR, universe, component = c("cis", "trans"), quantity = c("mean", "disp", "bsize", "kbal", "cv2"), sig = 0.05) {
   component <- match.arg(component)
   quantity  <- match.arg(quantity)
   i     <- match(BURST.CONTRASTS$gene, PR$gene)
@@ -1970,7 +1969,7 @@ shared_overlap_rng <- function(pairs, levels_common) {
 ## estimates, so a cloud on the zero lines means hybrid noise matches the
 ## parents at the per-genome scale. Returns the class vector invisibly
 ## (finite genes only).
-plot_dom_class <- function(BURST.CONTRASTS, PR, quantity = c("mean", "bfreq", "bsize", "kbal", "cv2"), frame = c("parent","AD"), sig = 0.05, main = NULL, lim = NULL, bar_col = adjustcolor(COLOR.GREY[["dark"]], 0.25)) {
+plot_dom_class <- function(BURST.CONTRASTS, PR, quantity = c("mean", "disp", "bsize", "kbal", "cv2"), frame = c("parent","AD"), sig = 0.05, main = NULL, lim = NULL, bar_col = adjustcolor(COLOR.GREY[["dark"]], 0.25)) {
   quantity <- match.arg(quantity); frame <- match.arg(frame)
   dsc <- BURST.CONTRASTS[[paste0(quantity,"_dpar_sc_est")]]; ssc <- BURST.CONTRASTS[[paste0(quantity,"_dpar_sc_se")]]
   dse <- BURST.CONTRASTS[[paste0(quantity,"_dpar_se_est")]]; sse <- BURST.CONTRASTS[[paste0(quantity,"_dpar_se_se")]]
@@ -2027,7 +2026,7 @@ intrinsic_extrinsic_components <- function(mats, expos) {
   data.frame(gene = rownames(mats$HYC.SC), intr = intr, extr = extr, good = good, row.names = NULL)
 }
 
-## Expected log2 rise in BFREQ (theta = 1/DISP) when a diploid hybrid's two alleles are
+## Expected log2 fall in DISP (phi) when a diploid hybrid's two alleles are
 ## summed inside one cell and compared with a haploid parent.
 ## Derivation. Write allele k of a gene in one cell as its mean times
 ## (1 + e + i_k). The term e is the cell's extrinsic deviation and both alleles
@@ -2045,9 +2044,9 @@ intrinsic_extrinsic_components <- function(mats, expos) {
 ## var = E + (w1^2 + w2^2) * I. Because w1^2 + w2^2 is at most 1, the sum is
 ## quieter than either allele. It equals 1/2 for equal alleles and approaches 1
 ## when one allele dominates, since one allele leaves nothing to average.
-## BFREQ is the inverse of latent CV2, so the rise in log2 BFREQ is
+## DISP is the latent CV2 (E + I), so the log2 fall in DISP is
 ## s = -log2((E + (w1^2 + w2^2) * I) / (E + I))
-##   = -log2(1 - (1 - w1^2 - w2^2) * phi), with phi = I / (I + E) the intrinsic fraction.
+##   = -log2(1 - (1 - w1^2 - w2^2) * omega), with omega = I / (I + E) the intrinsic fraction.
 ## Equal alleles with fully private noise give s = 1. Fully shared noise gives 0.
 ## E and I come from intrinsic_extrinsic_components(), which removes Poisson
 ## shot noise. The average I treats the two alleles' private variances as equal.
@@ -2059,8 +2058,8 @@ ploidy_shift <- function(mats, expos) {
   w1   <- ya / (ya + yb)                             # pi-hat: the Hc allele's share of the summed hybrid count
   wsq  <- w1^2 + (1 - w1)^2                          # weight on the private noise of the sum
   intr <- ie$intr; extr <- pmax(ie$extr, 0)           # intr is already clipped at zero
-  phi  <- intr / (intr + extr)
-  s    <- -log2(1 - (1 - wsq) * phi)
+  omega <- intr / (intr + extr)                       # intrinsic fraction of the latent noise
+  s    <- -log2(1 - (1 - wsq) * omega)
   s[!ie$good | !is.finite(s)] <- NA_real_
   setNames(s, ie$gene)
 }
@@ -2424,13 +2423,13 @@ score_promoters_nupop <- function(seqs, occ_list, window = TATA.WINDOW) {
 .CIS_CLASSES <- c("Cis", "Cis + Trans", "Compensatory")
 
 ## Predicted sign of each tested quantity's cis contrast relative to the promoter shift delta (Se - Sc), the one
-## prespecified direction the concordance tests use. bfreq is the primary test: a higher TATA score or a longer
-## poly(dA:dT) tract goes with lower DISP (Section 6.2), and bfreq_cis_est = log2(DISP_Sc) - log2(DISP_Se), so
-## sign(delta) should equal sign(bfreq_cis_est) (+1). bsize is read from the identity log BSIZE = log MU - log DISP:
-## a feature that acts through DISP at fixed mean moves log BSIZE the opposite way, so sign(delta) should equal
-## -sign(bsize_cis_est) (-1). The bsize test follows from the bfreq prediction and the mean contrast enters it, so
+## prespecified direction the concordance tests use. disp is the primary test: a higher TATA score or a longer
+## poly(dA:dT) tract goes with higher DISP, the noisier allele (Section 6.2), and disp_cis_est = log2(DISP_Sc) - log2(DISP_Se),
+## so sign(delta) should equal -sign(disp_cis_est) (-1). bsize is read from the identity log BSIZE = log MU + log DISP:
+## a feature that raises DISP at fixed mean moves log BSIZE the same way, so sign(delta) should equal
+## -sign(bsize_cis_est) (-1). The bsize test follows from the disp prediction and the mean contrast enters it, so
 ## it is a secondary check that carries no independent mechanism. kbal has no independent prediction and is not tested.
-.PROMOTER_PREDICTED_SIGN <- c(bfreq = 1, bsize = -1)
+.PROMOTER_PREDICTED_SIGN <- c(disp = -1, bsize = -1)
 
 ## Genes eligible for the promoter concordance tests: in a class with a cis component, with the
 ## promoter shift (delta) and the cis estimate both defined, and neither exactly 0 (a zero has no
@@ -2442,15 +2441,15 @@ score_promoters_nupop <- function(seqs, occ_list, window = TATA.WINDOW) {
 ## Tests whether the direction of each promoter feature's between-species
 ## shift matches the direction predicted from the per-species relationship
 ## in NOISE.VALIDATE (Section 6.2): a higher TATA score or longer
-## poly(dA:dT) tract goes with lower BFREQ (burstier, noisier expression).
-## bfreq_cis_est = log2(BFREQ_Sc) - log2(BFREQ_Se), so a positive value means
-## Se has the lower BFREQ and is the noisier allele, and the prediction is
+## poly(dA:dT) tract goes with higher DISP (burstier, noisier expression).
+## disp_cis_est = log2(DISP_Sc) - log2(DISP_Se), so a negative value means
+## Se has the higher DISP and is the noisier allele, and the prediction is
 ## that Se carries the larger feature value, delta (Se - Sc) > 0. A gene is
 ## concordant when sign(delta) == .PROMOTER_PREDICTED_SIGN[[quantity]] *
-## sign(<quantity>_cis_est). bfreq is the primary, prespecified test. For
-## quantity "bsize" the predicted sign is flipped (log BSIZE = log MU - log DISP),
-## so concordance there asks whether delta has the sign opposite to bsize_cis_est;
-## it is a secondary test that follows from the bfreq prediction (see
+## sign(<quantity>_cis_est). disp is the primary, prespecified test, with predicted sign -1 (the
+## noisier allele carries the larger feature value). For quantity "bsize" the predicted sign is
+## also -1 (log BSIZE = log MU + log DISP), so concordance there asks whether delta has the sign
+## opposite to bsize_cis_est; it is a secondary test that follows from the disp prediction (see
 ## .PROMOTER_PREDICTED_SIGN). kbal is not tested. The result carries the
 ## quantity and the predicted sign beside each feature.
 ##
@@ -2462,7 +2461,7 @@ score_promoters_nupop <- function(seqs, occ_list, window = TATA.WINDOW) {
 ## discordant genes are equally likely. Genes with delta or estimate equal
 ## to 0 are dropped. A non-significant result means the candidate tables
 ## in Section 6.5 should be read with caution.
-promoter_direction_test <- function(BURST.CONTRASTS, ARCH, reg_class, quantity = c("bfreq", "bsize"), cis_classes = .CIS_CLASSES) {
+promoter_direction_test <- function(BURST.CONTRASTS, ARCH, reg_class, quantity = c("disp", "bsize"), cis_classes = .CIS_CLASSES) {
   quantity <- match.arg(quantity)
   est <- BURST.CONTRASTS[[paste0(quantity, "_cis_est")]]
   predicted_sign <- .PROMOTER_PREDICTED_SIGN[[quantity]]
@@ -2488,7 +2487,7 @@ promoter_direction_test <- function(BURST.CONTRASTS, ARCH, reg_class, quantity =
 ## rise suggests there is no signal at any magnitude. Eligibility
 ## (cis_classes membership, both values defined, neither exactly 0) is
 ## rebuilt here so the function works on its own. est is the cis estimate of
-## the tested quantity (bfreq_cis_est or bsize_cis_est).
+## the tested quantity (disp_cis_est or bsize_cis_est).
 ##
 ## ci_lo/ci_hi are a normal-approximation 95% interval on each bin's
 ## proportion, adequate for the bin sizes this produces and meant only
@@ -2498,7 +2497,7 @@ promoter_direction_test <- function(BURST.CONTRASTS, ARCH, reg_class, quantity =
 ## one bin) come from a logistic regression of concordance on
 ## log(|delta|), the formal version of "is the rate rising toward the
 ## extremes" that the binned table and its plot show informally.
-concordance_by_magnitude <- function(delta, est, reg_class, quantity = c("bfreq", "bsize"), cis_classes = .CIS_CLASSES, n_bins = 10) {
+concordance_by_magnitude <- function(delta, est, reg_class, quantity = c("disp", "bsize"), cis_classes = .CIS_CLASSES, n_bins = 10) {
   quantity <- match.arg(quantity)
   ok <- .concordance_eligible(delta, est, reg_class, cis_classes)
 
@@ -2583,7 +2582,7 @@ plot_concordance_by_magnitude <- function(cb, main = NULL) {
 ## both species (score or length, position, matched sequence) precede each
 ## feature's deltas, so an indel can be told apart from a substitution by
 ## reading the sequences in the table.
-promoter_noise_candidates <- function(BURST.CONTRASTS, PR, ARCH, reg_class, quantity = c("bfreq", "bsize"), cis_classes = .CIS_CLASSES, arch_frac = 0.90) {
+promoter_noise_candidates <- function(BURST.CONTRASTS, PR, ARCH, reg_class, quantity = c("disp", "bsize"), cis_classes = .CIS_CLASSES, arch_frac = 0.90) {
   quantity <- match.arg(quantity)
   stopifnot(nrow(BURST.CONTRASTS) == nrow(ARCH), nrow(BURST.CONTRASTS) == length(reg_class))
 
@@ -2634,7 +2633,7 @@ promoter_noise_candidates <- function(BURST.CONTRASTS, PR, ARCH, reg_class, quan
     keep  <- cis_flag & !is.na(delta) & abs(delta) >= cut
     keep[is.na(keep)] <- FALSE
     ## Columns shared by all three tables: gene, regulatory class and the cis, trans and total
-    ## estimates, p-values and q-values. Names carry the quantity prefix (bfreq_ or bsize_) so a
+    ## estimates, p-values and q-values. Names carry the quantity prefix (disp_ or bsize_) so a
     ## table states which axis it was built from.
     ctx <- data.frame(
       gene      = BURST.CONTRASTS$gene[keep],
@@ -2658,7 +2657,7 @@ promoter_noise_candidates <- function(BURST.CONTRASTS, PR, ARCH, reg_class, quan
 ## Tests whether a promoter feature associates with a species' own
 ## absolute noise level, independent of any cross-species comparison.
 ## fit is one of SPLIT.FITS' per-species data frames (Section 2);
-## response names the column to test, BFREQ (burst frequency theta, the
+## response names the column to test, DISP (the dispersion phi, the
 ## default and the axis used throughout the rest of this section) or
 ## BSIZE (MU*DISP, already computed on every fit object by
 ## fit_counts_offset()); score is a named vector of a single
@@ -2666,25 +2665,25 @@ promoter_noise_candidates <- function(BURST.CONTRASTS, PR, ARCH, reg_class, quan
 ## same way as fit's row names.
 ##
 ## covariate names the column held fixed while testing the feature, MU by
-## default. With response = "BSIZE" pass covariate = "BFREQ": since
-## BSIZE = MU*DISP = MU/BFREQ, testing BSIZE against covariate MU is algebraically
-## forced to reproduce the BFREQ-against-MU result with the coefficient sign
-## flipped, log(BSIZE) = log(MU) - log(BFREQ),
-## so conditioning on log(MU) leaves only -log(BFREQ) for the feature to
+## default. With response = "BSIZE" pass covariate = "DISP": since
+## BSIZE = MU*DISP, testing BSIZE against covariate MU is algebraically
+## forced to reproduce the DISP-against-MU result,
+## log(BSIZE) = log(MU) + log(DISP),
+## so conditioning on log(MU) leaves only log(DISP) for the feature to
 ## explain, the same one degree of freedom as before under a different
-## name, not an independent test. Conditioning on BFREQ instead asks the
+## name, not an independent test. Conditioning on DISP instead asks the
 ## question that is actually different from the frequency test: among
-## genes that fire at the same rate, does the feature predict how much
-## comes out per burst. That is not degenerate with the BFREQ-on-MU test,
-## since BFREQ and MU are two distinct, only partially correlated
+## genes with the same dispersion, does the feature predict how much
+## comes out per burst. That is not degenerate with the DISP-on-MU test,
+## since DISP and MU are two distinct, only partially correlated
 ## quantities across genes.
 ##
-## For response = "BFREQ" (theta = 1/DISP; covariate = "MU"): lower BFREQ means burstier,
+## For response = "DISP" (covariate = "MU"): higher DISP means burstier,
 ## noisier expression, so the published relationship (TATA-containing
 ## and long poly(dA:dT) promoters are noisier: Newman 2006, Blake 2006,
-## Hornung 2012, Carey 2013) predicts a negative coefficient on the
+## Hornung 2012, Carey 2013) predicts a positive coefficient on the
 ## feature once MU is held fixed. For response = "BSIZE"
-## (covariate = "BFREQ"), no direction is asserted here; the molecular
+## (covariate = "DISP"), no direction is asserted here; the molecular
 ## literature motivating a promoter-architecture effect on burst
 ## frequency doesn't make an equally clear prediction for burst
 ## amplitude, so this is run as an open check rather than one with an
@@ -2698,7 +2697,7 @@ promoter_noise_candidates <- function(BURST.CONTRASTS, PR, ARCH, reg_class, quan
 ## the thousands, since even a tiny slope clears significance easily at
 ## that sample size; r2_partial is the number that actually answers
 ## "how much of the variance is this."
-architecture_noise_check <- function(fit, score, feature, response = "BFREQ", covariate = "MU") {
+architecture_noise_check <- function(fit, score, feature, response = "DISP", covariate = "MU") {
   ## Confirms the two fit columns and the feature score are numeric before
   ## modelling, and names the column and its class when one is not
   for (col in c(response, covariate)) {
@@ -3048,7 +3047,7 @@ plot_within_between_hist <- function(wb, main = NULL, brk = 40) {
 ## Scatter of within_between_decomp()'s ratio (log10) against one burst
 ## kinetics quantity, for one dataset. quantity is a named vector (names
 ## = gene, already on the desired plotting scale, e.g. log2(mean)) so the
-## same function covers mean, burst frequency, and burst size without
+## same function covers mean, dispersion, and burst size without
 ## three near-duplicate copies. The comparison is by rank (Spearman),
 ## since the ratio can span orders of magnitude without a linear
 ## relationship to the burst quantity; the dashed line is a least-squares
@@ -3073,7 +3072,7 @@ plot_within_between_vs_quantity <- function(wb, quantity, xlab, main = NULL) {
 ## Runs plot_within_between_by_class() for two datasets side by side
 ## (e.g. Sc and Se parent) against one classification axis, in one call:
 ## aligns the raw class vector (indexed like BURST.CONTRASTS$gene, e.g.
-## REG.VEC$bfreq or DOM.VEC$bsize, not pre-cleaned since Ambiguous
+## REG.VEC$disp or DOM.VEC$bsize, not pre-cleaned since Ambiguous
 ## genes are already excluded automatically by class_levels not
 ## containing "Ambiguous") to each dataset's own gene table via match(),
 ## writes both panels to one pdf, and prints the omnibus test and Tukey
@@ -3236,13 +3235,13 @@ perm_trans_pool_paired <- function(nSC, nSE, nHYT) {
        se = c(par_a, nSE + a_h, setdiff(seq_len(nSE), par_a), nSE + setdiff(seq_len(nHYT), a_h)))
 }
 
-## fit_ratio_axes: the log2 ratio of two .fit_one() results on each axis, as c(mu, disp, cv2); the noise axis is the contrast of theta = 1 / disp (the burst-frequency scale); an axis is NA
+## fit_ratio_axes: the log2 ratio of two .fit_one() results on each axis, as c(mu, disp, cv2); an axis is NA
 ## unless both sides are finite and positive. The one definition of a contrast between two groups for the
 ## gene-level permutation null and the power grid.
 fit_ratio_axes <- function(fa, fb) {
   ratio <- function(x, y) if (is.finite(x) && x > 0 && is.finite(y) && y > 0) log2(x) - log2(y) else NA_real_
   c(mu   = ratio(fa[["mu"]], fb[["mu"]]),
-    disp = ratio(fa[["theta"]], fb[["theta"]]),
+    disp = ratio(fa[["disp"]], fb[["disp"]]),
     cv2  = ratio(.cv2_of(fa[["mu"]], fa[["disp"]]), .cv2_of(fb[["mu"]], fb[["disp"]])))
 }
 
@@ -3332,10 +3331,10 @@ axis_mixture_summary <- function(a) c(
 
 ## pole_trans_fractions: for one gene group g, its size and the fraction classified any-trans (Trans or
 ## Cis + Trans) on each burst-kinetics axis.
-pole_trans_fractions <- function(g, contrasts, bfreq_class, bsize_class, kbal_class) {
+pole_trans_fractions <- function(g, contrasts, disp_class, bsize_class, kbal_class) {
   i <- match(g, contrasts$gene)
   c(n              = length(g),
-    pct_bfreq_trans = mean(bfreq_class[i] %in% c("Trans", "Cis + Trans"), na.rm = TRUE),
+    pct_disp_trans = mean(disp_class[i] %in% c("Trans", "Cis + Trans"), na.rm = TRUE),
     pct_bsize_trans = mean(bsize_class[i] %in% c("Trans", "Cis + Trans"), na.rm = TRUE),
     pct_kbal_trans  = mean(kbal_class[i]  %in% c("Trans", "Cis + Trans"), na.rm = TRUE))
 }
@@ -3500,15 +3499,14 @@ pilot_split_se_one <- function(g, B, expos, mats, seed) {
 }
 
 ## fit_group_values: gene g's fitted values in every group of fits (a list of per-group data frames with MU and
-## DISP columns): lists named by group holding mu, disp (phi), theta (1/phi, the burst-frequency quantity) and the
+## DISP columns): lists named by group holding mu, disp (phi) and the
 ## squared coefficient of variation cv2.
 fit_group_values <- function(fits, g) {
   rows <- vector("list", length(fits)); names(rows) <- names(fits)
   for (grp in names(fits)) rows[[grp]] <- fits[[grp]][g, ]
-  mu    <- lapply(rows, `[[`, "MU")
-  disp  <- lapply(rows, `[[`, "DISP")
-  theta <- lapply(disp, function(p) 1 / p)
-  list(mu = mu, disp = disp, theta = theta, cv2 = Map(.cv2_of, mu, disp))
+  mu   <- lapply(rows, `[[`, "MU")
+  disp <- lapply(rows, `[[`, "DISP")
+  list(mu = mu, disp = disp, cv2 = Map(.cv2_of, mu, disp))
 }
 
 ## boot_contrasts_one: one gene's bootstrap contrasts across all modes (the unit of work a cluster worker does). draws holds every resample
@@ -3526,9 +3524,9 @@ boot_contrasts_one <- function(g, expos, fits, mats, draws) {
       key <- .DRAW.KEY[[grp]]
       f[[grp]] <- .fit_one(mats[[grp]][g, d[[key]]], expos[[grp]][d[[key]]])
     }
-    mu_all <- lapply(f, `[[`, "mu"); disp_all <- lapply(f, `[[`, "disp"); theta_all <- lapply(f, `[[`, "theta")
+    mu_all <- lapply(f, `[[`, "mu"); disp_all <- lapply(f, `[[`, "disp")
     gv.mu <- lapply(mu_all, unname)
-    gv.bf <- lapply(theta_all, unname)
+    gv.bf <- lapply(disp_all, unname)
     gv.cv <- Map(.cv2_of, mu_all, disp_all)
     for (k in seq_along(modes)) {
       grp <- .MODES[[modes[k]]]
@@ -3537,7 +3535,7 @@ boot_contrasts_one <- function(g, expos, fits, mats, draws) {
       ## allele rates and the parental rates are positive, so a gene silent in one allele keeps its replicates.
       mean_contrast <- .contrast_value(modes[k], gv.mu, "MU")
       if (is.finite(mean_contrast)) M[b, mcol[k]] <- mean_contrast
-      if (all(is.finite(bf) & bf > 0)) M[b, scol[k]] <- .contrast_value(modes[k], gv.bf, "BFREQ")
+      if (all(is.finite(bf) & bf > 0)) M[b, scol[k]] <- .contrast_value(modes[k], gv.bf, "DISP")
       if (all(is.finite(cv) & cv > 0)) M[b, ccol[k]] <- .contrast_value(modes[k], gv.cv, "CV2")
     }
   }
@@ -3545,21 +3543,21 @@ boot_contrasts_one <- function(g, expos, fits, mats, draws) {
   bdry <- setNames(colMeans(is.na(M[, scol, drop = FALSE])), modes)
   fv <- fit_group_values(fits, g)
   pm <- vapply(modes, .contrast_value, numeric(1), fv$mu,   "MU")
-  ps <- vapply(modes, .contrast_value, numeric(1), fv$theta, "BFREQ")
+  ps <- vapply(modes, .contrast_value, numeric(1), fv$disp, "DISP")
   pc <- vapply(modes, .contrast_value, numeric(1), fv$cv2,  "CV2")
   out <- list(gene = g)
   for (md in .OUT_MODES) {
-    smd <- .BFREQ_SOURCE[[md]]
+    smd <- .DISP_SOURCE[[md]]
     out[[paste0("mean_", md, "_est")]]   <- unname(pm[md])
     out[[paste0("mean_", md, "_se")]]    <- unname(se[paste0("m.", md)])
-    out[[paste0("bfreq_", md, "_est")]]  <- unname(ps[smd])
-    out[[paste0("bfreq_", md, "_se")]]   <- unname(se[paste0("s.", smd)])
-    out[[paste0("bfreq_", md, "_bdry")]] <- unname(bdry[smd])
+    out[[paste0("disp_", md, "_est")]]  <- unname(ps[smd])
+    out[[paste0("disp_", md, "_se")]]   <- unname(se[paste0("s.", smd)])
+    out[[paste0("disp_", md, "_bdry")]] <- unname(bdry[smd])
     out[[paste0("cv2_", md, "_est")]]    <- unname(pc[smd])
     out[[paste0("cv2_", md, "_se")]]     <- unname(se[paste0("c.", smd)])
-    ## cor_<md>: correlation of the mean and bfreq bootstrap draws. Every hybrid dataset of a replicate
+    ## cor_<md>: correlation of the mean and disp bootstrap draws. Every hybrid dataset of a replicate
     ## is built from the same resampled cell IDs (make_draws()), and the parents are shared, so the
-    ## mean contrast (m.<md>) and the bfreq contrast of its source mode (s.<smd>; the noise split for cis
+    ## mean contrast (m.<md>) and the disp contrast of its source mode (s.<smd>; the noise split for cis
     ## and trans) are measured on the same cells for every mode. NA only when fewer than three draws
     ## give finite values for both.
     x <- M[, paste0("m.", md)]; y <- M[, paste0("s.", smd)]; ok <- is.finite(x) & is.finite(y)
@@ -3570,13 +3568,13 @@ boot_contrasts_one <- function(g, expos, fits, mats, draws) {
     if (sum(ok) > 2) cor(x[ok], y[ok]) else NA_real_
   }
   out$cor_dpar_mean  <- .r2("m.dpar_sc", "m.dpar_se")
-  out$cor_dpar_bfreq <- .r2("s.dpar_sc", "s.dpar_se")
+  out$cor_dpar_disp <- .r2("s.dpar_sc", "s.dpar_se")
   data.frame(out, row.names = NULL, check.names = FALSE)
 }
 
 ## permute_contrasts_one: one gene's permutation null: refits the relabeled groups for every mode and permutation, compares the observed
-## contrasts (mean, bfreq, CV2, bsize, kbal) with the null by a two-sided permutation p, and adds ploidy-adjusted p-values for the dpar
-## contrasts. bsize and kbal nulls recombine the mean and bfreq null draws of the same permutation.
+## contrasts (mean, disp, CV2, bsize, kbal) with the null by a two-sided permutation p, and adds ploidy-adjusted p-values for the dpar
+## contrasts. bsize and kbal nulls recombine the mean and disp null draws of the same permutation.
 permute_contrasts_one <- function(g, expos, fits, mats, perms, ploidy_shift, seed = 1) {
   if (!is.numeric(seed) || length(seed) != 1 || !is.finite(seed)) stop("permute_contrasts_one(): seed must be one finite number")
   l2 <- log2; B <- length(perms); modes <- names(.MODES)
@@ -3584,9 +3582,9 @@ permute_contrasts_one <- function(g, expos, fits, mats, perms, ploidy_shift, see
   Ns <- matrix(NA_real_, B, length(modes), dimnames = list(NULL, modes))
   Nc <- matrix(NA_real_, B, length(modes), dimnames = list(NULL, modes))
   fv   <- fit_group_values(fits, g)
-  gvmu <- fv$mu; gvbf <- fv$theta; gvcv <- fv$cv2
+  gvmu <- fv$mu; gvbf <- fv$disp; gvcv <- fv$cv2
   obs.m <- vapply(modes, .contrast_value, numeric(1), gvmu, "MU")
-  obs.s <- vapply(modes, .contrast_value, numeric(1), gvbf, "BFREQ")
+  obs.s <- vapply(modes, .contrast_value, numeric(1), gvbf, "DISP")
   obs.c <- vapply(modes, .contrast_value, numeric(1), gvcv, "CV2")
   cMIXsc <- mats$MIX.SC[g, ]; cMIXse <- mats$MIX.SE[g, ]
   cHYCsc <- mats$HYC.SC[g, ]; cHYCse <- mats$HYC.SE[g, ]
@@ -3606,7 +3604,7 @@ permute_contrasts_one <- function(g, expos, fits, mats, perms, ploidy_shift, see
   rho.sc <- min(1, sum(e.se) / sum(e.sc)); rho.se <- min(1, sum(e.sc) / sum(e.se))
   gi <- match(g, rownames(mats$MIX.SC))
   if (is.na(gi)) stop("permute_contrasts_one(): gene ", g, " is not a row of mats$MIX.SC")
-  ## store: one row of the Nm / Ns / Nc null matrices (mean, bfreq and CV2 axes) for mode md, from the
+  ## store: one row of the Nm / Ns / Nc null matrices (mean, disp and CV2 axes) for mode md, from the
   ## c(mu, disp, cv2) contrast that fit_ratio_axes() returns
   store <- function(b, md, ax) { Nm[b, md] <<- ax[["mu"]]; Ns[b, md] <<- ax[["disp"]]; Nc[b, md] <<- ax[["cv2"]] }
   with_local_seed(seed + gi, for (b in seq_len(B)) {
@@ -3617,19 +3615,19 @@ permute_contrasts_one <- function(g, expos, fits, mats, perms, ploidy_shift, see
     ## cis swap: a swapped allele carries its own offset, so every count keeps the offset of its haplotype
     store(b, "cis", null_cis_axes(cHYCsc, cHYCse, expos$HYC.SC, expos$HYC.SE, p$cis))
     ## Noise-split (f_disp) version of the cis null, used only for
-    ## the bfreq_cis/cv2_cis output columns, mirroring cis_n in .MODES
+    ## the disp_cis/cv2_cis output columns, mirroring cis_n in .MODES
     store(b, "cis_n", null_cis_axes(cHYCsc.N, cHYCse.N, expos$HYC.SC.N, expos$HYC.SE.N, p$cis_n))
 
     store(b, "trans", null_trans_axes(cMIXsc, cMIXse, cHYTsc, cHYTse, expos$MIX.SC, expos$MIX.SE, expos$HYT.SC, expos$HYT.SE, p$transSC, p$transSE))
     ## Noise-split version of the trans null, used only for the
-    ## bfreq_trans/cv2_trans output columns, mirroring trans_n in .MODES
+    ## disp_trans/cv2_trans output columns, mirroring trans_n in .MODES
     store(b, "trans_n", null_trans_axes(cMIXsc, cMIXse, cHYTsc.N, cHYTse.N, expos$MIX.SC, expos$MIX.SE, expos$HYT.SC.N, expos$HYT.SE.N, p$transSC_n, p$transSE_n))
 
     synth <- rbinom(nHYB, cMIXsc[p$dom_i], rho.sc) + rbinom(nHYB, cMIXse[p$dom_j], rho.se)
     es    <- rho.sc * e.sc[p$dom_i] + rho.se * e.se[p$dom_j]
     fs <- .fit_one(synth, es)
     if (is.finite(fs["mu"])   && fs["mu"]   > 0) Nm[b,"dom"] <- l2(fs["mu"])   - mp.m
-    if (is.finite(fs["theta"]) && fs["theta"] > 0) Ns[b,"dom"] <- l2(fs["theta"]) - mp.s
+    if (is.finite(fs["disp"]) && fs["disp"] > 0) Ns[b,"dom"] <- l2(fs["disp"]) - mp.s
     fs.cv <- .cv2_of(fs[["mu"]], fs[["disp"]])
     if (is.finite(fs.cv) && fs.cv > 0) Nc[b,"dom"] <- l2(fs.cv) - mp.c
     d1 <- .fit_split(c(cHYBc, cMIXsc), c(expos$HYB.COMB, expos$MIX.SC), p$dparSC, nHYB)
@@ -3639,48 +3637,48 @@ permute_contrasts_one <- function(g, expos, fits, mats, perms, ploidy_shift, see
   })
   out <- list(gene = g)
   for (md in .OUT_MODES) {
-    smd <- .BFREQ_SOURCE[[md]]
+    smd <- .DISP_SOURCE[[md]]
     out[[paste0("mean_", md, "_obs")]]  <- unname(obs.m[md])
     out[[paste0("mean_", md, "_p")]]    <- perm_pval(obs.m[md], Nm[, md])
-    out[[paste0("bfreq_", md, "_obs")]] <- unname(obs.s[smd])
-    out[[paste0("bfreq_", md, "_p")]]   <- perm_pval(obs.s[smd], Ns[, smd])
+    out[[paste0("disp_", md, "_obs")]] <- unname(obs.s[smd])
+    out[[paste0("disp_", md, "_p")]]   <- perm_pval(obs.s[smd], Ns[, smd])
     out[[paste0("cv2_", md, "_obs")]]   <- unname(obs.c[smd])
     out[[paste0("cv2_", md, "_p")]]     <- perm_pval(obs.c[smd], Nc[, smd])
 
-    ## bsize null: mean null minus bfreq null, permutation by permutation. Where md == smd the two
+    ## bsize null: mean null plus disp null, permutation by permutation. Where md == smd the two
     ## draws share one relabeling, so their correlation carries through. For cis and trans they come
     ## from the mean-split and noise-split relabelings of the same permutation, which perm_label_draw()
     ## builds from the same cells (shared swap flags for cis, one shared pool ordering for trans).
-    bs_null <- Nm[, md] - Ns[, smd]
-    obs.bs  <- unname(obs.m[md]) - unname(obs.s[smd])
+    bs_null <- Nm[, md] + Ns[, smd]
+    obs.bs  <- unname(obs.m[md]) + unname(obs.s[smd])
     out[[paste0("bsize_", md, "_obs")]] <- obs.bs
     out[[paste0("bsize_", md, "_p")]]   <- perm_pval(obs.bs, bs_null)
 
-    ## kbal = bfreq - bsize; its null is the bfreq null minus the bsize null from the same draws, so
+    ## kbal = -(bsize + disp); its null is built from the bsize and disp null draws of the same permutation, so
     ## kbal gets a permutation p-value for every mode, usable by classify_reg()/classify_dom().
-    kbal_null <- Ns[, smd] - bs_null
-    obs.kbal  <- unname(obs.s[smd]) - obs.bs
+    kbal_null <- -(bs_null + Ns[, smd])
+    obs.kbal  <- -(obs.bs + unname(obs.s[smd]))
     out[[paste0("kbal_", md, "_obs")]] <- obs.kbal
     out[[paste0("kbal_", md, "_p")]]   <- perm_pval(obs.kbal, kbal_null)
 
     ## Ploidy-adjusted p-values for the hybrid-versus-parent noise contrasts.
-    ## HYB.COMB sums two alleles, which raises bfreq by the shift s (see
+    ## HYB.COMB sums two alleles, which lowers disp by the shift s (see
     ## ploidy_shift). Removing s from the observed contrast and reading it
     ## against the same zero-centred exchangeability null tests hybrid noise
     ## at the per-genome scale of the parents. _p_ploidy uses this gene's own
     ## s and _p_ind uses s = 1, the fully independent equal-allele bound.
-    ## bfreq falls by s, bsize rises by s, kbal falls by 2s, and cv2 rebuilds
+    ## disp rises by s, bsize rises by s, kbal falls by 2s, and cv2 rebuilds
     ## with its latent term scaled by 2^s. The mean axis needs no adjustment.
     if (md %in% c("dpar_sc", "dpar_se")) {
       par.nm <- if (md == "dpar_sc") "MIX.SC" else "MIX.SE"
-      mh <- gvmu[["HYB.COMB"]]; kh <- gvbf[["HYB.COMB"]]; cvp <- gvcv[[par.nm]]
-      nulls <- list(bfreq = Ns[, smd], bsize = bs_null, kbal = kbal_null, cv2 = Nc[, smd])
+      mh <- gvmu[["HYB.COMB"]]; ph <- gvbf[["HYB.COMB"]]; cvp <- gvcv[[par.nm]]
+      nulls <- list(disp = Ns[, smd], bsize = bs_null, kbal = kbal_null, cv2 = Nc[, smd])
       s.own <- unname(ploidy_shift[g])
       for (tag in c("ploidy", "ind")) {
         s <- if (tag == "ploidy") s.own else 1
-        cvh <- if (is.finite(s) && is.finite(mh) && mh > 0 && is.finite(kh) && kh > 0) 1 / mh + 2^s / kh else NA_real_
+        cvh <- if (is.finite(s) && is.finite(mh) && mh > 0 && is.finite(ph) && ph > 0) 1 / mh + 2^s * ph else NA_real_
         cv2 <- if (is.finite(cvh) && cvh > 0 && is.finite(cvp) && cvp > 0) l2(cvh) - l2(cvp) else NA_real_
-        ob <- list(bfreq = unname(obs.s[smd]) - s, bsize = obs.bs + s, kbal = obs.kbal - 2 * s, cv2 = cv2)
+        ob <- list(disp = unname(obs.s[smd]) + s, bsize = obs.bs + s, kbal = obs.kbal - 2 * s, cv2 = cv2)
         for (q in names(nulls)) out[[paste0(q, "_", md, "_p_", tag)]] <- perm_pval(ob[[q]], nulls[[q]])
       }
     }

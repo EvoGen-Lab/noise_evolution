@@ -48,6 +48,7 @@ Prefer fixes that avoid cluster reruns. Offer a local recompute path (for exampl
   - A once-used step in `analysis.R` or a cluster script is written inline (a `local({ ... })` block when it needs private variables), with its concept comment above it.
   - A function that PSOCK workers need by name must be a top-level function in `R/functions.R` (`neg_binom_fit_offset`, `.fit_one`); `fit_counts_offset()` finds such dependencies from the code.
   - Before adding a function, check that it will run more than once; inline it if not.
+- Noise axis: `DISP` is the dispersion phi (Var = mu + phi mu^2); theta = 1 / phi is the NB size and behaves as burst frequency, and `.fit_one()` returns both. Every noise contrast is a log2 contrast of phi, in the `disp_*` columns of `BURST.CONTRASTS` and `PR`. Burst size is b = mu phi, so `bsize` = mean + disp, and kinetic balance is kappa = theta / b, so `kbal` = -mean - 2 disp. phi = 0 (Pearson chi-square / df <= 1, or phi below `PHI.FLOOR`) is the Poisson limit and is excluded from every noise contrast and from the gene filter.
 - Select Seurat columns by name, never by position (Seurat v5 changes `FindMarkers` output order).
 - Validate numeric inputs at function entry (for example `BSIZE` in `SPLIT.FITS`).
 - Do not commit data, `.rda` checkpoints, or cluster output. Keep them in `.gitignore`.

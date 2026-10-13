@@ -107,10 +107,10 @@ power_line_figure <- function(file, power, grid, outer, inner, x, series, main_f
 ## power_grid_row: power of one grid row i (mean reads x cell count x burst-frequency size) over the SIZE.RATIO sweep. The reference group's
 ## counts and fit are drawn once per replicate and reused across the sweep, so the sweep isolates the effect of SIZE.RATIO.
 power_grid_row <- function(i, ALPHA, CELL.RATIO, EXPOSURE.CV, GRID, MEAN.READS, N.CELLS, N.MIX, NI, NJ, PI1, SEED.BASE, SIZE, SIZE.RATIO) {
-  ## size_log2_ratio: log2 ratio of the NB size (theta, the burst-frequency axis) between two
+  ## size_log2_ratio: log2 ratio of the NB size (disp, the noise axis) between two
   ## .fit_one() results, NA if either side is non-positive or non-finite.
   size_log2_ratio <- function(fit_a, fit_b) {
-    a <- fit_a[["theta"]]; b <- fit_b[["theta"]]
+    a <- fit_a[["disp"]]; b <- fit_b[["disp"]]
     if (is.finite(a) && a > 0 && is.finite(b) && b > 0) log2(a) - log2(b) else NA_real_
   }
 
