@@ -7,10 +7,13 @@
 ###
 ### Steps
 ###   1. Check on the cluster that every array task wrote its file: cis_direct_output_<k>of<K>.rda for k = 1..K.
-###   2. Copy the files and estimator_sim_inputs.rda to the local OUTPUT.DIR and INPUT.DIR (R/setup.R defines both).
-###   3. Run this script from the project root:
-###        library(here); source(here("R", "setup.R")); source(here("analysis", "cis_option_decision.R"))
-###      Without setup.R, set INPUT.DIR and OUTPUT.DIR first and source R/functions.R.
+###   2. Copy the files and estimator_sim_inputs.rda into one local folder (or two: inputs and outputs).
+###   3. Open R in the project root and run
+###        INPUT.DIR  <- "path/to/folder with estimator_sim_inputs.rda"
+###        OUTPUT.DIR <- "path/to/folder with the cis_direct_output files"
+###        source("analysis/cis_option_decision.R")
+###      The script needs only R/functions.R (it sources it when wmean() is not loaded). It does not need R/setup.R;
+###      when setup.R has been run, its INPUT.DIR, OUTPUT.DIR and TABLE.DIR are used as they are.
 ###   4. Read the verdict block at the end. Every criterion is printed with its value, its threshold and pass or fail,
 ###      and the table is written to <TABLE.DIR>/cis_option_decision.csv.
 ###
@@ -21,7 +24,7 @@
 if (!exists("INPUT.DIR"))  INPUT.DIR  <- "."
 if (!exists("OUTPUT.DIR")) OUTPUT.DIR <- "."
 if (!exists("wmean")) source("R/functions.R")
-source(if (exists("here")) here::here("analysis", "cis_direct_summary.R") else "analysis/cis_direct_summary.R")   # builds D, TAB.REC
+source("analysis/cis_direct_summary.R")   # builds D, TAB.REC
 
 ## ---- thresholds (a criterion passes when its value meets the threshold) ----------------------------------------
 LOSS.MIN      <- 0.05   # option 2 gives no cis contrast in at least this share of datasets (gene-weighted): direct estimation adds information
