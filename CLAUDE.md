@@ -10,6 +10,7 @@ Reproducible R pipeline for genome-wide noise evolution in S. cerevisiae (YPS100
 ## Environment
 - Local: RStudio on Windows. Cluster: Negishi (RCAC), account `bphm`, partition `cpu`, module `r/4.5.2`.
 - Both environments are in R 4.5.x with Seurat v5. Use one shared dated Posit Package Manager CRAN snapshot for both.
+- Section 2 of `analysis/analysis.R` and `analysis/sim_inputs.R` compute offsets with `scran::computeSumFactors` (Bioconductor, with SingleCellExperiment). Both run locally only; the cluster scripts read the offsets. Install with `renv::install("bioc::scran")`, then run `renv::snapshot()` so the lockfile records scran and its dependencies. `computeSumFactors` takes a SingleCellExperiment, not a plain matrix (scran 1.30.2 rejects a matrix).
 - Claude Code cannot reach the cluster. Write the scripts and `.sub` files, never run `sbatch` or assume cluster output exists.
 
 ## Git workflow

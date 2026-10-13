@@ -7,7 +7,7 @@
 ### the structure of power_grid.R. A separate study: no existing result depends on it.
 ###
 ### Inputs  : estimator_sim_inputs.rda, written by analysis/sim_inputs.R
-###           (GRID, LIB.HYB, LIB.PAR, DEPTH.REF, N.OBS, VAR.C, VAR.CC, NREP, NBOOT, NTRUE, SEED.BASE, ...)
+###           (GRID, LIB.HYB, LIB.PAR, DEPTH.REF, N.OBS, VAR.C, EPS.POOL, VAR.EPS, NREP, NBOOT, NTRUE, SEED.BASE, ...)
 ### Output  : estimator_sim_output_<k>of<K>.rda for array task k of K, holding SIM.EST (one row per
 ###           grid row x target x estimator), SIM.AGREE (latent quantities beside the formula
 ###           predictions, one row per grid row) and ROWS.PART (the GRID rows this task computed).
@@ -26,7 +26,7 @@ library('parallel')
 source("functions.R")
 
 load(Sys.getenv("SIM_INPUTS", unset = "estimator_sim_inputs.rda"))
-## GRID, LIB.HYB, LIB.PAR, DEPTH.REF, N.OBS, VAR.C, VAR.CC, NREP, NBOOT, NTRUE, SEED.BASE
+## GRID, LIB.HYB, LIB.PAR, DEPTH.REF, N.OBS, VAR.C, EPS.POOL, VAR.EPS, NREP, NBOOT, NTRUE, SEED.BASE
 
 NUM.CORES <- as.integer(Sys.getenv("SLURM_CPUS_PER_TASK", unset = detectCores()))
 
@@ -47,8 +47,8 @@ N.POINTS  <- length(MY.ROWS)
 
 cat(sprintf("estimator simulation start: array task %d of %d, %d truth keys, %d rows, NREP=%d, NBOOT=%d, NTRUE=%.0e, %d cores\n",
             ARRAY.ID, N.ARRAY, length(MY.KEYS), N.POINTS, NREP, NBOOT, NTRUE, NUM.CORES))
-cat(sprintf("share inputs: sigma2_c=%.3g, sigma2_C|c=%.3g; depth median %.0f; cells HYB=%d, MIX.SC=%d, MIX.SE=%d\n",
-            VAR.C, VAR.CC, DEPTH.REF, N.OBS[["HYB"]], N.OBS[["MIX.SC"]], N.OBS[["MIX.SE"]]))
+cat(sprintf("inputs: sigma2_c=%.3g; offset error variances Pc=%.3g Pe=%.3g Hc=%.3g He=%.3g; depth median %.0f; cells HYB=%d, MIX.SC=%d, MIX.SE=%d\n",
+            VAR.C, VAR.EPS[["PC"]], VAR.EPS[["PE"]], VAR.EPS[["HC"]], VAR.EPS[["HE"]], DEPTH.REF, N.OBS[["HYB"]], N.OBS[["MIX.SC"]], N.OBS[["MIX.SE"]]))
 flush.console()
 
 ## ---- phase 1: latent truth of each key ----
@@ -57,7 +57,7 @@ flush.console()
 ## drawn cells, with their Monte Carlo error. Truth comes from the draws, not from the Appendix A formulas.
 t0 <- Sys.time()
 TRUTH <- parLapply(cl, MY.KEYS, estimator_sim_truth, GRID = GRID, LIB.HYB = LIB.HYB, LIB.PAR = LIB.PAR, DEPTH.REF = DEPTH.REF,
-                   NTRUE = NTRUE, SEED.BASE = SEED.BASE, VAR.C = VAR.C, VAR.CC = VAR.CC)
+                   NTRUE = NTRUE, SEED.BASE = SEED.BASE, VAR.C = VAR.C, EPS.POOL = EPS.POOL)
 names(TRUTH) <- MY.KEYS
 cat(sprintf("[%s] truth done: %d keys in %.1f min; worst Monte Carlo SE of a log2 variance: %.4f\n",
             format(Sys.time(), "%H:%M:%S"), length(MY.KEYS), as.numeric(difftime(Sys.time(), t0, units = "mins")),
@@ -76,7 +76,7 @@ for (k in seq_along(chunks)) {
   ## coverage, and compares everything with the latent truth and the Appendix A predictions.
   results[[k]] <- parLapply(cl, chunks[[k]], estimator_sim_row, GRID = GRID, TRUTH = TRUTH, LIB.HYB = LIB.HYB, LIB.PAR = LIB.PAR,
                             DEPTH.REF = DEPTH.REF, N.OBS = N.OBS, NREP = NREP, NBOOT = NBOOT, SEED.BASE = SEED.BASE,
-                            VAR.C = VAR.C, VAR.CC = VAR.CC)
+                            VAR.C = VAR.C, EPS.POOL = EPS.POOL)
   done <- done + length(chunks[[k]])
   el   <- as.numeric(difftime(Sys.time(), t0, units = "mins"))
   eta  <- if (el > 0) (N.POINTS - done) * (el / done) else NA_real_

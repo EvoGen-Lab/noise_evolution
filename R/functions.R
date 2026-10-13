@@ -180,14 +180,14 @@
 ###     gse_job_set() - The rank-based enrichment jobs (BP, MF, CC) for one rank list.
 ###   13d. FUNCTIONS THE ESTIMATOR SIMULATION RUNS
 ###     sim_pos_factor() - n draws of a non-negative factor with given mean and variance from the gamma, lognormal or bimodal family.
-###     sim_share_rho() - Beta-binomial overdispersion that gives the calculated transcriptome share its target measurement variance.
 ###     sim_draw_share() - n latent transcriptome shares c_i (beta) with a given mean and variance.
-###     sim_hybrid_cells() - n hybrid cells: depth, latent and calculated share, allele factors a = extrinsic + intrinsic, h, a_H and allele counts.
-###     sim_parent_cells() - n haploid parental cells with depth, factor a = extrinsic + intrinsic and Poisson counts.
+###     sim_offset_error() - n log errors of an offset resampled from the observed error pool, shifted so exp(error) has mean one.
+###     sim_hybrid_cells() - n hybrid cells: latent depth and share, haplotype offsets with their errors, allele factors a = extrinsic + intrinsic, mismatches, a_H and counts.
+###     sim_parent_cells() - n haploid parental cells with latent depth, an offset with its error, factor a = extrinsic + intrinsic and Poisson counts.
 ###     fit_phi_pair() - The .fit_one() MLE and the Poisson-corrected moment estimator on one (counts, exposure) pair, as phi with NA for a failed fit.
-###     sim_group_log2phi() - log2 phi-hat of the groups Hc, He, H, Pc, Pe under both estimators, optionally on resampled cells.
-###     sim_scenario_pars() - The four group parameter sets (Hc, He, Pc, Pe) of one grid row under the null, cis or trans scenario.
-###     estimator_sim_truth() - Latent truth of one truth key: variances of a h, a_H and a from up to 5e7 streamed draws, with their Monte Carlo error.
+###     sim_group_log2phi() - log2 phi-hat of the groups Hc, He, H, Pc, Pe under both estimators with their own offsets, optionally on resampled cells.
+###     sim_scenario_pars() - The group parameter sets (Hc, He, Pc, Pe) of one grid row under the null, cis or trans scenario, with the offset-error variances.
+###     estimator_sim_truth() - Latent truth of one truth key: the CV2 of each fitted factor a m from up to 5e7 streamed draws, with its Monte Carlo error.
 ###     estimator_sim_row() - one grid row of the estimator simulation: formula predictions, replicate fits, bootstrap SEs and coverage against the latent truth.
 ###     wmean() - Grid-weighted mean of the simulation summary, dropping missing cells with their weights.
 ###   13e. FUNCTIONS THE DIRECT CIS-CONTRAST SIMULATION RUNS
@@ -4090,12 +4090,15 @@ gse_job_set <- function(q, ranks_lists) {
 ## ============================================================
 ## 13d. FUNCTIONS THE ESTIMATOR SIMULATION RUNS
 ## ============================================================
-## estimator_sim.R asks whether the NB maximum-likelihood fit (.fit_one()) recovers the dispersion
-## of the count-scale factor when that factor is not gamma, and compares it with a Poisson-corrected
-## moment estimator on the same simulated cells. phi = 1/theta throughout (phi = Var of the factor
-## that multiplies the Poisson mean). Truth comes from the latent draws themselves: Var(a * h) for an
-## allele fit, Var(a_H) for the summed hybrid, Var(a_P) for a parent. The Appendix A formulas are
-## kept apart from truth and appear only as predictions.
+## estimator_sim.R asks whether the NB maximum-likelihood fit (.fit_one()) recovers the dispersion of a count-scale
+## factor that is not gamma, and compares it with a Poisson-corrected moment estimator on the same simulated cells.
+## phi = 1/theta throughout. The offsets mirror analysis.R Section 2: every offset (a parent's, or a hybrid allele's
+## haplotype offset s_Hc, s_He) is an estimate of the cell's latent scale and carries a multiplicative error exp(eta)
+## drawn from the observed error distribution EPS.POOL[group] (sim_inputs.R), so the count mean is (latent scale) x mu x
+## a while the fit divides by the offset. The
+## fit therefore sees the factor f = a m with mismatch m = exp(-eta). Truth is the squared coefficient of variation of f
+## from the latent draws themselves: CV2(a m) for an allele fit and a parent, CV2(a_H m_H) for the summed hybrid. The
+## Appendix A formulas are kept apart and appear only as predictions.
 
 ## sim_pos_factor: n draws of a non-negative variable with mean m and variance v from one shape
 ## family, so families differ in shape while sharing their first two moments. gamma: the NB-implied
@@ -4123,17 +4126,6 @@ sim_pos_factor <- function(n, family, m, v) {
     stop("sim_pos_factor(): unknown family '", family, "'"))
 }
 
-## sim_share_rho: beta-binomial overdispersion rho that makes the calculated share C_i = L_Hc / L_H carry
-## the target measurement variance var_cc = E[Var(C | c)]. With library size L, Var(C | c, L) =
-## c(1-c)/L * (1 + (L-1) rho); averaging over c and the library-size vector gives rho in closed form.
-## rho = 0 is the pure binomial floor; a target below the floor is raised to it.
-sim_share_rho <- function(var_cc, cbar, var_c, lib) {
-  if (!is.numeric(var_cc) || length(var_cc) != 1 || !is.finite(var_cc) || var_cc < 0) stop("sim_share_rho(): var_cc must be one non-negative number")
-  ec <- cbar * (1 - cbar) - var_c                    # E[c (1 - c)]
-  m1 <- mean(1 / lib)
-  max(0, (var_cc / ec - m1) / (1 - m1))
-}
-
 ## sim_draw_share: n latent transcriptome shares c_i with mean cbar and variance var_c (beta).
 sim_draw_share <- function(n, cbar, var_c) {
   if (var_c <= 0) return(rep(cbar, n))
@@ -4142,24 +4134,40 @@ sim_draw_share <- function(n, cbar, var_c) {
   rbeta(n, cbar * k, (1 - cbar) * k)
 }
 
-## sim_hybrid_cells: n hybrid cells. Depth S_i = L_i / D from the library-size vector; latent share c_i; the
-## library-level Hc count L_Hc ~ beta-binomial(L_i, c_i, rho) gives the calculated share C_i = L_Hc / L_i. Each
-## allele factor is a_i = ext_i + prv_i: one extrinsic part shared by both alleles (mean 1 - omega, variance
-## sigma2_d = (1 - omega) phi_ref) plus a private intrinsic part (mean omega, variance phi - sigma2_d). The latent
-## products h = c / C and a_H follow the model; counts are Poisson with mean S c mu a. Returns the latent
-## quantities, the exposures each fit uses, and (counts = TRUE) the observed allele counts.
-sim_hybrid_cells <- function(n, par, lib, D, rho, family, counts = TRUE) {
+## sim_offset_error: n draws of the log error eta of an offset, resampled from the observed pool of log errors (each
+## group's EPS.POOL entry, centered at zero), shifted so that exp(eta) has mean one and the offset is unbiased for the
+## latent scale. A pool of the single value 0 gives an exact offset. Resampling keeps the shape of the error
+## distribution, tails included.
+sim_offset_error <- function(n, pool) {
+  if (!is.numeric(pool) || length(pool) < 1 || any(!is.finite(pool))) stop("sim_offset_error(): pool must be a finite numeric vector")
+  if (length(pool) == 1) {
+    if (pool != 0) stop("sim_offset_error(): a pool of one value must be 0, an exact offset")
+    return(rep(0, n))
+  }
+  pool[sample.int(length(pool), n, replace = TRUE)] - log(mean(exp(pool)))
+}
+
+## sim_hybrid_cells: n hybrid cells. Latent depth S_i = L_i / D from the library-size vector and latent share c_i.
+## The haplotype offsets are the latent scales times their errors, s_Hc = S c exp(eta_Hc) and s_He = S (1 - c)
+## exp(eta_He); the calculated share is C_i = s_Hc / (s_Hc + s_He). Each allele factor is a_i = ext_i + prv_i: one
+## extrinsic part shared by both alleles (mean 1 - omega, variance sigma2_d = (1 - omega) phi_ref) plus a private
+## intrinsic part (mean omega, variance phi - sigma2_d). The mismatches m = latent scale / offset are m_Hc, m_He for
+## the alleles and m_H = S / (s_Hc + s_He) for the summed hybrid, and a_H weights the allele factors by share.
+## Counts are Poisson with mean S c mu a. Returns the latent quantities, the offsets each fit uses and, with counts =
+## TRUE, the observed allele counts.
+sim_hybrid_cells <- function(n, par, lib, D, family, counts = TRUE) {
   L <- lib[sample.int(length(lib), n, replace = TRUE)]
   S <- L / D
   c <- sim_draw_share(n, par$cbar, par$var_c)
-  Lhc <- rbinom(n, round(L), if (rho > 1e-12) rbeta(n, c * (1 - rho) / rho, (1 - c) * (1 - rho) / rho) else c)
-  C <- pmin(pmax(Lhc / L, 0.5 / L), 1 - 0.5 / L)
+  s_hc <- S * c * exp(sim_offset_error(n, par$eps_hc))
+  s_he <- S * (1 - c) * exp(sim_offset_error(n, par$eps_he))
   s2d <- (1 - par$omega) * par$phi_ref
   ext <- sim_pos_factor(n, family, 1 - par$omega, s2d)
   a_hc <- ext + sim_pos_factor(n, family, par$omega, par$phi_hc - s2d)
   a_he <- ext + sim_pos_factor(n, family, par$omega, par$phi_he - s2d)
   muH <- par$cbar * par$mu_hc + (1 - par$cbar) * par$mu_he
-  out <- list(S = S, c = c, C = C, a_hc = a_hc, a_he = a_he, h_hc = c / C, h_he = (1 - c) / (1 - C),
+  out <- list(S = S, c = c, C = s_hc / (s_hc + s_he), s_hc = s_hc, s_he = s_he, a_hc = a_hc, a_he = a_he,
+              m_hc = S * c / s_hc, m_he = S * (1 - c) / s_he, m_H = S / (s_hc + s_he),
               a_H  = (c * par$mu_hc * a_hc + (1 - c) * par$mu_he * a_he) / muH,
               a_H0 = (par$cbar * par$mu_hc * a_hc + (1 - par$cbar) * par$mu_he * a_he) / muH)   # share held at its mean
   if (counts) {
@@ -4169,19 +4177,21 @@ sim_hybrid_cells <- function(n, par, lib, D, rho, family, counts = TRUE) {
   out
 }
 
-## sim_parent_cells: n haploid parental cells with no share structure: depth S_i, factor a = ext + prv with the same
-## extrinsic variance as the hybrid, counts Poisson(S mu a).
-sim_parent_cells <- function(n, mu, phi, omega, phi_ref, lib, D, family, counts = TRUE) {
+## sim_parent_cells: n haploid parental cells with no share structure: latent depth S_i, offset s = S exp(eta) with
+## error pool eps, mismatch m = S / s, factor a = ext + prv with the same extrinsic variance as the hybrid, counts
+## Poisson(S mu a).
+sim_parent_cells <- function(n, mu, phi, omega, phi_ref, eps, lib, D, family, counts = TRUE) {
   S <- lib[sample.int(length(lib), n, replace = TRUE)] / D
+  s <- S * exp(sim_offset_error(n, eps))
   s2d <- (1 - omega) * phi_ref
   a <- sim_pos_factor(n, family, 1 - omega, s2d) + sim_pos_factor(n, family, omega, phi - s2d)
-  out <- list(S = S, a = a)
+  out <- list(S = S, s = s, m = S / s, a = a)
   if (counts) out$y <- rpois(n, S * mu * a)
   out
 }
 
 ## fit_phi_pair: both estimators on one (counts, exposure) pair, returned as phi (not theta). mle: 1/theta from
-## .fit_one(), failed (NA) when theta is Inf or NA. mom: sum[(y - m)^2 - m] / sum(m^2) with m = mu_hat * exposure and
+## .fit_one(), failed (NA) when theta is Inf or NA. mom: sum[(y - m)^2 - m] / sum(m^2) with m = mu-hat * exposure and
 ## the same mu_hat = sum(y) / sum(exposure), failed (NA) when not above zero. A failed fit returns NA.
 fit_phi_pair <- function(y, expo) {
   theta <- .fit_one(y, expo)[["disp"]]
@@ -4198,66 +4208,71 @@ fit_phi_pair <- function(y, expo) {
 }
 
 ## sim_group_log2phi: log2 phi-hat of the five fitted groups (Hc, He, H, Pc, Pe) under both estimators for one set of
-## cells. Hc and He use the allele-specific offset S * C and S * (1 - C); H uses the depth offset S; parents use
-## their own depth. idx_h, idx_c, idx_e (optional) resample the cells of the hybrid, Pc and Pe; one hybrid index
-## serves Hc, He and H so the alleles stay paired. Returns a 2 x 5 matrix (rows mle, mom).
+## cells. Hc and He use their haplotype offsets s_Hc and s_He; H uses the summed offset s_Hc + s_He; each parent uses
+## its own offset. idx_h, idx_c, idx_e (optional) resample the cells of the hybrid, Pc and Pe; one hybrid index serves
+## Hc, He and H so the alleles stay paired. Returns a 2 x 5 matrix (rows mle, mom).
 sim_group_log2phi <- function(h, pc, pe, idx_h = NULL, idx_c = NULL, idx_e = NULL) {
   ih <- if (is.null(idx_h)) seq_along(h$S) else idx_h
   ic <- if (is.null(idx_c)) seq_along(pc$S) else idx_c
   ie <- if (is.null(idx_e)) seq_along(pe$S) else idx_e
   fits <- cbind(
-    Hc = fit_phi_pair(h$y_hc[ih], (h$S * h$C)[ih]),
-    He = fit_phi_pair(h$y_he[ih], (h$S * (1 - h$C))[ih]),
-    H  = fit_phi_pair(h$y_hc[ih] + h$y_he[ih], h$S[ih]),
-    Pc = fit_phi_pair(pc$y[ic], pc$S[ic]),
-    Pe = fit_phi_pair(pe$y[ie], pe$S[ie]))
+    Hc = fit_phi_pair(h$y_hc[ih], h$s_hc[ih]),
+    He = fit_phi_pair(h$y_he[ih], h$s_he[ih]),
+    H  = fit_phi_pair(h$y_hc[ih] + h$y_he[ih], (h$s_hc + h$s_he)[ih]),
+    Pc = fit_phi_pair(pc$y[ic], pc$s[ic]),
+    Pe = fit_phi_pair(pe$y[ie], pe$s[ie]))
   log2(fits)
 }
 
 ## sim_scenario_pars: the group parameters of one GRID row g. Scenario sets them: null (every group at the Sc values,
 ## dmu = dphi = 0), cis (Hc = Pc at the Sc values, He = Pe at the Se values = Sc shifted by dmu and dphi), trans (parents
-## differ, both hybrid alleles at the Sc values). Returns list(par, pc, pe): par feeds sim_hybrid_cells(); pc and pe are
-## c(mu, phi) of the parents.
-sim_scenario_pars <- function(g, var_c) {
+## differ, both hybrid alleles at the Sc values). eps_pool holds the observed offset-error pools EPS.POOL (PC, PE, HC, HE);
+## v is the variance of a pool, the first-order mismatch variance the formulas use. Returns list(par, pc, pe, eps_pc,
+## eps_pe, v_pc, v_pe): par feeds sim_hybrid_cells(); pc and pe are c(mu, phi) of the parents.
+sim_scenario_pars <- function(g, var_c, eps_pool) {
+  if (!all(c("PC", "PE", "HC", "HE") %in% names(eps_pool))) stop("sim_scenario_pars(): eps_pool needs the names PC, PE, HC and HE")
   sc <- c(mu = g$mu, phi = g$phi)
   se <- c(mu = g$mu * 2^g$dmu, phi = g$phi * 2^g$dphi)
   he <- if (g$scenario == "cis") se else sc
   list(par = list(cbar = g$cbar, var_c = var_c, omega = g$omega, phi_ref = g$phi,
-                  mu_hc = sc[["mu"]], mu_he = he[["mu"]], phi_hc = sc[["phi"]], phi_he = he[["phi"]]),
-       pc = sc, pe = se)
+                  mu_hc = sc[["mu"]], mu_he = he[["mu"]], phi_hc = sc[["phi"]], phi_he = he[["phi"]],
+                  eps_hc = eps_pool[["HC"]], eps_he = eps_pool[["HE"]], v_hc = var(eps_pool[["HC"]]), v_he = var(eps_pool[["HE"]])),
+       pc = sc, pe = se, eps_pc = eps_pool[["PC"]], eps_pe = eps_pool[["PE"]], v_pc = var(eps_pool[["PC"]]), v_pe = var(eps_pool[["PE"]]))
 }
 
 ## estimator_sim_truth: the latent truth of one truth key k (rows sharing family, phi, omega, cbar, scenario and shift
-## share it, because it does not depend on the mean or the cell number). The truth is the population variance of the
-## latent factors from NTRUE drawn cells, accumulated over chunks so memory stays flat: Var(a h) for Hc and He, Var(a_H)
-## for the summed hybrid, Var(a) for the parents, plus Var(a) of each allele, Var(h), and the share-held-fixed a_H0 behind
-## the ploidy shift. mc_se is the Monte Carlo error of the largest of the five log2 variances, from the spread of the
-## per-chunk variances. Returns a list of those quantities and the beta-binomial rho used.
-estimator_sim_truth <- function(k, GRID, LIB.HYB, LIB.PAR, DEPTH.REF, NTRUE, SEED.BASE, VAR.C, VAR.CC) {
-  for (nm in c("NTRUE", "DEPTH.REF", "VAR.C", "VAR.CC"))
+## share it, because it does not depend on the mean or the cell number). The truth is the squared coefficient of
+## variation of each fitted factor from NTRUE drawn cells, accumulated over chunks so memory stays flat: CV2(a m) for
+## Hc and He, CV2(a_H m_H) for the summed hybrid, CV2(a m) for the parents. It also returns Var(a) of each allele and
+## of the summed hybrid, the CV2 of every mismatch m, and the share-held-fixed a_H0 behind the ploidy shift. mc_se is
+## the Monte Carlo error of the largest of the five log2 truths, from the spread of the per-chunk values.
+estimator_sim_truth <- function(k, GRID, LIB.HYB, LIB.PAR, DEPTH.REF, NTRUE, SEED.BASE, VAR.C, EPS.POOL) {
+  for (nm in c("NTRUE", "DEPTH.REF", "VAR.C"))
     if (!is.numeric(get(nm)) || length(get(nm)) != 1 || !is.finite(get(nm)) || get(nm) < 0) stop("estimator_sim_truth(): ", nm, " must be one non-negative number")
   g  <- GRID[match(k, GRID$tkey), ]
-  sp <- sim_scenario_pars(g, VAR.C)
-  rho <- sim_share_rho(VAR.CC, g$cbar, VAR.C, LIB.HYB)
+  sp <- sim_scenario_pars(g, VAR.C, EPS.POOL)
   nch <- max(10L, ceiling(NTRUE / 1e6)); ch <- ceiling(NTRUE / nch)      # at least 10 chunks, so the chunk spread exists
-  vn  <- c("ah_hc", "ah_he", "aH", "pc", "pe", "a_hc", "a_he", "aH0", "h_hc", "h_he", "err")
+  vn  <- c("f_hc", "f_he", "f_H", "f_pc", "f_pe", "a_hc", "a_he", "a_H", "a_pc", "aH0", "m_hc", "m_he", "m_H", "m_pc", "m_pe", "err")
   s1 <- s2 <- setNames(numeric(length(vn)), vn)
   cv <- matrix(NA_real_, nch, length(vn), dimnames = list(NULL, vn))
   set.seed(SEED.BASE + 1e6 + k)
   for (b in seq_len(nch)) {
-    th  <- sim_hybrid_cells(ch, sp$par, LIB.HYB, DEPTH.REF, rho, g$family, counts = FALSE)
-    tpc <- sim_parent_cells(ch, sp$pc[["mu"]], sp$pc[["phi"]], g$omega, g$phi, LIB.PAR, DEPTH.REF, g$family, counts = FALSE)
-    tpe <- sim_parent_cells(ch, sp$pe[["mu"]], sp$pe[["phi"]], g$omega, g$phi, LIB.PAR, DEPTH.REF, g$family, counts = FALSE)
-    X <- cbind(ah_hc = th$a_hc * th$h_hc, ah_he = th$a_he * th$h_he, aH = th$a_H, pc = tpc$a, pe = tpe$a,
-               a_hc = th$a_hc, a_he = th$a_he, aH0 = th$a_H0, h_hc = th$h_hc, h_he = th$h_he, err = (th$C - th$c)^2)
-    s1 <- s1 + colSums(X); s2 <- s2 + colSums(X^2); cv[b, ] <- apply(X, 2, var)
+    th  <- sim_hybrid_cells(ch, sp$par, LIB.HYB, DEPTH.REF, g$family, counts = FALSE)
+    tpc <- sim_parent_cells(ch, sp$pc[["mu"]], sp$pc[["phi"]], g$omega, g$phi, sp$eps_pc, LIB.PAR, DEPTH.REF, g$family, counts = FALSE)
+    tpe <- sim_parent_cells(ch, sp$pe[["mu"]], sp$pe[["phi"]], g$omega, g$phi, sp$eps_pe, LIB.PAR, DEPTH.REF, g$family, counts = FALSE)
+    X <- cbind(f_hc = th$a_hc * th$m_hc, f_he = th$a_he * th$m_he, f_H = th$a_H * th$m_H, f_pc = tpc$a * tpc$m, f_pe = tpe$a * tpe$m,
+               a_hc = th$a_hc, a_he = th$a_he, a_H = th$a_H, a_pc = tpc$a, aH0 = th$a_H0, m_hc = th$m_hc, m_he = th$m_he, m_H = th$m_H,
+               m_pc = tpc$m, m_pe = tpe$m, err = (th$C - th$c)^2)
+    s1 <- s1 + colSums(X); s2 <- s2 + colSums(X^2); cv[b, ] <- apply(X, 2, var) / colMeans(X)^2
   }
   n <- nch * ch
-  v <- s2 / n - (s1 / n)^2                                                # population variance of each latent quantity
-  list(lat = c(Hc = v[["ah_hc"]], He = v[["ah_he"]], H = v[["aH"]], Pc = v[["pc"]], Pe = v[["pe"]]),
-       lat_a = c(Hc = v[["a_hc"]], He = v[["a_he"]]), sigma2_h = c(Hc = v[["h_hc"]], He = v[["h_he"]]),
-       delta_sim = log2(v[["pc"]] / v[["aH0"]]), var_cc_sim = s1[["err"]] / n, rho = rho,
-       mc_se = max(apply(log2(cv[, c("ah_hc", "ah_he", "aH", "pc", "pe")]), 2, sd)) / sqrt(nch))
+  mu <- s1 / n; v <- s2 / n - mu^2                                        # population mean and variance of each latent quantity
+  cv2 <- v / mu^2                                                         # squared coefficient of variation
+  list(lat = c(Hc = cv2[["f_hc"]], He = cv2[["f_he"]], H = cv2[["f_H"]], Pc = cv2[["f_pc"]], Pe = cv2[["f_pe"]]),
+       lat_a = c(Hc = v[["a_hc"]], He = v[["a_he"]], H = v[["a_H"]]),
+       sigma2_m = c(Hc = cv2[["m_hc"]], He = cv2[["m_he"]], H = cv2[["m_H"]], Pc = cv2[["m_pc"]], Pe = cv2[["m_pe"]]),
+       delta_sim = log2(v[["a_pc"]] / v[["aH0"]]), var_cc_sim = s1[["err"]] / n,
+       mc_se = max(apply(log2(cv[, c("f_hc", "f_he", "f_H", "f_pc", "f_pe")]), 2, sd)) / sqrt(nch))
 }
 
 ## estimator_sim_row: one row i of GRID (mean x dispersion x intrinsic fraction x mean share x cell fraction x
@@ -4266,22 +4281,23 @@ estimator_sim_truth <- function(k, GRID, LIB.HYB, LIB.PAR, DEPTH.REF, NTRUE, SEE
 ## bootstraps the cells with all indices drawn before any fit. Returns list(est, agree): est has one row per
 ## target (five groups, six contrasts) x estimator with failure rate, bias and RMSE against truth, bias against the
 ## formula prediction, bootstrap SE and 95% percentile-interval coverage; agree holds the latent quantities beside
-## the Appendix A predictions.
-estimator_sim_row <- function(i, GRID, TRUTH, LIB.HYB, LIB.PAR, DEPTH.REF, N.OBS, NREP, NBOOT, SEED.BASE, VAR.C, VAR.CC) {
-  for (nm in c("NREP", "NBOOT", "DEPTH.REF", "VAR.C", "VAR.CC"))
+## the predictions. The predictions are phi + sigma2_m (1 + phi) with sigma2_m the offset-error variance of the group
+## (to first order v_Hc, v_He, c-bar^2 v_Hc + (1 - c-bar)^2 v_He for the summed hybrid, and v for a parent), and
+## Appendix A for the summed hybrid's own dispersion.
+estimator_sim_row <- function(i, GRID, TRUTH, LIB.HYB, LIB.PAR, DEPTH.REF, N.OBS, NREP, NBOOT, SEED.BASE, VAR.C, EPS.POOL) {
+  for (nm in c("NREP", "NBOOT", "DEPTH.REF", "VAR.C"))
     if (!is.numeric(get(nm)) || length(get(nm)) != 1 || !is.finite(get(nm)) || get(nm) < 0) stop("estimator_sim_row(): ", nm, " must be one non-negative number")
   if (NREP < 2) stop("estimator_sim_row(): NREP must be at least 2")
   g <- GRID[i, ]
-  sp <- sim_scenario_pars(g, VAR.C)
+  sp <- sim_scenario_pars(g, VAR.C, EPS.POOL)
   par <- sp$par; pc_par <- sp$pc; pe_par <- sp$pe
   tr  <- TRUTH[[as.character(g$tkey)]]
-  rho <- tr$rho
   nh <- max(20L, round(g$frac * N.OBS[["HYB"]]))
   nc <- max(20L, round(g$frac * N.OBS[["MIX.SC"]]))
   ne <- max(20L, round(g$frac * N.OBS[["MIX.SE"]]))
   targets <- c("Hc", "He", "H", "Pc", "Pe", "cis", "trans", "dpar_Pc", "dpar_Pe", "dom")
 
-  ## truth: log2 of the latent variances, and the contrasts built from them
+  ## truth: log2 of the latent CV2 of each fitted factor, and the contrasts built from them
   lat <- tr$lat; lat_a <- tr$lat_a
   truth <- c(log2(lat[c("Hc", "He", "H", "Pc", "Pe")]),
              cis = log2(lat[["Hc"]]) - log2(lat[["He"]]), trans = NA_real_,
@@ -4293,27 +4309,32 @@ estimator_sim_row <- function(i, GRID, TRUTH, LIB.HYB, LIB.PAR, DEPTH.REF, N.OBS
 
   ## predictions from the derived formulas (parameters only, no latent draws)
   s2d   <- (1 - g$omega) * g$phi
-  sh_hc <- VAR.CC / g$cbar^2; sh_he <- VAR.CC / (1 - g$cbar)^2
+  sm_hc <- par$v_hc; sm_he <- par$v_he                          # first-order mismatch variances of the allele offsets
+  sm_H  <- g$cbar^2 * par$v_hc + (1 - g$cbar)^2 * par$v_he       # summed hybrid: the offset sum weights the alleles by share
   muH   <- g$cbar * par$mu_hc + (1 - g$cbar) * par$mu_he
-  pred_hc <- par$phi_hc + sh_hc * (1 + par$phi_hc)       # phi + sigma2_h (1 + phi)
-  pred_he <- par$phi_he + sh_he * (1 + par$phi_he)
+  pred_hc <- par$phi_hc + sm_hc * (1 + par$phi_hc)               # phi + sigma2_m (1 + phi)
+  pred_he <- par$phi_he + sm_he * (1 + par$phi_he)
   ## summed-hybrid dispersion, Appendix A before the equal-allele-variance step (it reduces to the final
   ## form when phi_Hc = phi_He): within-share part plus the between-share part
   phiH_fun <- function(var_c) (((g$cbar^2 + var_c) * par$mu_hc^2 * par$phi_hc + ((1 - g$cbar)^2 + var_c) * par$mu_he^2 * par$phi_he +
                                2 * (g$cbar * (1 - g$cbar) - var_c) * par$mu_hc * par$mu_he * s2d) + var_c * (par$mu_hc - par$mu_he)^2) / muH^2
   phiH_pred <- phiH_fun(VAR.C)
+  pred_H    <- phiH_pred + sm_H * (1 + phiH_pred)
+  pred_pc <- pc_par[["phi"]] + sp$v_pc * (1 + pc_par[["phi"]]); pred_pe <- pe_par[["phi"]] + sp$v_pe * (1 + pe_par[["phi"]])
   pi_hc <- g$cbar * par$mu_hc / muH
   delta_formula <- if (isTRUE(all.equal(par$phi_hc, par$phi_he))) -log2(1 - (1 - pi_hc^2 - (1 - pi_hc)^2) * g$omega) else NA_real_
-  pred <- c(Hc = log2(pred_hc), He = log2(pred_he), H = log2(phiH_pred), Pc = log2(pc_par[["phi"]]), Pe = log2(pe_par[["phi"]]),
+  pred <- c(Hc = log2(pred_hc), He = log2(pred_he), H = log2(pred_H), Pc = log2(pred_pc), Pe = log2(pred_pe),
             cis = log2(pred_hc) - log2(pred_he), trans = NA_real_,
-            dpar_Pc = log2(phiH_pred) - log2(pc_par[["phi"]]), dpar_Pe = log2(phiH_pred) - log2(pe_par[["phi"]]),
-            dom = log2(phiH_pred) - (log2(pc_par[["phi"]]) + log2(pe_par[["phi"]])) / 2)
-  pred[["trans"]] <- (log2(pc_par[["phi"]]) - log2(pe_par[["phi"]])) - pred[["cis"]]
-  agree <- data.frame(i = i, truth_mc_se = tr$mc_se, rho = rho, var_cc_sim = tr$var_cc_sim,
+            dpar_Pc = log2(pred_H) - log2(pred_pc), dpar_Pe = log2(pred_H) - log2(pred_pe),
+            dom = log2(pred_H) - (log2(pred_pc) + log2(pred_pe)) / 2)
+  pred[["trans"]] <- (log2(pred_pc) - log2(pred_pe)) - pred[["cis"]]
+  agree <- data.frame(i = i, truth_mc_se = tr$mc_se, var_cc_sim = tr$var_cc_sim,
                       phi_hc = lat[["Hc"]], phi_he = lat[["He"]], phi_hc_a = lat_a[["Hc"]], phi_he_a = lat_a[["He"]],
                       pred_hc = pred_hc, pred_he = pred_he,
-                      sigma2_h_hc = tr$sigma2_h[["Hc"]], sigma2_h_he = tr$sigma2_h[["He"]], sigma2_h_hc_formula = sh_hc, sigma2_h_he_formula = sh_he,
-                      phi_H = lat[["H"]], phi_H_formula = phiH_pred, delta_sim = tr$delta_sim, delta_formula = delta_formula)
+                      sigma2_m_hc = tr$sigma2_m[["Hc"]], sigma2_m_he = tr$sigma2_m[["He"]], sigma2_m_hc_formula = sm_hc, sigma2_m_he_formula = sm_he,
+                      sigma2_m_H = tr$sigma2_m[["H"]], sigma2_m_H_formula = sm_H,
+                      phi_H = lat[["H"]], pred_H = pred_H, phi_H_a = lat_a[["H"]], phi_H_formula = phiH_pred,
+                      delta_sim = tr$delta_sim, delta_formula = delta_formula)
 
   ## replicates: cells, point estimates, then bootstrap
   set.seed(SEED.BASE + i)
@@ -4321,9 +4342,9 @@ estimator_sim_row <- function(i, GRID, TRUTH, LIB.HYB, LIB.PAR, DEPTH.REF, N.OBS
   PT  <- array(NA_real_, c(NREP, length(targets), 2), list(NULL, targets, est_names))
   BSE <- PT; LO <- PT; HI <- PT
   for (r in seq_len(NREP)) {
-    h  <- sim_hybrid_cells(nh, par, LIB.HYB, DEPTH.REF, rho, g$family)
-    pc <- sim_parent_cells(nc, pc_par[["mu"]], pc_par[["phi"]], g$omega, g$phi, LIB.PAR, DEPTH.REF, g$family)
-    pe <- sim_parent_cells(ne, pe_par[["mu"]], pe_par[["phi"]], g$omega, g$phi, LIB.PAR, DEPTH.REF, g$family)
+    h  <- sim_hybrid_cells(nh, par, LIB.HYB, DEPTH.REF, g$family)
+    pc <- sim_parent_cells(nc, pc_par[["mu"]], pc_par[["phi"]], g$omega, g$phi, sp$eps_pc, LIB.PAR, DEPTH.REF, g$family)
+    pe <- sim_parent_cells(ne, pe_par[["mu"]], pe_par[["phi"]], g$omega, g$phi, sp$eps_pe, LIB.PAR, DEPTH.REF, g$family)
     ## all resampling indices are drawn here, before any fit
     ih <- matrix(sample.int(nh, nh * NBOOT, replace = TRUE), nh, NBOOT)
     ic <- matrix(sample.int(nc, nc * NBOOT, replace = TRUE), nc, NBOOT)
@@ -4456,15 +4477,15 @@ cis_paired_moment <- function(y1, e1, y2, e2) {
 ## three estimators of the cis contrast to the same cells: option 2 (an MLE per allele with .fit_one(), then the
 ## log2 ratio, with a percentile bootstrap interval from NBOOT cell resamples drawn before any fit), the joint
 ## profile likelihood (cis_profile) and the paired moment difference (cis_paired_moment). Truth is the latent
-## Var(a h) of each allele from estimator_sim_truth(). Returns one data.frame row: failure, bias, SE, coverage and
+## CV2 of each allele's factor a m from estimator_sim_truth(). Returns one data.frame row: failure, bias, SE, coverage and
 ## width for option 2, coverage and recovery of the genes where option 2 fails for the profile likelihood, and the
 ## pairing gain for the moment difference.
-cis_direct_row <- function(i, GRID, TRUTH, LIB.HYB, DEPTH.REF, N.OBS, NREP, NBOOT, SEED.BASE, VAR.C) {
+cis_direct_row <- function(i, GRID, TRUTH, LIB.HYB, DEPTH.REF, N.OBS, NREP, NBOOT, SEED.BASE, VAR.C, EPS.POOL) {
   for (nm in c("NREP", "NBOOT", "DEPTH.REF", "VAR.C"))
     if (!is.numeric(get(nm)) || length(get(nm)) != 1 || !is.finite(get(nm)) || get(nm) < 0) stop("cis_direct_row(): ", nm, " must be one non-negative number")
   if (NREP < 2 || NBOOT < 10) stop("cis_direct_row(): NREP must be at least 2 and NBOOT at least 10")
   g  <- GRID[i, ]
-  sp <- sim_scenario_pars(g, VAR.C)
+  sp <- sim_scenario_pars(g, VAR.C, EPS.POOL)
   tr <- TRUTH[[as.character(g$tkey)]]
   nh <- max(20L, round(g$frac * N.OBS[["HYB"]]))
   truth_log2 <- log2(tr$lat[["Hc"]]) - log2(tr$lat[["He"]])
@@ -4475,8 +4496,8 @@ cis_direct_row <- function(i, GRID, TRUTH, LIB.HYB, DEPTH.REF, N.OBS, NREP, NBOO
                   p_est = NA_real_, p_lo = NA_real_, p_hi = NA_real_,
                   m_diff = NA_real_, m_sep = NA_real_, m_seu = NA_real_, m_selog = NA_real_, m_log = NA_real_)
   for (r in seq_len(NREP)) {
-    h  <- sim_hybrid_cells(nh, sp$par, LIB.HYB, DEPTH.REF, tr$rho, g$family)
-    x1 <- h$S * h$C; x2 <- h$S * (1 - h$C)
+    h  <- sim_hybrid_cells(nh, sp$par, LIB.HYB, DEPTH.REF, g$family)
+    x1 <- h$s_hc; x2 <- h$s_he                                 # each allele's own haplotype offset
     ib <- matrix(sample.int(nh, nh * NBOOT, replace = TRUE), nh, NBOOT)   # all indices before any fit
     th <- c(.fit_one(h$y_hc, x1)[["disp"]], .fit_one(h$y_he, x2)[["disp"]])
     R$e2[r] <- if (all(is.finite(th)) && all(th > 0)) log2(th[2]) - log2(th[1]) else NA_real_   # log2 phi_Hc - log2 phi_He

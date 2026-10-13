@@ -104,15 +104,17 @@ cat("\nShare of MLE cells flagged by mean (rows) and dispersion (columns), non-g
 ## ---- 3. agreement of the latent quantities with the derived corrections -------------------------
 NULLA <- AGREE[AGREE$scenario == "null", ]
 AGREE.TAB <- data.frame(
-  quantity = c("phi_Hc: latent Var(a h) vs phi + sigma2_h (1 + phi), log2", "sigma2_h: latent Var(h) / sigma2_C|c over cbar^2",
-               "phi_H: latent Var(a_H) vs Appendix A, log2", "delta: simulated minus formula"),
-  median = c(median(log2(NULLA$phi_hc / NULLA$pred_hc)), median(NULLA$sigma2_h_hc / NULLA$sigma2_h_hc_formula),
-             median(log2(NULLA$phi_H / NULLA$phi_H_formula)), median(NULLA$delta_sim - NULLA$delta_formula, na.rm = TRUE)),
-  max_abs = c(max(abs(log2(NULLA$phi_hc / NULLA$pred_hc))), max(abs(NULLA$sigma2_h_hc / NULLA$sigma2_h_hc_formula - 1)),
-              max(abs(log2(NULLA$phi_H / NULLA$phi_H_formula))), max(abs(NULLA$delta_sim - NULLA$delta_formula), na.rm = TRUE)),
+  quantity = c("phi_Hc: latent CV2(a m) vs phi + sigma2_m (1 + phi), log2", "sigma2_m: latent CV2 of the Hc mismatch over its first-order formula v_Hc",
+               "phi_H: latent CV2(a_H m_H) vs Appendix A + sigma2_m (1 + phi), log2", "phi_H: latent Var(a_H) vs Appendix A, log2",
+               "delta: simulated minus formula"),
+  median = c(median(log2(NULLA$phi_hc / NULLA$pred_hc)), median(NULLA$sigma2_m_hc / NULLA$sigma2_m_hc_formula),
+             median(log2(NULLA$phi_H / NULLA$pred_H)), median(log2(NULLA$phi_H_a / NULLA$phi_H_formula)), median(NULLA$delta_sim - NULLA$delta_formula, na.rm = TRUE)),
+  max_abs = c(max(abs(log2(NULLA$phi_hc / NULLA$pred_hc))), max(abs(NULLA$sigma2_m_hc / NULLA$sigma2_m_hc_formula - 1)),
+              max(abs(log2(NULLA$phi_H / NULLA$pred_H))), max(abs(log2(NULLA$phi_H_a / NULLA$phi_H_formula))), max(abs(NULLA$delta_sim - NULLA$delta_formula), na.rm = TRUE)),
   mc_se = median(NULLA$truth_mc_se))
 cat("\n== Agreement of the latent truth with the derived formulas (null scenario) ==\n"); print(AGREE.TAB, digits = 3, row.names = FALSE)
-cat(sprintf("Achieved sigma2_C|c in the simulation / target: median %.3f\n", median(AGREE$var_cc_sim) / VAR.CC))
+cat(sprintf("Achieved sigma2_C|c in the simulation / that implied by the Hc and He offset errors: median %.3f\n",
+            median(AGREE$var_cc_sim / (AGREE$cbar^2 * (1 - AGREE$cbar)^2 * (VAR.EPS[["HC"]] + VAR.EPS[["HE"]])))))
 
 ## ---- 4. contrasts: fitted against truth and against the predicted correction ----------------------
 CON <- EST[EST$target %in% c("cis", "trans", "dpar_Pc", "dpar_Pe", "dom") & EST$usable, ]

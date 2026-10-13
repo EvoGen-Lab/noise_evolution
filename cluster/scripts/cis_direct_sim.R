@@ -22,7 +22,7 @@ library('parallel')
 source("functions.R")
 
 load(Sys.getenv("SIM_INPUTS", unset = "estimator_sim_inputs.rda"))
-## GRID, LIB.HYB, LIB.PAR, DEPTH.REF, N.OBS, VAR.C, VAR.CC, NREP, NBOOT, NTRUE, SEED.BASE
+## GRID, LIB.HYB, LIB.PAR, DEPTH.REF, N.OBS, VAR.C, EPS.POOL, VAR.EPS, NREP, NBOOT, NTRUE, SEED.BASE
 
 NUM.CORES <- as.integer(Sys.getenv("SLURM_CPUS_PER_TASK", unset = detectCores()))
 
@@ -48,11 +48,11 @@ cat(sprintf("cis direct simulation start: array task %d of %d, %d truth keys, %d
 flush.console()
 
 ## ---- phase 1: latent truth of each key ----
-## estimator_sim_truth: the population variances of the latent factors of one truth key (here Var(a h) of the two
-## alleles is what the cis contrast targets), drawn from the latent model and not from the Appendix A formulas.
+## estimator_sim_truth: the latent truth of one truth key (here the CV2 of each allele's factor a m, which is what the cis
+## contrast targets), drawn from the latent model and not from the Appendix A formulas.
 t0 <- Sys.time()
 TRUTH <- parLapply(cl, MY.KEYS, estimator_sim_truth, GRID = GRID, LIB.HYB = LIB.HYB, LIB.PAR = LIB.PAR, DEPTH.REF = DEPTH.REF,
-                   NTRUE = NTRUE, SEED.BASE = SEED.BASE, VAR.C = VAR.C, VAR.CC = VAR.CC)
+                   NTRUE = NTRUE, SEED.BASE = SEED.BASE, VAR.C = VAR.C, EPS.POOL = EPS.POOL)
 names(TRUTH) <- MY.KEYS
 cat(sprintf("[%s] truth done: %d keys in %.1f min\n", format(Sys.time(), "%H:%M:%S"), length(MY.KEYS),
             as.numeric(difftime(Sys.time(), t0, units = "mins"))))
@@ -69,7 +69,7 @@ for (k in seq_along(chunks)) {
   ## each against the latent cis truth: failure and bias, SE, coverage and interval width, and for the datasets
   ## where option 2 fails, how often the profile interval is one- or two-sided and excludes zero.
   results[[k]] <- parLapply(cl, chunks[[k]], cis_direct_row, GRID = GRID, TRUTH = TRUTH, LIB.HYB = LIB.HYB, DEPTH.REF = DEPTH.REF,
-                            N.OBS = N.OBS, NREP = NREP, NBOOT = NBOOT, SEED.BASE = SEED.BASE, VAR.C = VAR.C)
+                            N.OBS = N.OBS, NREP = NREP, NBOOT = NBOOT, SEED.BASE = SEED.BASE, VAR.C = VAR.C, EPS.POOL = EPS.POOL)
   done <- done + length(chunks[[k]])
   el   <- as.numeric(difftime(Sys.time(), t0, units = "mins"))
   eta  <- if (el > 0) (N.POINTS - done) * (el / done) else NA_real_

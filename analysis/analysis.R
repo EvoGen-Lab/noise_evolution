@@ -339,14 +339,17 @@ DEPTH.REF <- median(c(colSums(MIX.SC), colSums(MIX.SE), colSums(HYB.SC) + colSum
 # A size factor is a relative scale. Multiplying a genome's factors by one constant anchors them to the
 # library scale of its parent: the parental offsets then average (mean parent library) / DEPTH.REF, and the
 # hybrid-allele offsets sit on that same scale, which puts Hc, He and the parents on one per-genome scale.
-if (!requireNamespace("scran", quietly = TRUE))
-  stop("Section 2 computes the offsets with scran::computeSumFactors; install scran (Bioconductor) in the project library.")
+if (!requireNamespace("scran", quietly = TRUE) || !requireNamespace("SingleCellExperiment", quietly = TRUE))
+  stop("Section 2 computes the offsets with scran::computeSumFactors; install scran (Bioconductor, with SingleCellExperiment) in the project library.")
 GENOME.MATS <- list(SC = list(parent = MIX.SC, allele = HYB.SC), SE = list(parent = MIX.SE, allele = HYB.SE))
 GENOME.EXPOS <- list()
 for (gen in names(GENOME.MATS)) {
   par.m <- GENOME.MATS[[gen]]$parent; allele.m <- GENOME.MATS[[gen]]$allele
   n.par <- ncol(par.m); n.all <- ncol(allele.m)
-  sf <- scran::computeSumFactors(cbind(par.m, allele.m), clusters = rep(c("parent", "allele"), c(n.par, n.all)))
+  # computeSumFactors takes a SingleCellExperiment, and the size factors are read back from it.
+  sce <- SingleCellExperiment::SingleCellExperiment(assays = list(counts = cbind(par.m, allele.m)))
+  sce <- scran::computeSumFactors(sce, clusters = rep(c("parent", "allele"), c(n.par, n.all)))
+  sf  <- SingleCellExperiment::sizeFactors(sce)
   stopifnot(length(sf) == n.par + n.all, all(is.finite(sf) & sf > 0))
   anchor <- mean(colSums(par.m)) / DEPTH.REF / mean(sf[seq_len(n.par)])
   GENOME.EXPOS[[gen]] <- list(parent = sf[seq_len(n.par)] * anchor, allele = sf[n.par + seq_len(n.all)] * anchor)
