@@ -195,8 +195,8 @@ map_to_orf <- function(ids, label = "") {
 ##      min_cells_expr of the remaining cells. The thresholds are arguments because the sources differ
 ##      widely in depth and cell number.
 ##   3. Exposure is each cell's library size divided by the source's mean library size, so MU is in
-##      counts per typical cell (the unit MIX.SC uses) and CV2 = 1/MU + 1/DISP is at this dataset's own
-##      depth. BFREQ = DISP and BSIZE = MU/DISP, the definitions documented for NB.SC.
+##      counts per typical cell (the unit MIX.SC uses) and CV2 = 1/MU + DISP is at this dataset's own
+##      depth. BFREQ = 1/DISP (theta) and BSIZE = MU*DISP, the definitions documented for NB.SC.
 ## cl is optional and passed to fit_counts_offset(): NULL fits on one core; a PSOCK cluster from
 ## parallel::makeCluster() splits genes across workers (the driver reuses one cluster for all sources).
 fit_scrna_source <- function(mat, raw_ids, label, min_cell_count, min_cells_expr, cl = NULL) {

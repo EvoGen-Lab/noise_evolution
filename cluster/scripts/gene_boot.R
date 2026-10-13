@@ -50,7 +50,7 @@ flush.console()
 results <- vector("list", length(chunks))
 t0 <- Sys.time(); done <- 0
 for (k in seq_along(chunks)) {
-  ## One gene's paired bootstrap: refits all 11 groups on each pre-drawn resample, forms every mode's
+  ## One gene's paired bootstrap: refits all 13 groups on each pre-drawn resample, forms every mode's
   ## mean, bfreq (NB size) and CV2 contrast per replicate, and returns the point estimate, bootstrap SE,
   ## boundary fraction and mean-bfreq draw correlation for the six reportable modes. Replicates where
   ## any needed fit is non-finite give NA for that contrast and are left out of its SD.

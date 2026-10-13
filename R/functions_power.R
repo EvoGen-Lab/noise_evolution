@@ -107,10 +107,10 @@ power_line_figure <- function(file, power, grid, outer, inner, x, series, main_f
 ## power_grid_row: power of one grid row i (mean reads x cell count x burst-frequency size) over the SIZE.RATIO sweep. The reference group's
 ## counts and fit are drawn once per replicate and reused across the sweep, so the sweep isolates the effect of SIZE.RATIO.
 power_grid_row <- function(i, ALPHA, CELL.RATIO, EXPOSURE.CV, GRID, MEAN.READS, N.CELLS, N.MIX, NI, NJ, PI1, SEED.BASE, SIZE, SIZE.RATIO) {
-  ## size_log2_ratio: log2 ratio of the NB size (disp, the burst-frequency axis) between two
+  ## size_log2_ratio: log2 ratio of the NB size (theta, the burst-frequency axis) between two
   ## .fit_one() results, NA if either side is non-positive or non-finite.
   size_log2_ratio <- function(fit_a, fit_b) {
-    a <- fit_a[["disp"]]; b <- fit_b[["disp"]]
+    a <- fit_a[["theta"]]; b <- fit_b[["theta"]]
     if (is.finite(a) && a > 0 && is.finite(b) && b > 0) log2(a) - log2(b) else NA_real_
   }
 
@@ -206,7 +206,7 @@ paired_alleles_check <- function(mu, size, phi, n = 40000, expo_cv = 0.8, tol_si
   cv2_int <- (1 + 1 / size) / (1 + cv2_ext) - 1
   v1 <- gamma_unit(n, cv2_int); v2 <- gamma_unit(n, cv2_int)
   y1 <- rpois(n, mu * expo * u * v1); y2 <- rpois(n, mu * expo * u * v2)
-  rec <- c(.fit_one(y1, expo)[["disp"]], .fit_one(y2, expo)[["disp"]])
+  rec <- c(.fit_one(y1, expo)[["theta"]], .fit_one(y2, expo)[["theta"]])
   cor_lat <- cor(u * v1, u * v2)
   stopifnot("recovered NB size is outside the tolerance" = all(abs(rec / size - 1) <= tol_size),
             "allele correlation is outside the tolerance of phi" = abs(cor_lat - phi) <= tol_cor)
@@ -309,9 +309,9 @@ power_modes_row <- function(i, ALPHA, CELL.RATIO, DEPTH.RATIO, DESIGN, EXPOSURE.
       c_se <- sim_allele_counts(mu_h, EXPO.C[[j]], u_c, size / ratio, cv2_ext); fit_cse <- .fit_one(c_se, EXPO.C[[j]])
       obs_cis   <- fit_ratio_axes(fit_csc, fit_cse)
       obs_trans <- fit_ratio_axes(fit_psc, fit_pse) - fit_ratio_axes(fit_tsc, fit_tse)
-      null_cis   <- vapply(SWAP, function(s) null_cis_axes(c_sc, c_se, EXPO.C[[j]], s), numeric(3))
-      null_ind   <- vapply(PERM.IND, function(p) null_trans_axes(par_sc, par_se, t_sc, t_se, EXPO.PSC[[j]], EXPO.PSE[[j]], EXPO.T[[j]], p$sc, p$se), numeric(3))
-      null_pai   <- vapply(PERM.PAI, function(p) null_trans_axes(par_sc, par_se, t_sc, t_se, EXPO.PSC[[j]], EXPO.PSE[[j]], EXPO.T[[j]], p$sc, p$se), numeric(3))
+      null_cis   <- vapply(SWAP, function(s) null_cis_axes(c_sc, c_se, EXPO.C[[j]], EXPO.C[[j]], s), numeric(3))
+      null_ind   <- vapply(PERM.IND, function(p) null_trans_axes(par_sc, par_se, t_sc, t_se, EXPO.PSC[[j]], EXPO.PSE[[j]], EXPO.T[[j]], EXPO.T[[j]], p$sc, p$se), numeric(3))
+      null_pai   <- vapply(PERM.PAI, function(p) null_trans_axes(par_sc, par_se, t_sc, t_se, EXPO.PSC[[j]], EXPO.PSE[[j]], EXPO.T[[j]], EXPO.T[[j]], p$sc, p$se), numeric(3))
       P[1, j, qi, ] <- pvals(obs_cis, null_cis)
       P[2, j, qi, ] <- pvals(obs_trans, null_ind)
       P[3, j, qi, ] <- pvals(obs_trans, null_pai)

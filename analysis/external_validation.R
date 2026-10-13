@@ -102,10 +102,10 @@ STEWART <- STEWART[!is.na(STEWART$ORF) & !is.na(STEWART$Mean) & !is.na(STEWART$C
 
 ## 9.2 NB-implied noise and per-source merge
 # NB-implied CV^2 and Fano factor for MIX.SC
-NB.SC$CV2   <- 1 / NB.SC$MU + 1 / NB.SC$DISP
-NB.SC$Fano  <- 1 + NB.SC$MU / NB.SC$DISP
-NB.SC$BFREQ <- NB.SC$DISP           # burst frequency, this pipeline's own DISP column
-NB.SC$BSIZE <- NB.SC$MU / NB.SC$DISP  # burst size, equivalently Fano - 1
+NB.SC$CV2   <- 1 / NB.SC$MU + NB.SC$DISP
+NB.SC$Fano  <- 1 + NB.SC$MU * NB.SC$DISP
+NB.SC$BFREQ <- 1 / NB.SC$DISP       # burst frequency theta = 1 / phi
+NB.SC$BSIZE <- NB.SC$MU * NB.SC$DISP  # burst size, equivalently Fano - 1
 
 # Implied burst frequency and burst size for each external source, via
 # add_burst_terms(). The three protein sources report fluorescence in instrument units, so they use
@@ -197,9 +197,9 @@ EXT.CORR <- EXT.CORR[, c("source", "statistic", "n", "rho", "p")]
 
 # Newman's DM is a mean-corrected residual rather than a raw CV^2, so it
 # is reported separately rather than folded into EXT.CORR above.
-NEWMAN.DM.CORR <- cor_row(1 / EXT.MERGE$Newman$DISP, EXT.MERGE$Newman$DM)
+NEWMAN.DM.CORR <- cor_row(EXT.MERGE$Newman$DISP, EXT.MERGE$Newman$DM)
 NEWMAN.DM.CORR$source    <- "Newman"
-NEWMAN.DM.CORR$statistic <- "DM vs 1/DISP"
+NEWMAN.DM.CORR$statistic <- "DM vs DISP (phi)"
 
 print(EXT.CORR, row.names = FALSE)
 print(NEWMAN.DM.CORR[, c("source", "statistic", "n", "rho", "p")], row.names = FALSE)

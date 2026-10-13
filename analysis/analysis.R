@@ -259,11 +259,77 @@ HYB.SC   <- HYB.SC[, HYB.ORD]
 HYB.SE   <- HYB.SE[, HYB.ORD]
 HYB.COMB <- HYB.SC + HYB.SE
 
-# Per-cell relative depth, used as an offset in the negative binomial fits
+# Per-cell offsets of the negative binomial fits. DEPTH.REF is the median library
+# size, so a fitted mean is the expected count of a cell at the median depth.
 DEPTH.REF <- median(c(colSums(MIX.SC), colSums(MIX.SE), colSums(HYB.SC) + colSums(HYB.SE)))
-EXPO.MIX.SC <- colSums(MIX.SC)/DEPTH.REF
-EXPO.MIX.SE <- colSums(MIX.SE)/DEPTH.REF
-EXPO.HYB    <- (colSums(HYB.SC) + colSums(HYB.SE))/DEPTH.REF
+
+# Every offset is a median-based size factor (scran::computeSumFactors), computed once per genome on the
+# parent cells and the hybrid-allele cells of that genome together: Sc is MIX.SC with HYB.SC, Se is MIX.SE
+# with HYB.SE. The factors pool cells and take medians of gene ratios, so a few highly expressed genes with
+# strong allelic effects cannot shift the scale of every other gene. Cells are clustered by group (parent or
+# hybrid allele): pools form within a group, and the same medians put the two groups on one scale.
+if (!requireNamespace("scran", quietly = TRUE) || !requireNamespace("SingleCellExperiment", quietly = TRUE))
+  stop("Section 2 computes the offsets with scran::computeSumFactors; install scran (Bioconductor, with SingleCellExperiment) in the project library.")
+GENOME.MATS <- list(SC = list(parent = MIX.SC, allele = HYB.SC), SE = list(parent = MIX.SE, allele = HYB.SE))
+GENOME.SF <- list()
+for (gen in names(GENOME.MATS)) {
+  par.m <- GENOME.MATS[[gen]]$parent; allele.m <- GENOME.MATS[[gen]]$allele
+  n.par <- ncol(par.m); n.all <- ncol(allele.m)
+  # computeSumFactors takes a SingleCellExperiment, and the size factors are read back from it.
+  sce <- SingleCellExperiment::SingleCellExperiment(assays = list(counts = cbind(par.m, allele.m)))
+  sce <- scran::computeSumFactors(sce, clusters = rep(c("parent", "allele"), c(n.par, n.all)))
+  sf  <- SingleCellExperiment::sizeFactors(sce)
+  stopifnot(length(sf) == n.par + n.all, all(is.finite(sf) & sf > 0))
+  GENOME.SF[[gen]] <- list(parent = sf[seq_len(n.par)], allele = sf[n.par + seq_len(n.all)])
+}
+
+# Median anchor. A size factor is a relative scale, so each genome needs one constant that fixes its level.
+# The two genomes are tied together by the median of the per-gene Sc:Se ratios of the parental means: most genes
+# are unchanged between the species, so the median ratio is the scale difference between the genomes, and
+# highly expressed genes with strong effects cannot move it. The constants a_Sc and a_Se give the median gene
+# the same fitted parental mean in both species (a_Sc / a_Se = that median ratio). One common constant sets the
+# level: the mean parental offset equals the mean parental library over DEPTH.REF, so a mean is the expected
+# count of a cell at the median depth. The hybrid alleles take the constant of their genome.
+MIN.ANCHOR.COUNT <- 20                                       # total parental UMIs a gene needs in each species to enter the median
+ANCHOR.GENES <- rowSums(MIX.SC) >= MIN.ANCHOR.COUNT & rowSums(MIX.SE) >= MIN.ANCHOR.COUNT
+stopifnot(sum(ANCHOR.GENES) >= 100)
+ANCHOR.LOG.RATIO <- median(log((rowSums(MIX.SC)[ANCHOR.GENES] / sum(GENOME.SF$SC$parent)) / (rowSums(MIX.SE)[ANCHOR.GENES] / sum(GENOME.SF$SE$parent))))
+ANCHOR.LEVEL <- (sum(colSums(MIX.SC)) + sum(colSums(MIX.SE))) / DEPTH.REF / (exp(ANCHOR.LOG.RATIO) * sum(GENOME.SF$SC$parent) + sum(GENOME.SF$SE$parent))
+ANCHOR <- c(SC = ANCHOR.LEVEL * exp(ANCHOR.LOG.RATIO), SE = ANCHOR.LEVEL)
+cat(sprintf("Median anchor: %d genes, median log2(Sc/Se) parental ratio before anchoring = %.3f\n", sum(ANCHOR.GENES), ANCHOR.LOG.RATIO / log(2)))
+EXPO.MIX.SC <- GENOME.SF$SC$parent * ANCHOR[["SC"]]
+EXPO.MIX.SE <- GENOME.SF$SE$parent * ANCHOR[["SE"]]
+EXPO.HYB.SC <- GENOME.SF$SC$allele * ANCHOR[["SC"]]      # s_Hc
+EXPO.HYB.SE <- GENOME.SF$SE$allele * ANCHOR[["SE"]]      # s_He
+# The summed hybrid HYB.COMB is offset by the sum of its two haplotype offsets.
+EXPO.HYB    <- EXPO.HYB.SC + EXPO.HYB.SE
+
+## 2.0 Transcriptome share of the hybrid cells
+# The calculated share C_i = s_Hc / (s_Hc + s_He) is the fraction of a cell's hybrid transcriptome
+# that comes from the Sc genome. Its mean c-bar is the genome-wide expression balance of the two
+# species. The balance is a normalization quantity: each allele is normalized by its own haplotype
+# offset, so the genome-wide Sc:Se difference is reported here and does not enter the contrasts.
+C.HAT <- EXPO.HYB.SC / EXPO.HYB
+C.BAR <- mean(C.HAT)
+N.SHARE.BOOT <- 2000; SEED.SHARE <- 1
+set.seed(SEED.SHARE)
+SHARE.IDX  <- matrix(sample.int(length(C.HAT), length(C.HAT) * N.SHARE.BOOT, replace = TRUE), length(C.HAT), N.SHARE.BOOT)   # all resamples drawn at once
+SHARE.BOOT <- colMeans(matrix(C.HAT[SHARE.IDX], length(C.HAT), N.SHARE.BOOT))
+LIB.HYB    <- colSums(HYB.SC) + colSums(HYB.SE)
+SHARE.TABLE <- data.frame(
+  quantity = c("n hybrid cells", "c-bar, mean Sc share", "95% CI of c-bar, low", "95% CI of c-bar, high", "SD of C_i across cells",
+               "SD expected from UMI sampling alone", "log2[c-bar / (1 - c-bar)], genome-wide Sc:Se balance"),
+  value = c(length(C.HAT), C.BAR, quantile(SHARE.BOOT, 0.025), quantile(SHARE.BOOT, 0.975), sd(C.HAT),
+            sqrt(C.BAR * (1 - C.BAR) * mean(1 / LIB.HYB)), log2(C.BAR / (1 - C.BAR))))
+cat("Transcriptome share of the hybrid cells\n"); print(SHARE.TABLE, digits = 4, row.names = FALSE)
+write.csv(SHARE.TABLE, file.path(TABLE.DIR, "transcriptome_share.csv"), row.names = FALSE)
+fig_pdf("extra/S_transcriptome_share.pdf", 10, 4.5)
+par(mfrow = c(1, 2))
+hist(C.HAT, breaks = 60, col = COLOR.GREY[["light"]], border = "white", main = "", xlab = "C_i = s_Hc / (s_Hc + s_He)", ylab = "# of hybrid cells")
+abline(v = C.BAR, col = COLOR.ACCENT, lwd = 2); abline(v = quantile(SHARE.BOOT, c(0.025, 0.975)), col = COLOR.ACCENT, lty = 2)
+plot(log10(LIB.HYB), C.HAT, pch = 19, cex = 0.3, col = "grey40", xlab = "log10 hybrid library size", ylab = "C_i")
+abline(h = C.BAR, col = COLOR.ACCENT, lwd = 2)
+dev.off()
 
 # Seeds and resample counts for bootstrap, permutation, and coexpression steps
 N.BOOT <- 1000; SEED.BOOT <- 1            # bootstrap resamples
@@ -276,7 +342,7 @@ N.COEXPR <- 5000; SEED.COEXPR <- 1        # Coexpression
 # choose the split of cells that should be used so that cis and trans estimates
 # have similar power to detect significant differences
 PILOT.MATS  <- list(MIX.SC = MIX.SC, MIX.SE = MIX.SE, HYB.SC = HYB.SC, HYB.SE = HYB.SE)
-PILOT.EXPOS <- list(MIX.SC = EXPO.MIX.SC, MIX.SE = EXPO.MIX.SE, HYB = EXPO.HYB)
+PILOT.EXPOS <- list(MIX.SC = EXPO.MIX.SC, MIX.SE = EXPO.MIX.SE, HYB.SC = EXPO.HYB.SC, HYB.SE = EXPO.HYB.SE)
 PILOT.GENES <- qc_gene_keep(PILOT.MATS, lambda0 = 0.001, cell_frac = 0.10)$genes
 
 ## ---- Cluster round trip: Rscript gene_pilot.R ----
@@ -349,13 +415,16 @@ SPLIT.IDX.DISP <- split_indices_by_depth(ncol(HYB.SC), SPLIT.FRAC$f_disp)
 
 HYC.SC   <- HYB.SC[, SPLIT.IDX.MEAN$c]; HYT.SC   <- HYB.SC[, SPLIT.IDX.MEAN$t]
 HYC.SE   <- HYB.SE[, SPLIT.IDX.MEAN$c]; HYT.SE   <- HYB.SE[, SPLIT.IDX.MEAN$t]
-EXPO.HYC    <- EXPO.HYB[SPLIT.IDX.MEAN$c];    EXPO.HYT    <- EXPO.HYB[SPLIT.IDX.MEAN$t]
+EXPO.HYC.SC <- EXPO.HYB.SC[SPLIT.IDX.MEAN$c]; EXPO.HYT.SC <- EXPO.HYB.SC[SPLIT.IDX.MEAN$t]
+EXPO.HYC.SE <- EXPO.HYB.SE[SPLIT.IDX.MEAN$c]; EXPO.HYT.SE <- EXPO.HYB.SE[SPLIT.IDX.MEAN$t]
 
 HYC.SC.N <- HYB.SC[, SPLIT.IDX.DISP$c]; HYT.SC.N <- HYB.SC[, SPLIT.IDX.DISP$t]
 HYC.SE.N <- HYB.SE[, SPLIT.IDX.DISP$c]; HYT.SE.N <- HYB.SE[, SPLIT.IDX.DISP$t]
-EXPO.HYC.N  <- EXPO.HYB[SPLIT.IDX.DISP$c];    EXPO.HYT.N  <- EXPO.HYB[SPLIT.IDX.DISP$t]
+EXPO.HYC.SC.N <- EXPO.HYB.SC[SPLIT.IDX.DISP$c]; EXPO.HYT.SC.N <- EXPO.HYB.SC[SPLIT.IDX.DISP$t]
+EXPO.HYC.SE.N <- EXPO.HYB.SE[SPLIT.IDX.DISP$c]; EXPO.HYT.SE.N <- EXPO.HYB.SE[SPLIT.IDX.DISP$t]
 
-# SPLIT.FIT.MATS/SPLIT.FIT.EXPOS hold 13 datasets:
+# SPLIT.FIT.MATS/SPLIT.FIT.EXPOS hold 13 datasets, each with its own offsets (a hybrid allele its
+# haplotype offset, HYB.COMB the summed offset):
 # 5 split-independent (MIX.SC, MIX.SE, HYB.SC, HYB.SE, HYB.COMB)
 # 4 at f_mean (HYC/HYT x SC/SE)
 # 4 at f_disp (HYC.N/HYT.N x SC/SE)
@@ -365,9 +434,9 @@ SPLIT.FIT.MATS <- list(
   HYC.SC.N = HYC.SC.N, HYC.SE.N = HYC.SE.N, HYT.SC.N = HYT.SC.N, HYT.SE.N = HYT.SE.N)
 
 SPLIT.FIT.EXPOS <- list(
-  MIX.SC = EXPO.MIX.SC, MIX.SE = EXPO.MIX.SE, HYB.SC = EXPO.HYB, HYB.SE = EXPO.HYB, HYB.COMB = EXPO.HYB,
-  HYC.SC = EXPO.HYC, HYC.SE = EXPO.HYC, HYT.SC = EXPO.HYT, HYT.SE = EXPO.HYT,
-  HYC.SC.N = EXPO.HYC.N, HYC.SE.N = EXPO.HYC.N, HYT.SC.N = EXPO.HYT.N, HYT.SE.N = EXPO.HYT.N)
+  MIX.SC = EXPO.MIX.SC, MIX.SE = EXPO.MIX.SE, HYB.SC = EXPO.HYB.SC, HYB.SE = EXPO.HYB.SE, HYB.COMB = EXPO.HYB,
+  HYC.SC = EXPO.HYC.SC, HYC.SE = EXPO.HYC.SE, HYT.SC = EXPO.HYT.SC, HYT.SE = EXPO.HYT.SE,
+  HYC.SC.N = EXPO.HYC.SC.N, HYC.SE.N = EXPO.HYC.SE.N, HYT.SC.N = EXPO.HYT.SC.N, HYT.SE.N = EXPO.HYT.SE.N)
 
 ## ---- Local parallel cluster: NB fits for the 13 split datasets ----
 NUM.CORES.LOCAL <- max(1, detectCores() - 1)
@@ -392,8 +461,8 @@ NCELLS <- c(MIX.SC = ncol(MIX.SC), MIX.SE = ncol(MIX.SE), HYC.SC = ncol(HYC.SC),
 
 ## 2.3 Per-gene contrasts, bootstrap SEs, and permutation null
 
-## Genes whose fit passes in every dataset of `fits`: a finite DISP below THETA.CAP (a detectable,
-## non-degenerate dispersion), a raw mean count above the dataset's depth-scaled floor, and
+## Genes whose fit passes in every dataset of `fits`: a positive finite DISP (phi = 0 is the Poisson limit, a
+## non-identifiable dispersion), a raw mean count above the dataset's depth-scaled floor, and
 ## detection in at least min_expr_frac of the smallest dataset's cells. depth is a named vector of
 ## mean reads per cell for each dataset. The mean floor min_mean applies at the shallowest dataset
 ## and scales up in proportion to depth; the detected-cell floor is one absolute number of cells,
@@ -431,10 +500,7 @@ CONTRAST.MATS <- list(
   HYT.SC.N = HYT.SC.N[GENES, ], HYT.SE.N = HYT.SE.N[GENES, ],
   HYB.SC = HYB.SC[GENES, ], HYB.SE = HYB.SE[GENES, ], HYB.COMB = HYB.COMB[GENES, ])
 
-CONTRAST.EXPOS <- list(MIX.SC = EXPO.MIX.SC, MIX.SE = EXPO.MIX.SE,
-             HYC = EXPO.HYC, HYT = EXPO.HYT,
-             HYC.N = EXPO.HYC.N, HYT.N = EXPO.HYT.N,
-             HYB = EXPO.HYB)
+CONTRAST.EXPOS <- SPLIT.FIT.EXPOS       # offsets keyed by dataset, as the fits used them
 
 CONTRAST.FITS <- lapply(SPLIT.FITS, function(fr) data.frame(MU = as.numeric(as.character(fr[GENES, "MU"])), DISP = as.numeric(as.character(fr[GENES, "DISP"])), row.names = GENES))
 
@@ -485,9 +551,10 @@ load(file.path(OUTPUT.DIR, "gene_perm_output.rda"))            # PERM.RESULTS
 ## raw twin as <col>_raw, and the column ploidy_shift records the shift applied.
 ## Mean columns pass through untouched. SEs stay as bootstrapped.
 # BURST.CONTRASTS holds, per gene, the bootstrap point estimate and SE for the mean
-# and dispersion (disp) contrasts in each of the six modes, plus two derived
-# quantities per mode: bfreq (burst frequency, the disp contrast
-# itself) and bsize (burst size, mean minus disp in log2 space)
+# and burst-frequency (bfreq) contrasts in each of the six modes, plus derived
+# quantities per mode: bsize (burst size, mean minus bfreq in log2 space) and kbal.
+# bfreq is the log2 contrast of theta = 1/phi, so the log2 contrast of the dispersion phi
+# is its negative.
 # The dpar noise estimates then leave the HYB.COMB allele-summing shift behind
 # (ploidy_adjust_dpar), with the raw values kept in the _est_raw columns.
 BURST.CONTRASTS <- local({
@@ -496,11 +563,11 @@ BURST.CONTRASTS <- local({
   shift <- PLOIDY.SHIFT
   s   <- unname(shift[df$gene])
   hyb <- fits$HYB.COMB[df$gene, ]
-  cv_h <- 1 / hyb$MU + 2^s / hyb$DISP                # latent term scaled by 2^s
+  cv_h <- 1 / hyb$MU + 2^s * hyb$DISP                # latent term (phi) scaled by 2^s
   df$ploidy_shift <- s
   for (sp in c("sc", "se")) {
     par  <- fits[[if (sp == "sc") "MIX.SC" else "MIX.SE"]][df$gene, ]
-    cv_p <- 1 / par$MU + 1 / par$DISP
+    cv_p <- 1 / par$MU + par$DISP
     est <- setNames(paste0(c("bfreq", "bsize", "kbal", "cv2"), "_dpar_", sp, "_est"), c("bfreq", "bsize", "kbal", "cv2"))
     for (q in names(est)) df[[paste0(est[[q]], "_raw")]] <- df[[est[[q]]]]
     df[[est[["bfreq"]]]] <- df[[est[["bfreq"]]]] - s
@@ -552,11 +619,69 @@ dev.off()
 # Expect correlation 0.9+ and a tight SE ratio 
 do.call(rbind, lapply(names(SEED.CHECK), seed_check_rows, checks = SEED.CHECK, count_label = "n_genes"))
 
+## 2.6 Checks of the hybrid normalization
+# The hybrid mean rate of dom and dpar is the unweighted average of the two allele rates. The summed fit
+# HYB.COMB weights the alleles by their offset totals, that is by the mean transcriptome share c-bar. For each
+# gene and each of dom, dpar_sc and dpar_se, the table gives |weighted - unweighted| in units of the bootstrap
+# SE of the reported (unweighted) contrast. Quantiles near zero show that the choice of weighting does not
+# change any gene's mean contrast in practice.
+WEIGHT.CHECK <- NULL
+MU.SUM <- CONTRAST.FITS$HYB.COMB[GENES, "MU"]
+MU.PAR <- list(sc = CONTRAST.FITS$MIX.SC[GENES, "MU"], se = CONTRAST.FITS$MIX.SE[GENES, "MU"])
+WEIGHTED.MEAN <- list(dom = log2(MU.SUM) - log2((MU.PAR$sc + MU.PAR$se) / 2),
+                      dpar_sc = log2(MU.SUM) - log2(MU.PAR$sc), dpar_se = log2(MU.SUM) - log2(MU.PAR$se))
+for (md in names(WEIGHTED.MEAN)) {
+  unweighted <- BURST.CONTRASTS[[paste0("mean_", md, "_est")]]
+  se         <- BURST.CONTRASTS[[paste0("mean_", md, "_se")]]
+  weighted   <- WEIGHTED.MEAN[[md]][match(BURST.CONTRASTS$gene, GENES)]
+  z <- abs(weighted - unweighted) / se
+  ok <- is.finite(z)
+  WEIGHT.CHECK <- rbind(WEIGHT.CHECK, data.frame(
+    contrast = md, n_genes = sum(ok),
+    median_z = median(z[ok]), p90_z = unname(quantile(z[ok], 0.90)), p99_z = unname(quantile(z[ok], 0.99)),
+    median_abs_diff_log2 = median(abs(weighted - unweighted)[ok]), median_se_log2 = median(se[ok]), row.names = NULL))
+}
+WEIGHT.CHECK$c_bar <- C.BAR
+WEIGHT.CHECK$c_bar_ci_low <- unname(quantile(SHARE.BOOT, 0.025)); WEIGHT.CHECK$c_bar_ci_high <- unname(quantile(SHARE.BOOT, 0.975))
+WEIGHT.CHECK$c_sd <- sd(C.HAT)
+cat("Weighted against unweighted hybrid mean, |difference| / bootstrap SE per gene, with the transcriptome share\n")
+print(WEIGHT.CHECK, digits = 3, row.names = FALSE)
+write.csv(WEIGHT.CHECK, file.path(TABLE.DIR, "hybrid_mean_weighting_check.csv"), row.names = FALSE)
+
+# The ploidy shift assumes the two hybrid alleles share one dispersion. log2(phi_Hc / phi_He)
+# per gene, from the full-hybrid allele fits, is read against its bootstrap SE from the internal pilot (the two alleles
+# share their resampled cells, so the SE carries their covariance). If the alleles share a dispersion, about 5% of
+# genes have |z| above 1.96 and the centre of the distribution sits at zero.
+ALLELE.DISP <- local({
+  ph_c <- CONTRAST.FITS$HYB.SC[GENES, "DISP"]; ph_e <- CONTRAST.FITS$HYB.SE[GENES, "DISP"]
+  ok <- is.finite(ph_c) & is.finite(ph_e) & ph_c > 0 & ph_e > 0
+  ratio <- setNames(log2(ph_c / ph_e), GENES)[ok]
+  pil   <- PILOT.SE[match(names(ratio), PILOT.SE$gene), ]
+  se    <- sqrt(pmax(pil$HYB.SC_logdisp_se^2 + pil$HYB.SE_logdisp_se^2 - 2 * pil$HYB_logdisp_cov, 0)) / log(2)
+  z     <- ratio / se
+  list(ratio = ratio, z = z, summary = data.frame(
+    n_genes = length(ratio), median = median(ratio), q25 = unname(quantile(ratio, 0.25)), q75 = unname(quantile(ratio, 0.75)),
+    q05 = unname(quantile(ratio, 0.05)), q95 = unname(quantile(ratio, 0.95)), share_beyond_1_log2 = mean(abs(ratio) > 1),
+    median_se = median(se[is.finite(se)]), share_abs_z_above_1.96 = mean(abs(z[is.finite(z)]) > 1.96), row.names = NULL))
+})
+cat("log2(phi_Hc / phi_He) across genes (equal allele dispersions: median 0, share |z| > 1.96 near 0.05)\n")
+print(ALLELE.DISP$summary, digits = 3, row.names = FALSE)
+write.csv(ALLELE.DISP$summary, file.path(TABLE.DIR, "allele_dispersion_check.csv"), row.names = FALSE)
+fig_pdf("extra/S_allele_dispersion_ratio.pdf", 10, 4.5)
+par(mfrow = c(1, 2))
+hist(pmax(pmin(ALLELE.DISP$ratio, 4), -4), breaks = seq(-4, 4, by = 0.1), col = COLOR.GREY[["light"]], border = "white", main = "",
+     xlab = "log2(phi_Hc / phi_He)", ylab = "# of genes"); abline(v = 0, col = COLOR.ACCENT, lwd = 2)
+hist(pmax(pmin(ALLELE.DISP$z[is.finite(ALLELE.DISP$z)], 6), -6), breaks = seq(-6, 6, by = 0.25), col = COLOR.GREY[["light"]], border = "white", main = "",
+     xlab = "z = ratio / bootstrap SE", ylab = "# of genes"); abline(v = c(-1.96, 0, 1.96), col = COLOR.ACCENT, lty = c(2, 1, 2))
+dev.off()
+
 # Checkpoint: the fitted NB models, per-gene contrasts, and every Section 2
 # object that later sections read.
 save(GENES, HYB.COMB, CONTRAST.FITS, CONTRAST.MATS, CONTRAST.EXPOS, SPLIT.FITS,
      BOOT.CONTRASTS, BURST.CONTRASTS, PERM.RESULTS, PR, PLOIDY.SHIFT, N.PERM,
-     HYB.SC, HYB.SE, EXPO.MIX.SC, EXPO.MIX.SE, EXPO.HYB, N.COEXPR, SEED.COEXPR,
+     HYB.SC, HYB.SE, EXPO.MIX.SC, EXPO.MIX.SE, EXPO.HYB.SC, EXPO.HYB.SE, EXPO.HYB, C.HAT, C.BAR, SHARE.TABLE,
+     WEIGHT.CHECK, ALLELE.DISP,
+     N.COEXPR, SEED.COEXPR,
      SPLIT.IDX.MEAN, SPLIT.IDX.DISP, SPLIT.FRAC,
      file = ckpt_path(2))
 
@@ -607,10 +732,11 @@ dev.off()
 
 ## 3.3 Dominance classification: mean, burst frequency, burst size,
 ## kinetic balance
-# dpar contrasts compare the combined hybrid (both alleles, offset by the
-# full diploid library) with one haploid parent. The offset places both on a
-# share of library scale, so an additive gene sits at the midparent on the
-# mean axis and the library doubling cancels. On the noise axis the sum of two
+# dpar contrasts compare the hybrid with one haploid parent. On the mean axis
+# the hybrid mean rate is the unweighted average of the two allele fits, each
+# on the per-genome scale of the parents (its own haplotype offset), so an
+# additive gene sits at the midparent. On the noise axis the summed hybrid
+# (HYB.COMB, offset s_Hc + s_He) is fitted, and the sum of two
 # alleles averages their intrinsic noise, so bfreq rises in the hybrid and cv2
 # falls. The BURST.CONTRASTS block removes that shift from the dpar estimates
 DOM.VEC <- lapply(setNames(QUANTITIES, QUANTITIES), function(q) dom_class_vec(BURST.CONTRASTS, PR, q))
@@ -830,13 +956,13 @@ CO.GENES <- union(GENES[order(CONTRAST.FITS$MIX.SC$MU, decreasing = TRUE)][1:250
 length(CO.GENES)
 
 # Both hybrid alleles summed, allele identity ignored, the same
-# HYB.COMB and EXPO.HYB combination already used for the single-gene
-# "hybrid total" (dpar_sc/dpar_se)
+# HYB.COMB and its summed offset EXPO.HYB, already used for the single-gene
+# "hybrid total" noise contrasts (dpar_sc/dpar_se). Each allele keeps its own haplotype offset.
 RESID <- list(
   MIX.SC = nb_residuals(MIX.SC[CO.GENES, ], EXPO.MIX.SC, CONTRAST.FITS$MIX.SC[CO.GENES, ]),
   MIX.SE = nb_residuals(MIX.SE[CO.GENES, ], EXPO.MIX.SE, CONTRAST.FITS$MIX.SE[CO.GENES, ]),
-  HYB.SC = nb_residuals(HYB.SC[CO.GENES, ], EXPO.HYB,    CONTRAST.FITS$HYB.SC[CO.GENES, ]),
-  HYB.SE = nb_residuals(HYB.SE[CO.GENES, ], EXPO.HYB,    CONTRAST.FITS$HYB.SE[CO.GENES, ]),
+  HYB.SC = nb_residuals(HYB.SC[CO.GENES, ], EXPO.HYB.SC, CONTRAST.FITS$HYB.SC[CO.GENES, ]),
+  HYB.SE = nb_residuals(HYB.SE[CO.GENES, ], EXPO.HYB.SE, CONTRAST.FITS$HYB.SE[CO.GENES, ]),
   HYB.COMB = nb_residuals(HYB.COMB[CO.GENES, ], EXPO.HYB, CONTRAST.FITS$HYB.COMB[CO.GENES, ]))
 
 ## Per-gene factor f that puts a HYB.COMB residual correlation on the
@@ -847,16 +973,16 @@ RESID <- list(
 ## latent deviation. Private allele noise does not correlate across genes, so
 ## the shared term e carries the whole covariance. Summing alleles leaves that
 ## covariance unchanged and only lowers each gene's latent variance by
-## g = 2^-s (see ploidy_shift), which raises theta by 1/g, so the
-## haploid-equivalent theta is g * theta. The covariance stays fixed, so the
+## g = 2^-s (see ploidy_shift), which lowers phi by g, so the
+## haploid-equivalent phi is phi / g. The covariance stays fixed, so the
 ## haploid-equivalent correlation equals the hybrid's times sd_h / sd_c for
-## each gene, with sd_h^2 = mu + mu^2 / theta and sd_c^2 = mu + mu^2 / (g *
-## theta). That ratio squared is
-## f^2 = g * (mu + theta) / (mu + g * theta), which is at most 1 and equals g
+## each gene, with sd_h^2 = mu + phi * mu^2 and sd_c^2 = mu + phi * mu^2 / g.
+## That ratio squared is
+## f^2 = g * (1 + phi * mu) / (g + phi * mu), which is at most 1 and equals g
 ## when counts are large. Adjusted hybrid correlations therefore shrink toward
 ## zero, in step with the lower latent variance of a single genome.
 ## fit: CONTRAST.FITS$HYB.COMB rows for the genes (MU, DISP); shift: PLOIDY.SHIFT for the same genes.
-## A gene with no finite shift or theta gets f = 1 (no adjustment) and is counted below.
+## A gene with no finite shift or phi gets f = 1 (no adjustment) and is counted below.
 # Summing the two hybrid alleles lowers each gene's latent variance and leaves
 # the between-gene covariance alone, so HYB.COMB residual correlations run
 # higher than a haploid genome's. PLOIDY.F gives each gene the factor f that
@@ -864,9 +990,8 @@ RESID <- list(
 PLOIDY.F <- local({
   fit <- CONTRAST.FITS$HYB.COMB[CO.GENES, ]
   shift <- PLOIDY.SHIFT[CO.GENES]
-  g  <- 2^(-shift); mu <- fit$MU; th <- fit$DISP
-  f2 <- g * (mu + th) / (mu + g * th)
-  f2[!is.finite(th) & is.finite(g)] <- 1     # Poisson limit, no latent noise to rescale
+  g  <- 2^(-shift); mu <- fit$MU; phi <- fit$DISP
+  f2 <- g * (1 + phi * mu) / (g + phi * mu)   # phi = 0 (Poisson limit) gives f = 1: no latent noise to rescale
   f  <- sqrt(f2)
   f[!is.finite(f)] <- 1
   setNames(f, rownames(fit))
@@ -1375,8 +1500,8 @@ set.seed(SEED.SECTION + 5)
 # Diagnostic only, run to determine reliability floor for the
 # allele-pair correlation analysis. 
 RESID.ALLELE <- list(
-  HYB.SC = nb_residuals(HYB.SC[GENES, ], EXPO.HYB, CONTRAST.FITS$HYB.SC[GENES, ]),
-  HYB.SE = nb_residuals(HYB.SE[GENES, ], EXPO.HYB, CONTRAST.FITS$HYB.SE[GENES, ]))
+  HYB.SC = nb_residuals(HYB.SC[GENES, ], EXPO.HYB.SC, CONTRAST.FITS$HYB.SC[GENES, ]),
+  HYB.SE = nb_residuals(HYB.SE[GENES, ], EXPO.HYB.SE, CONTRAST.FITS$HYB.SE[GENES, ]))
 
 # Per-allele reliability
 RHO.HYB.SC <- gene_reliability(CONTRAST.FITS["HYB.SC"], GENES)
@@ -1671,9 +1796,9 @@ SCORE.SE <- merge(SCORE.SE, OCC.SE, by = "gene")
 
 ## 6.2 Validation: does each feature associate with burst frequency?
 # Uses each species' own allele within the hybrid (SPLIT.FITS$HYC.SC.N/
-# HYC.SE.N, Section 2.2). Each feature is tested against burst frequency (DISP) with
+# HYC.SE.N, Section 2.2). Each feature is tested against burst frequency (BFREQ = theta) with
 # mean expression (MU) as the covariate. Burst size is not tested separately: with MU as
-# the covariate, log BSIZE = log MU - log DISP makes the BSIZE test the DISP test with the
+# the covariate, log BSIZE = log MU - log BFREQ makes the BSIZE test the BFREQ test with the
 # sign of the slope reversed.
 TATA.SC      <- setNames(SCORE.SC$tata_score, SCORE.SC$gene)
 TATA.SE      <- setNames(SCORE.SE$tata_score, SCORE.SE$gene)
@@ -1683,12 +1808,12 @@ OCC.SC.SCORE <- setNames(SCORE.SC$occ_score,  SCORE.SC$gene)
 OCC.SE.SCORE <- setNames(SCORE.SE$occ_score,  SCORE.SE$gene)
 
 NOISE.VALIDATE <- rbind(
-  cbind(species = "Sc", parameter = "bfreq", architecture_noise_check(SPLIT.FITS$HYC.SC.N, TATA.SC,      "TATA score",                   response = "DISP")),
-  cbind(species = "Sc", parameter = "bfreq", architecture_noise_check(SPLIT.FITS$HYC.SC.N, POLYAT.SC,    "poly(dA:dT) length",           response = "DISP")),
-  cbind(species = "Sc", parameter = "bfreq", architecture_noise_check(SPLIT.FITS$HYC.SC.N, OCC.SC.SCORE, "nucleosome occupancy (NuPoP)", response = "DISP")),
-  cbind(species = "Se", parameter = "bfreq", architecture_noise_check(SPLIT.FITS$HYC.SE.N, TATA.SE,      "TATA score",                   response = "DISP")),
-  cbind(species = "Se", parameter = "bfreq", architecture_noise_check(SPLIT.FITS$HYC.SE.N, POLYAT.SE,    "poly(dA:dT) length",           response = "DISP")),
-  cbind(species = "Se", parameter = "bfreq", architecture_noise_check(SPLIT.FITS$HYC.SE.N, OCC.SE.SCORE, "nucleosome occupancy (NuPoP)", response = "DISP")))
+  cbind(species = "Sc", parameter = "bfreq", architecture_noise_check(SPLIT.FITS$HYC.SC.N, TATA.SC,      "TATA score",                   response = "BFREQ")),
+  cbind(species = "Sc", parameter = "bfreq", architecture_noise_check(SPLIT.FITS$HYC.SC.N, POLYAT.SC,    "poly(dA:dT) length",           response = "BFREQ")),
+  cbind(species = "Sc", parameter = "bfreq", architecture_noise_check(SPLIT.FITS$HYC.SC.N, OCC.SC.SCORE, "nucleosome occupancy (NuPoP)", response = "BFREQ")),
+  cbind(species = "Se", parameter = "bfreq", architecture_noise_check(SPLIT.FITS$HYC.SE.N, TATA.SE,      "TATA score",                   response = "BFREQ")),
+  cbind(species = "Se", parameter = "bfreq", architecture_noise_check(SPLIT.FITS$HYC.SE.N, POLYAT.SE,    "poly(dA:dT) length",           response = "BFREQ")),
+  cbind(species = "Se", parameter = "bfreq", architecture_noise_check(SPLIT.FITS$HYC.SE.N, OCC.SE.SCORE, "nucleosome occupancy (NuPoP)", response = "BFREQ")))
 print(NOISE.VALIDATE)
 
 ## 6.3 Between-species divergence in architecture
@@ -2090,8 +2215,8 @@ cat(sprintf("Sc parent: within/between ratio, n = %d genes (%d with within = 0),
 
 BF.MIX.SC         <- CONTRAST.FITS$MIX.SC
 MU.LOG2.MIX.SC    <- setNames(log2(BF.MIX.SC$MU), rownames(BF.MIX.SC))
-BFREQ.LOG2.MIX.SC <- setNames(log2(BF.MIX.SC$DISP), rownames(BF.MIX.SC))
-BSIZE.LOG2.MIX.SC <- setNames(log2(BF.MIX.SC$MU / BF.MIX.SC$DISP), rownames(BF.MIX.SC))
+BFREQ.LOG2.MIX.SC <- setNames(-log2(BF.MIX.SC$DISP), rownames(BF.MIX.SC))
+BSIZE.LOG2.MIX.SC <- setNames(log2(BF.MIX.SC$MU * BF.MIX.SC$DISP), rownames(BF.MIX.SC))
 
 fig_pdf("extra/S_within_between_vs_burst_MIX.SC.pdf", 15, 5)
 par(mfrow = c(1, 3), mar = c(5, 4.5, 2, 1))
@@ -2116,8 +2241,8 @@ cat(sprintf("Se parent: within/between ratio, n = %d genes (%d with within = 0),
 
 BF.MIX.SE         <- CONTRAST.FITS$MIX.SE
 MU.LOG2.MIX.SE    <- setNames(log2(BF.MIX.SE$MU), rownames(BF.MIX.SE))
-BFREQ.LOG2.MIX.SE <- setNames(log2(BF.MIX.SE$DISP), rownames(BF.MIX.SE))
-BSIZE.LOG2.MIX.SE <- setNames(log2(BF.MIX.SE$MU / BF.MIX.SE$DISP), rownames(BF.MIX.SE))
+BFREQ.LOG2.MIX.SE <- setNames(-log2(BF.MIX.SE$DISP), rownames(BF.MIX.SE))
+BSIZE.LOG2.MIX.SE <- setNames(log2(BF.MIX.SE$MU * BF.MIX.SE$DISP), rownames(BF.MIX.SE))
 
 fig_pdf("extra/S_within_between_vs_burst_MIX.SE.pdf", 15, 5)
 par(mfrow = c(1, 3), mar = c(5, 4.5, 2, 1))
@@ -2181,9 +2306,8 @@ G2M.GENES <- c("YGR108W", "YPR119W", "YDL155W", "YMR001C", "YGL116W")           
 MG1.GENES <- c("YLR079W", "YDR146C", "YLR131C")                                              # SIC1, SWI5, ACE2
 
 # The four datasets that feed CONTRAST.MATS directly; every step below maps over them by name.
-# The hybrid alleles share one exposure vector (CONTRAST.EXPOS$HYB), so EXPO.KEY maps each dataset to its exposure entry.
+# Each dataset has its own exposure vector in CONTRAST.EXPOS (a hybrid allele keeps its haplotype offset).
 COV.DS   <- c("MIX.SC", "MIX.SE", "HYB.SC", "HYB.SE")
-EXPO.KEY <- c(MIX.SC = "MIX.SC", MIX.SE = "MIX.SE", HYB.SC = "HYB", HYB.SE = "HYB")
 
 YSC[COV.DS] <- Map(score_cell_cycle_by_cluster, YSC[COV.DS], DS.LABELS[COV.DS],
                    file.path(FIGURE.DIR, sprintf("extra/S_cell_cycle_scoring_%s.pdf", COV.DS)))
@@ -2206,7 +2330,7 @@ YSC[COV.DS] <- Map(score_modules_by_cluster, YSC[COV.DS], label = DS.LABELS[COV.
 CC.AXIS   <- lapply(YSC[COV.DS], cell_cycle_continuum)
 MET.STATE <- lapply(YSC[COV.DS], metabolic_state_cluster)
 
-COV.DIAG <- Map(covariate_noise_diagnostic, CONTRAST.MATS[COV.DS], CONTRAST.EXPOS[EXPO.KEY[COV.DS]], CONTRAST.FITS[COV.DS],
+COV.DIAG <- Map(covariate_noise_diagnostic, CONTRAST.MATS[COV.DS], CONTRAST.EXPOS[COV.DS], CONTRAST.FITS[COV.DS],
                 CC.AXIS, MET.STATE, DS.LABELS[COV.DS])
 
 fig_pdf("extra/S_covariate_noise_diagnostic.pdf", 9, 4.5)
