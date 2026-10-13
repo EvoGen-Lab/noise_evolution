@@ -578,25 +578,23 @@ CONTRAST.FITS <- lapply(SPLIT.FITS, function(fr) data.frame(MU = as.numeric(as.c
 PLOIDY.SHIFT <- ploidy_shift(CONTRAST.MATS, CONTRAST.EXPOS)[GENES]
 
 ## Pre-draws every permutation label vector (one list entry per permutation, all modes) from one
-## seeded stream, so each gene is tested against the same relabelings. total/trans/dpar/inh shuffle
-## pooled cell labels, cis swaps alleles within each hybrid cell, dom pairs random parent cells.
+## seeded stream, so each gene is tested against the same relabelings. total/dpar/inh shuffle pooled cell
+## labels, dom pairs random parent cells, and cis/trans relabel the hybrid cells of the mean and noise splits
+## per original cell, so cells shared by the two splits carry the same label.
 PERMS <- local({
   ncells <- NCELLS
   NPERM <- N.PERM
   seed <- SEED.PERM
   set.seed(seed)
-  nSC <- ncells[["MIX.SC"]]; nSE <- ncells[["MIX.SE"]]
-  nHYC <- ncells[["HYC.SC"]]; nHYT <- ncells[["HYT.SC"]]
-  nHYC.N <- ncells[["HYC.SC.N"]]; nHYT.N <- ncells[["HYT.SC.N"]]
-  nHYB <- ncells[["HYB.COMB"]]
-  lapply(seq_len(NPERM), perm_label_draw, nHYB = nHYB, nHYC = nHYC, nHYC.N = nHYC.N, nHYT = nHYT, nHYT.N = nHYT.N, nSC = nSC, nSE = nSE)
+  idx <- list(mean = SPLIT.IDX.MEAN, disp = SPLIT.IDX.DISP)
+  lapply(seq_len(NPERM), perm_label_draw, idx = idx, nHYB = ncells[["HYB.COMB"]], nSC = ncells[["MIX.SC"]], nSE = ncells[["MIX.SE"]])
 })
 
 ## ---- Cluster round trip: Rscript gene_boot.R (job array, one task per replicate) / gene_perm.R ----
 ## gene_boot.R reads gene_boot_inputs.rda and writes gene_boot_output_<k>of<K>.rda (BOOT.CONTRASTS) for replicate k.
 ## Each replicate resamples with its own pre-drawn indices (DRAWS.REPS[[k]], seed SEED.BOOT + k - 1).
 ## gene_perm.R reads gene_perm_inputs.rda and writes gene_perm_output.rda (PERM.RESULTS).
-DRAWS.REPS <- lapply(SEED.BOOT + seq_len(N.BOOT.REP) - 1, function(seed) make_draws(NCELLS, N.BOOT, seed))
+DRAWS.REPS <- lapply(SEED.BOOT + seq_len(N.BOOT.REP) - 1, function(seed) make_draws(NCELLS, N.BOOT, seed, idx = list(mean = SPLIT.IDX.MEAN, disp = SPLIT.IDX.DISP)))
 save(CONTRAST.MATS, CONTRAST.EXPOS, CONTRAST.FITS, GENES, DRAWS.REPS, N.BOOT, file = file.path(INPUT.DIR, "gene_boot_inputs.rda"))
 save(CONTRAST.MATS, CONTRAST.EXPOS, CONTRAST.FITS, GENES, PERMS, N.PERM, SEED.PERM, PLOIDY.SHIFT, file = file.path(INPUT.DIR, "gene_perm_inputs.rda"))
 BOOT.CONTRASTS.REPS <- load_replicates("gene_boot", "BOOT.CONTRASTS", N.BOOT.REP, expected = length(GENES))
