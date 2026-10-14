@@ -301,8 +301,9 @@ console_stop <- function() {
 # Every bootstrap, permutation and power-grid replicate fits with this same estimator, so an observed
 # value and the distribution it is compared against are measured identically. glm.nb supplies only
 # the asymptotic log-scale SEs; the log-scale SE of theta is the log-scale SE of phi.
+# share_r is the allele-share correction of a hybrid allele (see .fit_one()); 0 for every other group.
 # Returns c(disp, mu, disp_logse, mu_logse, theta).
-neg_binom_fit_offset <- function(y, exposure) {
+neg_binom_fit_offset <- function(y, exposure, share_r = 0) {
   if (!is.null(dim(y)))
     stop("neg_binom_fit_offset() takes one gene's counts; use fit_counts_offset() for a matrix")
   na_out <- c(disp = NA_real_, mu = NA_real_, disp_logse = NA_real_, mu_logse = NA_real_, theta = NA_real_)
@@ -311,7 +312,7 @@ neg_binom_fit_offset <- function(y, exposure) {
   y <- y[keep]; exposure <- exposure[keep]
   if (length(y) < 2) return(na_out)
 
-  core <- .fit_one(y, exposure)
+  core <- .fit_one(y, exposure, share_r)
   out  <- c(disp = unname(core["disp"]), mu = unname(core["mu"]), disp_logse = NA_real_, mu_logse = NA_real_, theta = unname(core["theta"]))
   if (!is.finite(out[["theta"]])) return(out)
 
@@ -339,7 +340,16 @@ LOG.THETA.RANGE <- c(-4, 15)
 # disp = phi = 1/theta. neg_binom_fit_offset() uses it for the observed fits, gene_boot.R and
 # gene_perm.R for every resample, and power_grid.R for the simulated observed contrast and its
 # null. Returns c(mu, disp, theta); base R only and RNG-free, so fork-safe.
-.fit_one <- function(counts, expo) {
+#
+# share_r removes the variance that cell-to-cell variation in the allele share adds to the dispersion of a hybrid
+# allele. A hybrid allele is offset by half the cell's hybrid depth, so its count carries the relative share factor
+# u = c / c-bar (Hc) or (1 - c) / (1 - c-bar) (He), with mean 1 and variance r = var(c) / c-bar^2 (or / (1 - c-bar)^2).
+# The factor multiplies the gene's expression factor a (mean 1, variance phi), so the apparent dispersion is
+# phi_app = phi + (1 + phi) r and the fitted value is corrected to phi = (phi_app - r) / (1 + r). A corrected value
+# below PHI.FLOOR is reported as phi = 0, the Poisson limit, like any fit without detectable excess dispersion.
+# share_r = 0 (every parent, and the summed hybrid, where the two shares cancel) leaves the estimate unchanged.
+.fit_one <- function(counts, expo, share_r = 0) {
+  stopifnot(is.numeric(share_r), length(share_r) == 1, is.finite(share_r), share_r >= 0)
   keep <- is.finite(counts) & is.finite(expo) & expo > 0
   y <- counts[keep]; e <- expo[keep]
   if (length(y) < 2) return(c(mu = NA_real_, disp = NA_real_, theta = NA_real_))
@@ -358,7 +368,7 @@ LOG.THETA.RANGE <- c(-4, 15)
   }, LOG.THETA.RANGE, maximum = TRUE), error = function(e) NULL)
   if (is.null(opt)) return(c(mu = mu_hat, disp = NA_real_, theta = NA_real_))
 
-  phi <- exp(-opt$maximum)
+  phi <- (exp(-opt$maximum) - share_r) / (1 + share_r)
   if (phi < PHI.FLOOR) c(mu = mu_hat, disp = 0, theta = Inf) else c(mu = mu_hat, disp = phi, theta = 1 / phi)
 }
 
@@ -381,7 +391,7 @@ LOG.THETA.RANGE <- c(-4, 15)
 ## fit_counts_offset() and everything it reaches are found from the code itself
 ## (codetools::findGlobals), so a new dependency of the fit reaches the workers without
 ## editing a list. Genes are fit independently, so chunks need no communication.
-fit_counts_offset <- function(mat, exposure, cl = NULL) {
+fit_counts_offset <- function(mat, exposure, cl = NULL, share_r = 0) {
   stopifnot(ncol(mat) == length(exposure))
   if (is.null(cl))
     return(do.call(rbind, lapply(seq_len(nrow(mat)), function(i) {
@@ -389,7 +399,7 @@ fit_counts_offset <- function(mat, exposure, cl = NULL) {
       ## burst frequency. BSIZE = MU * DISP (mean count per burst) is a separate derived quantity. Every noise
       ## contrast in the pipeline is a contrast of DISP, so a log2 DISP contrast is the negative of the log2 theta contrast.
       y <- mat[i, ]
-      f <- neg_binom_fit_offset(y, exposure)
+      f <- neg_binom_fit_offset(y, exposure, share_r)
       disp <- f[["disp"]]; mu <- f[["mu"]]
       data.frame(
         DISP = disp, MU = mu, DISP_LOGSE = f[["disp_logse"]], MU_LOGSE = f[["mu_logse"]],
@@ -410,7 +420,7 @@ fit_counts_offset <- function(mat, exposure, cl = NULL) {
   mat_chunks <- split.data.frame(mat, chunk_id)
   parallel::clusterEvalQ(cl, suppressPackageStartupMessages(library(MASS)))
   parallel::clusterExport(cl, needed, envir = globalenv())
-  fit_chunks <- parallel::parLapply(cl, mat_chunks, fit_counts_offset, exposure = exposure)
+  fit_chunks <- parallel::parLapply(cl, mat_chunks, fit_counts_offset, exposure = exposure, share_r = share_r)
   ## unname() before rbind() keeps the gene row names unprefixed by the chunk labels.
   do.call(rbind, unname(fit_chunks))
 }
@@ -530,19 +540,20 @@ make_draws <- function(ncells, B, seed = 1, hyc, hyc_n) {
 ## Add an axis by adding one row here.
 ##
 ## OFFSETS, HAPLOID PARENTS AND THE DIPLOID HYBRID
-## Every offset is a median-based size factor computed once per genome on its parent and hybrid-allele cells
-## together and anchored by the median Sc:Se ratio of the parental means (analysis.R Section 2). A parent's MU is then
-## the mean count at the median depth, and each hybrid allele, offset by its own haplotype offset (s_Hc, s_He), sits
-## on the same per-genome scale: with no regulatory divergence mu_Hc = mu_He = the parental rate. HYB.COMB sums the two alleles
-## and offsets by the summed s_Hc + s_He. HYB.SC and HYB.SE keep the alleles apart.
+## Every offset is a direct library-size factor (analysis.R Section 2): a parent's offset is its library over the median
+## parental library D, and the two alleles of a hybrid cell share half the cell's hybrid depth, S_H / 2, with the summed
+## hybrid HYB.COMB at S_H. A fitted MU is then the mean count of a cell at depth D, the allele means sit on a
+## haploid-genome-equivalent scale next to the parents, and with no regulatory divergence mu_Hc = mu_He = the parental
+## rate. HYB.SC and HYB.SE keep the alleles apart. The summed fit's MU equals the average of the two allele MUs exactly.
+## Cell-to-cell variation of the Sc share adds variance to each allele's dispersion, which .fit_one(share_r) removes.
 ## Mean axis
 ##   total, cis  Ratios inside one ploidy state, so a shared factor cancels.
 ##   trans       (parent ratio) - (hybrid allele ratio). The factor cancels inside each ratio, so only a
 ##               species-specific ploidy effect survives the subtraction.
-##   dpar, dom   The hybrid mean rate is the unweighted average of the two allele fits, (mu_Hc + mu_He) / 2, on the
-##               per-genome scale of the parents. dpar compares it with one parent and dom with the arithmetic
-##               midparent (mu_Pc + mu_Pe) / 2, so an additive gene sits at zero whatever the mean transcriptome
-##               share. The summed fit HYB.COMB enters the noise axis only.
+##   dpar, dom   The hybrid mean rate is the average of the two allele fits, (mu_Hc + mu_He) / 2, on the haploid-equivalent
+##               scale of the parents (both alleles are offset by S_H / 2, so it equals the mean of the summed fit
+##               HYB.COMB). dpar compares it with one parent and dom with the arithmetic midparent
+##               (mu_Pc + mu_Pe) / 2, so an additive gene sits at zero whatever the mean transcriptome share.
 ## Noise axis (DISP = phi, the NB dispersion, which has no summing rule)
 ##   total, cis, trans  Ratios again, so a ploidy effect shared by both
 ##               species (cell size, cell-cycle timing) cancels.
@@ -881,10 +892,9 @@ sig_hist_panel <- function(contrasts, pr, mode, quantity, ymax, sig = 0.05, up =
 ##   dpar_sc/se  pool combined hybrid with one parent, relabel
 ## Centering of each null
 ##   total, cis, trans  Center at zero on both axes.
-##   dpar        Pools the summed hybrid (offset s_Hc + s_He) with one parent and relabels, so the null
-##               centers at zero. On the mean axis the pooled summed fit stands for the hybrid mean rate. It
-##               weights the two alleles by their offset totals, which are equal when the mean transcriptome
-##               share is one half, while the observed contrast uses the unweighted allele average. On the noise
+##   dpar        Pools the summed hybrid (offset S_H) with one parent and relabels, so the null
+##               centers at zero. On the mean axis the pooled summed fit stands for the hybrid mean rate, which
+##               equals the average of the two allele rates that the observed contrast uses. On the noise
 ##               axis the observed contrast carries the allele averaging shift, so the permutation reads the
 ##               ploidy-adjusted contrast against the same null and reports _p_ploidy and _p_ind (see .MODES).
 ##   dom         The surrogate pairs a Pc cell with a Pe cell and thins each parent so the two offset totals
@@ -1221,9 +1231,9 @@ classify_reg <- function(p_cis, p_trans, est_cis, est_trans, sig = 0.05, colors 
 ### Dominance classification (hybrid vs each parent)
 ## Inputs are the dpar q-values and estimates (dpar = log2 hybrid minus log2 parent). The
 ## parents are haploid and the hybrid is diploid. On the mean axis the hybrid mean rate is the
-## unweighted average of the two allele fits on the parental per-genome scale, so an additive
+## average of the two allele fits (equal to the summed fit, both alleles being offset by S_H / 2), so an additive
 ## gene sits at the midparent and the calls need no ploidy correction. On
-## the noise axis HYB.COMB averages the intrinsic noise of two alleles, which lowers DISP and raises DISP
+## the noise axis HYB.COMB averages the intrinsic noise of two alleles, which lowers DISP
 ## in the hybrid relative to both parents; noise-axis calls therefore use the
 ## ploidy-adjusted estimates (the BURST.CONTRASTS block in analysis.R) and the _q_ploidy q-values
 ## (disp, bsize, kbal, cv2; dom_class_vec selects them), while the mean axis uses _q.
@@ -3259,12 +3269,13 @@ fit_ratio_axes <- function(fa, fb) {
 
 ## null_cis_axes: one draw of the cis null for hybrid cells with allele counts sc, se and the haplotype offsets
 ## expo_sc, expo_se of the two alleles. swap (logical per cell) exchanges the two alleles within a cell, count and
-## offset together, which keeps the allele pairing and gives every count the offset of its haplotype; the
+## offset together, which keeps the allele pairing and gives every count the offset of its haplotype; share_r holds the
+## allele-share corrections of the first and second fit (the Sc and Se allele positions, .fit_one()); the
 ## contrast is the swapped Sc allele against the swapped Se allele (fit_ratio_axes()). Shared by
 ## permute_contrasts_one() and the power grid (which passes one exposure for both alleles).
-null_cis_axes <- function(sc, se, expo_sc, expo_se, swap) {
-  fit_ratio_axes(.fit_one(ifelse(swap, se, sc), ifelse(swap, expo_se, expo_sc)),
-                 .fit_one(ifelse(swap, sc, se), ifelse(swap, expo_sc, expo_se)))
+null_cis_axes <- function(sc, se, expo_sc, expo_se, swap, share_r = c(0, 0)) {
+  fit_ratio_axes(.fit_one(ifelse(swap, se, sc), ifelse(swap, expo_se, expo_sc), share_r[[1]]),
+                 .fit_one(ifelse(swap, sc, se), ifelse(swap, expo_sc, expo_se), share_r[[2]]))
 }
 
 ## null_trans_axes: one draw of the trans null. For each allele the parent cells and the hybrid cells of the
@@ -3523,18 +3534,20 @@ fit_group_values <- function(fits, g) {
 
 ## boot_contrasts_one: one gene's bootstrap contrasts across all modes (the unit of work a cluster worker does). draws holds every resample
 ## index set, drawn before any fit so replicates are independent.
-boot_contrasts_one <- function(g, expos, fits, mats, draws) {
+boot_contrasts_one <- function(g, expos, fits, mats, draws, share_r = NULL) {
+  if (is.null(share_r)) share_r <- setNames(numeric(length(.DRAW.KEY)), names(.DRAW.KEY))
+  stopifnot(all(names(.DRAW.KEY) %in% names(share_r)), all(is.finite(share_r)), all(share_r >= 0))
   B <- length(draws); modes <- names(.MODES)
   mcol <- paste0("m.", modes); scol <- paste0("s.", modes); ccol <- paste0("c.", modes)
   M <- matrix(NA_real_, B, 3 * length(modes), dimnames = list(NULL, c(mcol, scol, ccol)))
   for (b in seq_len(B)) {
     d <- draws[[b]]
-    ## Each dataset is refit on the resample of its draw key (.DRAW.KEY) with its own offsets (a hybrid allele keeps
-    ## its haplotype offset), so the two alleles of a resampled cell stay paired.
+    ## Each dataset is refit on the resample of its draw key (.DRAW.KEY) with its own offsets and, for a hybrid allele, its
+    ## allele-share correction (share_r, .fit_one()), so the two alleles of a resampled cell stay paired.
     f <- vector("list", length(.DRAW.KEY)); names(f) <- names(.DRAW.KEY)
     for (grp in names(f)) {
       key <- .DRAW.KEY[[grp]]
-      f[[grp]] <- .fit_one(mats[[grp]][g, d[[key]]], expos[[grp]][d[[key]]])
+      f[[grp]] <- .fit_one(mats[[grp]][g, d[[key]]], expos[[grp]][d[[key]]], share_r[[grp]])
     }
     mu_all <- lapply(f, `[[`, "mu"); disp_all <- lapply(f, `[[`, "disp")
     gv.mu <- lapply(mu_all, unname)
@@ -3587,7 +3600,10 @@ boot_contrasts_one <- function(g, expos, fits, mats, draws) {
 ## permute_contrasts_one: one gene's permutation null: refits the relabeled groups for every mode and permutation, compares the observed
 ## contrasts (mean, disp, CV2, bsize, kbal) with the null by a two-sided permutation p, and adds ploidy-adjusted p-values for the dpar
 ## contrasts. bsize and kbal nulls recombine the mean and disp null draws of the same permutation.
-permute_contrasts_one <- function(g, expos, fits, mats, perms, ploidy_shift, seed = 1) {
+## The cis nulls apply the allele-share correction of each position (share_r); the trans, dom and dpar nulls pool parent and hybrid cells
+## into relabeled groups, where no group is one allele, and fit them without it (the correction is at most r (1 + phi), about 1e-4).
+permute_contrasts_one <- function(g, expos, fits, mats, perms, ploidy_shift, seed = 1, share_r = NULL) {
+  if (is.null(share_r)) share_r <- setNames(numeric(length(.DRAW.KEY)), names(.DRAW.KEY))
   if (!is.numeric(seed) || length(seed) != 1 || !is.finite(seed)) stop("permute_contrasts_one(): seed must be one finite number")
   l2 <- log2; B <- length(perms); modes <- names(.MODES)
   Nm <- matrix(NA_real_, B, length(modes), dimnames = list(NULL, modes))
@@ -3625,10 +3641,10 @@ permute_contrasts_one <- function(g, expos, fits, mats, perms, ploidy_shift, see
     store(b, "total", fit_ratio_axes(sp$a, sp$b))
 
     ## cis swap: a swapped allele carries its own offset, so every count keeps the offset of its haplotype
-    store(b, "cis", null_cis_axes(cHYCsc, cHYCse, expos$HYC.SC, expos$HYC.SE, p$cis))
+    store(b, "cis", null_cis_axes(cHYCsc, cHYCse, expos$HYC.SC, expos$HYC.SE, p$cis, share_r[c("HYC.SC", "HYC.SE")]))
     ## Noise-split (f_disp) version of the cis null, used only for
     ## the disp_cis/cv2_cis output columns, mirroring cis_n in .MODES
-    store(b, "cis_n", null_cis_axes(cHYCsc.N, cHYCse.N, expos$HYC.SC.N, expos$HYC.SE.N, p$cis_n))
+    store(b, "cis_n", null_cis_axes(cHYCsc.N, cHYCse.N, expos$HYC.SC.N, expos$HYC.SE.N, p$cis_n, share_r[c("HYC.SC.N", "HYC.SE.N")]))
 
     store(b, "trans", null_trans_axes(cMIXsc, cMIXse, cHYTsc, cHYTse, expos$MIX.SC, expos$MIX.SE, expos$HYT.SC, expos$HYT.SE, p$transSC, p$transSE))
     ## Noise-split version of the trans null, used only for the

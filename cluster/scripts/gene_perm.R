@@ -30,7 +30,7 @@ library('MASS')
 source("functions.R")
 write_pkg_versions("gene_perm")   # R and package versions of this job, compared with renv.lock by check_pkg_versions()
 
-load("gene_perm_inputs.rda")     # CONTRAST.MATS, CONTRAST.EXPOS, CONTRAST.FITS, GENES, PERMS, N.PERM, SEED.PERM, PLOIDY.SHIFT (when present)
+load("gene_perm_inputs.rda")     # CONTRAST.MATS, CONTRAST.EXPOS, CONTRAST.FITS, GENES, PERMS, N.PERM, SEED.PERM, PLOIDY.SHIFT (when present), SHARE.R
 
 NUM.CORES <- max(1L, as.integer(Sys.getenv("SLURM_CPUS_PER_TASK", unset = detectCores() - 1L)))
 ## The dpar contrasts are read against the ploidy-expected value, so PLOIDY.SHIFT must come with the
@@ -57,7 +57,7 @@ for (k in seq_along(chunks)) {
   ## adds ploidy-adjusted p-values for the dpar contrasts. bsize and kbal nulls recombine the mean and
   ## disp null draws of the same permutation; for cis and trans those draws come from relabelings of the
   ## same cells (perm_label_draw()).
-  results[[k]] <- mclapply(chunks[[k]], permute_contrasts_one, mc.cores = NUM.CORES, mc.preschedule = FALSE, expos = CONTRAST.EXPOS, fits = CONTRAST.FITS, mats = CONTRAST.MATS, perms = PERMS, ploidy_shift = PLOIDY.SHIFT, seed = SEED.PERM)
+  results[[k]] <- mclapply(chunks[[k]], permute_contrasts_one, mc.cores = NUM.CORES, mc.preschedule = FALSE, expos = CONTRAST.EXPOS, fits = CONTRAST.FITS, mats = CONTRAST.MATS, perms = PERMS, ploidy_shift = PLOIDY.SHIFT, seed = SEED.PERM, share_r = SHARE.R)
   bad <- vapply(results[[k]], function(x) inherits(x, "try-error") || is.null(x), logical(1))
   if (any(bad)) stop(sprintf("%d gene(s) failed in chunk %d, first: %s", sum(bad), k, chunks[[k]][which(bad)[1]]))
   done <- done + length(chunks[[k]])

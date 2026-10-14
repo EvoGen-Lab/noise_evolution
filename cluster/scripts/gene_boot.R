@@ -21,7 +21,7 @@ library('MASS')          # glm.nb ships with base R; set lib= if your cluster ne
 source("functions.R")
 write_pkg_versions("gene_boot")   # R and package versions of this job, compared with renv.lock by check_pkg_versions()
 
-load("gene_boot_inputs.rda")     # CONTRAST.MATS, CONTRAST.EXPOS, CONTRAST.FITS, GENES, DRAWS.REPS, N.BOOT
+load("gene_boot_inputs.rda")     # CONTRAST.MATS, CONTRAST.EXPOS, CONTRAST.FITS, GENES, DRAWS.REPS, N.BOOT, SHARE.R
 
 ## Job-array position: task k bootstraps replicate k. A finished task leaves its
 ## output file, so resubmitting the array only computes the missing replicates.
@@ -54,7 +54,7 @@ for (k in seq_along(chunks)) {
   ## mean, disp (NB dispersion) and CV2 contrast per replicate, and returns the point estimate, bootstrap SE,
   ## boundary fraction and mean-disp draw correlation for the six reportable modes. Replicates where
   ## any needed fit is non-finite give NA for that contrast and are left out of its SD.
-  results[[k]] <- parLapply(cl, chunks[[k]], boot_contrasts_one, expos = CONTRAST.EXPOS, fits = CONTRAST.FITS, mats = CONTRAST.MATS, draws = DRAWS)
+  results[[k]] <- parLapply(cl, chunks[[k]], boot_contrasts_one, expos = CONTRAST.EXPOS, fits = CONTRAST.FITS, mats = CONTRAST.MATS, draws = DRAWS, share_r = SHARE.R)
   done <- done + length(chunks[[k]])
   el   <- as.numeric(difftime(Sys.time(), t0, units = "mins"))
   eta  <- if (el > 0) (length(GENES) - done) * (el / done) else NA_real_
