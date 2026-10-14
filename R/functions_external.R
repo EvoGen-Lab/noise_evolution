@@ -5,7 +5,7 @@
 ### functions.R, whose fit_counts_offset() fits each count-matrix
 ### source.
 ###
-### Validation of the MIX.SC NB fit (mean, CV^2, burst frequency, burst size)
+### Validation of the MIX.SC NB fit (mean, CV^2, dispersion, burst size)
 ### against published yeast noise data. Summary-statistic sources (Newman, Keren,
 ### Stewart-Ornstein) enter through add_burst_terms(); count-matrix sources
 ### (Gasch, Nadal-Ribelles, Jackson, Jariani) are read, QC'd, mapped to ORFs and
@@ -14,7 +14,7 @@
 ###
 ### Outline (function name - purpose):
 ###     cor_row() - Spearman rank correlation between two vectors, with pairwise-complete filtering; returns one row (n, rho, p).
-###     add_burst_terms() - Implied Fano factor (Fano_implied), burst size, and burst frequency algebraically recovered from a reported mean and CV^2; count scale, or relative units where only rank statistics on burst size apply.
+###     add_burst_terms() - Implied Fano factor (Fano_implied), burst size, and dispersion algebraically recovered from a reported mean and CV^2; count scale, or relative units where only rank statistics on burst size apply.
 ###     read_header_line() - Header line of a delimited file as a character vector, with quotes stripped.
 ###     get_data_header() - Sample/gene names of a file's header with the row-id field removed, whichever header convention the file uses.
 ###     fread_matrix() - Fast row-named numeric matrix reader (fread based) with column selection.
@@ -22,7 +22,7 @@
 ###     map_to_orf() - Resolves gene identifiers to systematic ORF names (NA when unresolved).
 ###     fit_scrna_source() - One published scRNA-seq source: ORF collapse, cell/gene QC and offset NB fit, returned on the NB.SC layout (ORF, Mean, CV2, Fano, DISP, BSIZE).
 ###     mean_adjusted_noise() - Loess residual of log CV^2 on log mean: noise relative to genes of similar abundance.
-###     noise_corr_rows() - Spearman correlation of mean, CV2, burst frequency and burst size between a source and MIX.SC or between two sources.
+###     noise_corr_rows() - Spearman correlation of mean, CV2, dispersion and burst size between a source and MIX.SC or between two sources.
 ###     raw_source_table() - the ORF, Mean, CV2, DISP and BSIZE columns of one fitted source, in the layout shared.
 ###     add_cv2_adj() - adds CV2_ADJ, the loess residual of log CV2 on log mean (mean_adjusted_noise()), to one.
 ###     adj_corr_row() - agreement of source src's mean-adjusted noise (CV2_ADJ) with MIX.SC's (nb_sc) over the.
@@ -42,10 +42,10 @@ cor_row <- function(x, y) {
   data.frame(n = sum(keep), rho = unname(ct$estimate), p = ct$p.value)
 }
 
-## Implied Fano factor, burst size, and burst frequency recovered from a
+## Implied Fano factor, burst size, and dispersion recovered from a
 ## reported mean and CV^2, for a data frame with columns Mean and CV2. The NB
 ## identity used for MIX.SC runs in reverse: Fano = mean * CV^2, burst size =
-## Fano - 1, burst frequency = mean / (Fano - 1). This is an algebraic
+## Fano - 1, dispersion = (Fano - 1) / mean (burst size / mean). This is an algebraic
 ## transform of the reported summary statistics, not a re-fit. The implied Fano
 ## factor goes in Fano_implied; a Fano column the source carries is left as it was.
 ## Burst size and frequency are mRNA-level kinetic constructs while the
@@ -244,7 +244,7 @@ mean_adjusted_noise <- function(mean, cv2, span = 0.3) {
   res
 }
 
-## noise_corr_rows: Spearman correlation of the mean, CV2, burst frequency and burst size between two noise
+## noise_corr_rows: Spearman correlation of the mean, CV2, dispersion and burst size between two noise
 ## tables, one row per statistic. kind "vs_mix": key is a source name and tables[[key]] is that source merged
 ## with NB.SC on ORF (columns MU/Mean, CV2.x/CV2.y, ...), compared against MIX.SC. kind "pairwise": key is a
 ## pair of source names and the two tables in tables are merged on ORF. The first column names the source

@@ -14,6 +14,8 @@
 ###   C.BAR, VAR.C (sigma^2_c), VAR.CC (sigma^2_C|c)  -> the transcriptome share of the simulated hybrid
 ###   per-gene mean and dispersion quantiles -> the gene range the grid covers, and how many genes
 ###                                            sit near each grid value (the weights the decision uses)
+### NOTE: the simulation models the earlier Section 2 offsets (scran haplotype size factors with an estimation error), not the
+### library-size offsets and allele-share correction the pipeline now uses; it has not been updated.
 ###############################################################
 
 if (!exists("INPUT.DIR")) INPUT.DIR <- "."

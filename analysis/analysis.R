@@ -726,7 +726,7 @@ dev.off()
 ## 3.3 Dominance classification: mean, dispersion, burst size,
 ## kinetic balance
 # dpar contrasts compare the hybrid with one haploid parent. On the mean axis
-# the hybrid mean rate is the unweighted average of the two allele fits, each
+# the hybrid mean rate is the average of the two allele fits, each
 # on the haploid-equivalent scale of the parents (offset S_H / 2), so an
 # additive gene sits at the midparent. On the noise axis the summed hybrid
 # (HYB.COMB, offset S_H) is fitted, and the sum of two

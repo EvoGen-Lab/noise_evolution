@@ -4,8 +4,9 @@
 ### bootstrap on a FORK cluster, saves the output. Mirrors the
 ### structure of Permutation_Norm0_V2.R.
 ###
-### Inputs  : gene_boot_inputs.rda (DRAWS.REPS: one set of pre-drawn
-###           resamples per bootstrap replicate)
+### Inputs  : gene_boot_inputs.rda (CONTRAST.MATS, CONTRAST.EXPOS, CONTRAST.FITS, GENES, N.BOOT,
+###           DRAWS.REPS: one set of pre-drawn resamples per bootstrap replicate, and SHARE.R: the
+###           allele-share correction of each dataset's refits)
 ### Output  : gene_boot_output_<k>of<K>.rda for array task k of K, holding
 ###           BOOT.CONTRASTS (one row per gene) for replicate k. Task k
 ###           uses DRAWS.REPS[[k]]; replicate 1 is the reported bootstrap

@@ -46,7 +46,7 @@ set.seed(SEED.SECTION + 9)
 # Nadal-Ribelles 2019, Jackson 2020, Jariani 2020). CONTRAST.FITS and
 # GENES come from the Section 2 checkpoint loaded above. The scRNA-seq sources are read,
 # QC-filtered, and NB-fit here with the same offset model MIX.SC uses,
-# so all eight datasets carry the same mean, CV^2, burst frequency, and
+# so all eight datasets carry the same mean, CV^2, dispersion, and
 # burst size columns.
 
 ## 9.1 Newman 2006, Keren 2015, and Stewart-Ornstein 2012 datasets
@@ -106,7 +106,7 @@ NB.SC$CV2   <- 1 / NB.SC$MU + NB.SC$DISP
 NB.SC$Fano  <- 1 + NB.SC$MU * NB.SC$DISP
 NB.SC$BSIZE <- NB.SC$MU * NB.SC$DISP  # burst size, equivalently Fano - 1
 
-# Implied burst frequency and burst size for each external source, via
+# Implied dispersion and burst size for each external source, via
 # add_burst_terms(). The three protein sources report fluorescence in instrument units, so they use
 # scale = "relative": DISP is NA and BSIZE (the implied Fano factor) carries rank information only,
 # which leaves CV^2 and the mean-adjusted noise (9.5) as their unit-free comparisons.

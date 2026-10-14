@@ -4,7 +4,8 @@
 ### per-gene permutation null on a FORK cluster, saves the output.
 ### Mirrors gene_boot.R.
 ###
-### Inputs  : gene_perm_inputs.rda  (CONTRAST.MATS, CONTRAST.EXPOS, CONTRAST.FITS GENES, ...)
+### Inputs  : gene_perm_inputs.rda  (CONTRAST.MATS, CONTRAST.EXPOS, CONTRAST.FITS, GENES, PERMS, PLOIDY.SHIFT,
+###           SHARE.R: the allele-share correction applied to the cis nulls, ...)
 ### Output  : gene_perm_output.rda
 ###           PERM.RESULTS, one row per gene: mean_<mode>_obs / _p,
 ###           disp_<mode>_obs / _p (the NB dispersion phi), bsize_<mode>_obs / _p

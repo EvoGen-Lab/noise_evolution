@@ -15,6 +15,8 @@
 ### fractions 1 and 0.25. As in estimator_sim.R, phase 1 draws the latent truth of each truth key the task owns
 ### (keys are dealt out round-robin, so no truth is drawn twice) and phase 2 simulates the rows of those keys.
 ### Seeds come from SEED.BASE and the key or row index, so results do not depend on how keys are split across tasks.
+### NOTE: the simulation models the earlier Section 2 offsets (scran haplotype size factors with an estimation error), not the
+### library-size offsets and allele-share correction the pipeline now uses; it has not been updated.
 ###############################################################
 
 library('parallel')

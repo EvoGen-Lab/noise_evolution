@@ -19,6 +19,8 @@
 ### twice. Phase 2 simulates the replicates of each row against its truth. Each truth seeds itself from
 ### SEED.BASE and its key, each row from SEED.BASE and its index, so results are identical however the
 ### keys are split across tasks.
+### NOTE: the simulation models the earlier Section 2 offsets (scran haplotype size factors with an estimation error), not the
+### library-size offsets and allele-share correction the pipeline now uses; it has not been updated.
 ###############################################################
 
 library('parallel')
