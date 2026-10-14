@@ -24,8 +24,15 @@ PHI.IS.DISP <- exists("PHI.FLOOR")
 cat(if (PHI.IS.DISP) "functions.R returns phi in disp\n" else "functions.R is the earlier version: disp is theta, phi = 1 / disp\n")
 
 ## One phi per pilot gene and dataset. A gene with no counts, a failed fit or phi = 0 (Poisson limit) has no log10 phi.
+## Each dataset needs an offset per cell. Pilot inputs written by the earlier Section 2 hold one shared hybrid offset under
+## the name HYB instead of one per allele (HYB.SC, HYB.SE); that offset is used for both alleles here and the script says so.
+cat("PILOT.EXPOS holds:", paste(names(PILOT.EXPOS), collapse = ", "), "\n")
 PHI <- lapply(SETS, function(ds) {
   m <- PILOT.MATS[[ds]][PILOT.GENES, , drop = FALSE]; e <- PILOT.EXPOS[[ds]]
+  if (is.null(e) && !is.null(PILOT.EXPOS[["HYB"]]) && ds %in% c("HYB.SC", "HYB.SE")) {
+    cat(sprintf("%s: no per-allele offset in PILOT.EXPOS, using the shared hybrid offset HYB\n", ds)); e <- PILOT.EXPOS[["HYB"]]
+  }
+  stopifnot("no offset for this dataset in PILOT.EXPOS" = !is.null(e), "offset length differs from the number of cells" = length(e) == ncol(m))
   d <- vapply(seq_len(nrow(m)), function(i) .fit_one(m[i, ], e)[["disp"]], numeric(1))
   setNames(if (PHI.IS.DISP) d else 1 / d, rownames(m))
 })
