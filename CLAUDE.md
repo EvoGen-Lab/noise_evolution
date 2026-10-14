@@ -66,3 +66,4 @@ Prefer fixes that avoid cluster reruns. Offer a local recompute path (for exampl
 ## Open work
 1. Rerun the full pipeline after the R upgrade and review the expected result changes. Compare the cluster package versions with `renv.lock` through `check_pkg_versions()` (run by `R/setup.R` once the cluster scripts' `pkg_versions_*.csv` files are copied back).
 2. Address the trans versus cis power asymmetry for noise (see @docs/project_context.md).
+3. Add a filter for likely multiplets (Section 1 QC, before the offsets): UMI-count and gene-count outliers, a doublet score, and in any run that mixes the two species, cells with substantial reads from both genomes. Multiplets inflate library size and dispersion and bias hybrid-versus-parent noise contrasts. Every section reruns once it is in.
