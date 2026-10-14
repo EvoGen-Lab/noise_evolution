@@ -347,7 +347,8 @@ LOG.THETA.RANGE <- c(-4, 15)
 # The factor multiplies the gene's expression factor a (mean 1, variance phi), so the apparent dispersion is
 # phi_app = phi + (1 + phi) r and the fitted value is corrected to phi = (phi_app - r) / (1 + r). A corrected value
 # below PHI.FLOOR is reported as phi = 0, the Poisson limit, like any fit without detectable excess dispersion.
-# share_r = 0 (every parent, and the summed hybrid, where the two shares cancel) leaves the estimate unchanged.
+# share_r = 0 (every parent, and the summed hybrid) leaves the estimate unchanged. The two shares cancel in the summed hybrid's
+# mean but not exactly in its dispersion, which keeps a share term of at most max(r_c, r_e) (1 + phi) that is not corrected.
 .fit_one <- function(counts, expo, share_r = 0) {
   stopifnot(is.numeric(share_r), length(share_r) == 1, is.finite(share_r), share_r >= 0)
   keep <- is.finite(counts) & is.finite(expo) & expo > 0
@@ -543,10 +544,12 @@ make_draws <- function(ncells, B, seed = 1, hyc, hyc_n) {
 ## OFFSETS, HAPLOID PARENTS AND THE DIPLOID HYBRID
 ## Every offset is a direct library-size factor (analysis.R Section 2): a parent's offset is its library over the median
 ## parental library D, and the two alleles of a hybrid cell share half the cell's hybrid depth, S_H / 2, with the summed
-## hybrid HYB.COMB at S_H. A fitted MU is then the mean count of a cell at depth D, the allele means sit on a
-## haploid-genome-equivalent scale next to the parents, and with no regulatory divergence mu_Hc = mu_He = the parental
-## rate. HYB.SC and HYB.SE keep the alleles apart. The summed fit's MU equals the average of the two allele MUs exactly.
-## Cell-to-cell variation of the Sc share adds variance to each allele's dispersion, which .fit_one(share_r) removes.
+## hybrid HYB.COMB at S_H. A fitted MU is then the mean count of a cell at depth D, and the allele means sit on a
+## haploid-genome-equivalent scale next to the parents. Each allele's mean keeps its genome's share of the hybrid library:
+## with no regulatory divergence mu_Hc = 2 c-bar x the parental rate and mu_He = 2 (1 - c-bar) x the parental rate (equal to it
+## only at c-bar = 0.5), so the cis mean contrast of such a gene is log2[c-bar / (1 - c-bar)] rather than 0. HYB.SC and HYB.SE
+## keep the alleles apart, and the summed fit's MU equals the average of the two allele MUs exactly. Cell-to-cell variation of
+## the Sc share adds variance to each allele's dispersion, which .fit_one(share_r) removes.
 ## Mean axis
 ##   total, cis  Ratios inside one ploidy state, so a shared factor cancels.
 ##   trans       (parent ratio) - (hybrid allele ratio). The factor cancels inside each ratio, so only a
@@ -554,7 +557,8 @@ make_draws <- function(ncells, B, seed = 1, hyc, hyc_n) {
 ##   dpar, dom   The hybrid mean rate is the average of the two allele fits, (mu_Hc + mu_He) / 2, on the haploid-equivalent
 ##               scale of the parents (both alleles are offset by S_H / 2, so it equals the mean of the summed fit
 ##               HYB.COMB). dpar compares it with one parent and dom with the arithmetic midparent
-##               (mu_Pc + mu_Pe) / 2, so an additive gene sits at zero whatever the mean transcriptome share.
+##               (mu_Pc + mu_Pe) / 2. An additive gene sits at zero only when c-bar = 0.5 or the parents agree: the allele average
+##               is c-bar mu_Pc + (1 - c-bar) mu_Pe, off the midparent by about (2 c-bar - 1) (mu_Pc - mu_Pe) / (mu_Pc + mu_Pe).
 ## Noise axis (DISP = phi, the NB dispersion, which has no summing rule)
 ##   total, cis, trans  Ratios again, so a ploidy effect shared by both
 ##               species (cell size, cell-cycle timing) cancels.
@@ -1235,7 +1239,7 @@ classify_reg <- function(p_cis, p_trans, est_cis, est_trans, sig = 0.05, colors 
 ## Inputs are the dpar q-values and estimates (dpar = log2 hybrid minus log2 parent). The
 ## parents are haploid and the hybrid is diploid. On the mean axis the hybrid mean rate is the
 ## average of the two allele fits (equal to the summed fit, both alleles being offset by S_H / 2), so an additive
-## gene sits at the midparent and the calls need no ploidy correction. On
+## gene sits at the midparent (to within (2 c-bar - 1) (mu_Pc - mu_Pe) / (mu_Pc + mu_Pe)) and the calls need no ploidy correction. On
 ## the noise axis HYB.COMB averages the intrinsic noise of two alleles, which lowers DISP
 ## in the hybrid relative to both parents; noise-axis calls therefore use the
 ## ploidy-adjusted estimates (the BURST.CONTRASTS block in analysis.R) and the _q_ploidy q-values

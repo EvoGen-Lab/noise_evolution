@@ -294,7 +294,7 @@ if (VAR.C < 0) { warning("observed share variance is below the binomial sampling
 R.C <- VAR.C / C.BAR^2
 R.E <- VAR.C / (1 - C.BAR)^2
 # SHARE.R is the correction of every dataset's fits (.fit_one(share_r)): r_c for the Sc-allele datasets, r_e for the Se-allele
-# datasets, and 0 for the parents and the summed hybrid, where the two shares cancel.
+# datasets, and 0 for the parents and the summed hybrid (its share term, at most max(r_c, r_e) (1 + phi), is not corrected).
 SHARE.R <- setNames(numeric(length(.DRAW.KEY)), names(.DRAW.KEY))
 SHARE.R[c("HYB.SC", "HYC.SC", "HYT.SC", "HYC.SC.N", "HYT.SC.N")] <- R.C
 SHARE.R[c("HYB.SE", "HYC.SE", "HYT.SE", "HYC.SE.N", "HYT.SE.N")] <- R.E
@@ -728,7 +728,7 @@ dev.off()
 # dpar contrasts compare the hybrid with one haploid parent. On the mean axis
 # the hybrid mean rate is the average of the two allele fits, each
 # on the haploid-equivalent scale of the parents (offset S_H / 2), so an
-# additive gene sits at the midparent. On the noise axis the summed hybrid
+# additive gene sits at the midparent (exactly at c-bar = 0.5). On the noise axis the summed hybrid
 # (HYB.COMB, offset S_H) is fitted, and the sum of two
 # alleles averages their intrinsic noise, so disp falls in the hybrid and cv2
 # falls. The BURST.CONTRASTS block removes that shift from the dpar estimates
