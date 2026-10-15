@@ -34,6 +34,7 @@
 ###   3. PAIRED PER-GENE BOOTSTRAP OF CONTRASTS
 ###     make_draws() - Builds the resampling index draws used by the paired per-gene bootstrap: parents resampled whole, hybrid cells resampled within the four strata of the mean-split by noise-split overlap and every hybrid dataset assembled from the same resampled cell IDs.
 ###     add_burst_contrasts() - Derives burst-size and kinetic-balance contrasts from the mean and size contrasts already in a data frame.
+###     .contrast_raw() - The raw (difference) contrast of phi for one mode, defined when phi = 0.
 ###     .contrast_value() - Log2 contrast for one mode (total, cis, trans, dom, dpar) from a named list of per-group fitted values.
 ###     .cv2_of() - CV2 (1/mu + 1/disp) of one fitted group; NA unless mu and disp are finite and positive.
 ###   4. DISATTENUATED MEAN-DISP COUPLING (population summary)
@@ -156,7 +157,7 @@
 ###     diet_for_markers() - strips a Seurat object to the counts and data layers FindMarkers needs, keeping the cluster job's input small.
 ###   13c. FUNCTIONS THE CLUSTER SCRIPTS RUN
 ###     pilot_split_se_one() - one gene's bootstrap SE of log(mu) and log(size) for the four datasets needed to compute A and B, plus the bootstrap.
-###     boot_contrasts_one() - one gene's bootstrap contrasts across all modes (the unit of work a cluster worker does).
+###     boot_contrasts_one() - one gene's bootstrap contrasts across all modes (the unit of work a cluster worker does): log2 and raw contrasts of phi from the same refits.
 ###     permute_contrasts_one() - one gene's permutation null: refits the relabeled groups for every mode and permutation, compares the observed.
 ###     coexpr_bootstrap_one() - one bootstrap draw of the co-expression decomposition.
 ###     coexpr_part_table() - estimate, bootstrap SE (from the running sums), z and two-sided normal p for decomposition nm, one row per gene pair.
@@ -645,6 +646,24 @@ make_draws <- function(ncells, B, seed = 1, hyc, hyc_n) {
               else           l2(gv[["HYB.COMB"]]) - 0.5 * (l2(gv[["MIX.SC"]]) + l2(gv[["MIX.SE"]])),
     dpar_sc = (if (q == "MU") l2((gv[["HYB.SC"]] + gv[["HYB.SE"]]) / 2) else l2(gv[["HYB.COMB"]])) - l2(gv[["MIX.SC"]]),
     dpar_se = (if (q == "MU") l2((gv[["HYB.SC"]] + gv[["HYB.SE"]]) / 2) else l2(gv[["HYB.COMB"]])) - l2(gv[["MIX.SE"]]))
+}
+
+## .contrast_raw: the raw (difference) contrast of the dispersion phi for one mode from a named list gv of per-group phi, the
+## counterpart of .contrast_value(mode, gv, "DISP") on the original scale. total and cis are differences within one ploidy state;
+## trans is the parental difference minus the hybrid allele difference; dom is the summed hybrid against the arithmetic midparent;
+## dpar is the summed hybrid against one parent. The summed hybrid's phi falls by the factor 2^-shift (ploidy_shift()), so dpar
+## multiplies it by 2^shift to sit on the parents' per-genome scale (shift = 0 leaves it as fitted). A fitted phi = 0 is a valid
+## input and gives a defined contrast; the caller supplies NA for a failed fit.
+.contrast_raw <- function(mode, gv, shift = 0) {
+  switch(mode,
+    total   = gv[["MIX.SC"]] - gv[["MIX.SE"]],
+    cis     = gv[["HYC.SC"]] - gv[["HYC.SE"]],
+    cis_n   = gv[["HYC.SC.N"]] - gv[["HYC.SE.N"]],
+    trans   = (gv[["MIX.SC"]] - gv[["MIX.SE"]]) - (gv[["HYT.SC"]] - gv[["HYT.SE"]]),
+    trans_n = (gv[["MIX.SC"]] - gv[["MIX.SE"]]) - (gv[["HYT.SC.N"]] - gv[["HYT.SE.N"]]),
+    dom     = gv[["HYB.COMB"]] - 0.5 * (gv[["MIX.SC"]] + gv[["MIX.SE"]]),
+    dpar_sc = 2^shift * gv[["HYB.COMB"]] - gv[["MIX.SC"]],
+    dpar_se = 2^shift * gv[["HYB.COMB"]] - gv[["MIX.SE"]])
 }
 
 ## CV2 (squared coefficient of variation) of one fitted group: 1/mu + disp (disp = phi), the Poisson plus
@@ -3556,13 +3575,17 @@ fit_group_values <- function(fits, g) {
 
 ## boot_contrasts_one: one gene's bootstrap contrasts across all modes (the unit of work a cluster worker does). draws holds every resample
 ## index set, drawn before any fit so replicates are independent. share_r is the named vector of allele-share corrections
-## (SHARE.R, one per dataset) applied to the hybrid-allele refits; NULL means no correction.
-boot_contrasts_one <- function(g, expos, fits, mats, draws, share_r = NULL) {
+## (SHARE.R, one per dataset) applied to the hybrid-allele refits; NULL means no correction. ploidy_shift is the named
+## per-gene shift (PLOIDY.SHIFT) that puts the raw dpar contrasts on the parents' per-genome scale; NULL means none.
+## Each draw yields the log2 contrasts of phi (rows need phi > 0 in every group) and the raw differences of phi (rows need a
+## fitted phi >= 0 in every group, so a zero-boundary refit still contributes). Both come from the same refits.
+boot_contrasts_one <- function(g, expos, fits, mats, draws, share_r = NULL, ploidy_shift = NULL) {
+  shift <- if (is.null(ploidy_shift)) 0 else unname(ploidy_shift[g])
   if (is.null(share_r)) share_r <- setNames(numeric(length(.DRAW.KEY)), names(.DRAW.KEY))
   stopifnot(all(names(.DRAW.KEY) %in% names(share_r)), all(is.finite(share_r)), all(share_r >= 0))
   B <- length(draws); modes <- names(.MODES)
-  mcol <- paste0("m.", modes); scol <- paste0("s.", modes); ccol <- paste0("c.", modes)
-  M <- matrix(NA_real_, B, 3 * length(modes), dimnames = list(NULL, c(mcol, scol, ccol)))
+  mcol <- paste0("m.", modes); scol <- paste0("s.", modes); ccol <- paste0("c.", modes); rcol <- paste0("r.", modes)
+  M <- matrix(NA_real_, B, 4 * length(modes), dimnames = list(NULL, c(mcol, scol, ccol, rcol)))
   for (b in seq_len(B)) {
     d <- draws[[b]]
     ## Each dataset is refit on the resample of its draw key (.DRAW.KEY) with its own offsets and, for a hybrid allele, its
@@ -3585,6 +3608,7 @@ boot_contrasts_one <- function(g, expos, fits, mats, draws, share_r = NULL) {
       if (is.finite(mean_contrast)) M[b, mcol[k]] <- mean_contrast
       if (all(is.finite(bf) & bf > 0)) M[b, scol[k]] <- .contrast_value(modes[k], gv.bf, "DISP")
       if (all(is.finite(cv) & cv > 0)) M[b, ccol[k]] <- .contrast_value(modes[k], gv.cv, "CV2")
+      if (all(is.finite(bf) & bf >= 0)) M[b, rcol[k]] <- .contrast_raw(modes[k], gv.bf, shift)
     }
   }
   se   <- apply(M, 2, sd, na.rm = TRUE)
@@ -3593,6 +3617,7 @@ boot_contrasts_one <- function(g, expos, fits, mats, draws, share_r = NULL) {
   pm <- vapply(modes, .contrast_value, numeric(1), fv$mu,   "MU")
   ps <- vapply(modes, .contrast_value, numeric(1), fv$disp, "DISP")
   pc <- vapply(modes, .contrast_value, numeric(1), fv$cv2,  "CV2")
+  pr <- vapply(modes, function(m) { bf <- unlist(fv$disp[.MODES[[m]]]); if (all(is.finite(bf) & bf >= 0)) .contrast_raw(m, fv$disp, shift) else NA_real_ }, numeric(1))
   out <- list(gene = g)
   for (md in .OUT_MODES) {
     smd <- .DISP_SOURCE[[md]]
@@ -3601,6 +3626,9 @@ boot_contrasts_one <- function(g, expos, fits, mats, draws, share_r = NULL) {
     out[[paste0("disp_", md, "_est")]]  <- unname(ps[smd])
     out[[paste0("disp_", md, "_se")]]   <- unname(se[paste0("s.", smd)])
     out[[paste0("disp_", md, "_bdry")]] <- unname(bdry[smd])
+    out[[paste0("rdisp_", md, "_est")]]  <- unname(pr[smd])
+    out[[paste0("rdisp_", md, "_se")]]   <- unname(se[paste0("r.", smd)])
+    out[[paste0("rdisp_", md, "_nfin")]] <- mean(is.finite(M[, paste0("r.", smd)]))
     out[[paste0("cv2_", md, "_est")]]    <- unname(pc[smd])
     out[[paste0("cv2_", md, "_se")]]     <- unname(se[paste0("c.", smd)])
     ## cor_<md>: correlation of the mean and disp bootstrap draws. Every hybrid dataset of a replicate

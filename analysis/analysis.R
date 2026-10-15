@@ -590,7 +590,7 @@ PERMS <- local({
 ## assembled from the same resampled cell IDs (make_draws()), so the mean and noise contrasts share their cells.
 ## gene_perm.R reads gene_perm_inputs.rda and writes gene_perm_output.rda (PERM.RESULTS).
 DRAWS.REPS <- lapply(SEED.BOOT + seq_len(N.BOOT.REP) - 1, function(seed) make_draws(NCELLS, N.BOOT, seed, hyc = SPLIT.IDX.MEAN$c, hyc_n = SPLIT.IDX.DISP$c))
-save(CONTRAST.MATS, CONTRAST.EXPOS, CONTRAST.FITS, GENES, DRAWS.REPS, N.BOOT, SHARE.R, file = file.path(INPUT.DIR, "gene_boot_inputs.rda"))
+save(CONTRAST.MATS, CONTRAST.EXPOS, CONTRAST.FITS, GENES, DRAWS.REPS, N.BOOT, SHARE.R, PLOIDY.SHIFT, file = file.path(INPUT.DIR, "gene_boot_inputs.rda"))
 save(CONTRAST.MATS, CONTRAST.EXPOS, CONTRAST.FITS, GENES, PERMS, N.PERM, SEED.PERM, PLOIDY.SHIFT, SHARE.R, file = file.path(INPUT.DIR, "gene_perm_inputs.rda"))
 BOOT.CONTRASTS.REPS <- load_replicates("gene_boot", "BOOT.CONTRASTS", N.BOOT.REP, expected = length(GENES))
 BOOT.CONTRASTS <- BOOT.CONTRASTS.REPS[[1]]
@@ -613,6 +613,9 @@ load(file.path(OUTPUT.DIR, "gene_perm_output.rda"))            # PERM.RESULTS
 # and dispersion (disp, log2 phi) contrasts in each of the six modes, plus derived
 # quantities per mode: bsize (burst size, mean plus disp in log2 space) and kbal
 # (kinetic balance, minus mean minus 2 disp).
+# The rdisp_<mode>_est / _se / _nfin columns hold the raw difference of phi for the same modes, from the same bootstrap refits as
+# the log2 columns; a zero-boundary refit contributes to them (rdisp_*_nfin is the share of draws that did), and the raw dpar
+# columns already carry the ploidy shift (the summed hybrid's phi times 2^s). Raw contrasts have no permutation p-value yet.
 # The dpar noise estimates then leave the HYB.COMB allele-summing shift behind
 # (ploidy_adjust_dpar), with the raw values kept in the _est_raw columns.
 BURST.CONTRASTS <- local({
