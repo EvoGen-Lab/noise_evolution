@@ -616,6 +616,8 @@ load(file.path(OUTPUT.DIR, "gene_perm_output.rda"))            # PERM.RESULTS
 # The rdisp_<mode>_est / _se / _nfin columns hold the raw difference of phi for the same modes, from the same bootstrap refits as
 # the log2 columns; a zero-boundary refit contributes to them (rdisp_*_nfin is the share of draws that did), and the raw dpar
 # columns already carry the ploidy shift (the summed hybrid's phi times 2^s). Raw contrasts have no permutation p-value yet.
+# The wdisp_* and wrdisp_* columns repeat both scales with the weighted method of moments (fit_dispersion(method = "weighted")) on
+# the same resamples, a sensitivity analysis next to the NB estimator; wdisp_dpar_* carries the same ploidy shift.
 # The dpar noise estimates then leave the HYB.COMB allele-summing shift behind
 # (ploidy_adjust_dpar), with the raw values kept in the _est_raw columns.
 BURST.CONTRASTS <- local({
@@ -635,6 +637,8 @@ BURST.CONTRASTS <- local({
     df[[est[["bsize"]]]] <- df[[est[["bsize"]]]] + s
     df[[est[["kbal"]]]]  <- df[[est[["kbal"]]]]  - 2 * s
     df[[est[["cv2"]]]]   <- ifelse(is.finite(cv_h) & cv_h > 0 & is.finite(cv_p) & cv_p > 0, log2(cv_h) - log2(cv_p), NA_real_)
+    wcol <- paste0("wdisp_dpar_", sp, "_est")        # the weighted-moment log2 contrast takes the same shift
+    if (wcol %in% names(df)) { df[[paste0(wcol, "_raw")]] <- df[[wcol]]; df[[wcol]] <- df[[wcol]] + s }
   }
   df
 })

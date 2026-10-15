@@ -26,6 +26,7 @@
 ###     neg_binom_fit_offset() - Offset NB fit for one gene: rate (mu), dispersion phi (disp) and NB size theta = 1/phi from .fit_one(), with glm.nb asymptotic log-scale SEs; disp = 0 (theta = Inf) when a Poisson-vs-NB pre-check finds no overdispersion.
 ###     fit_counts_offset() - Matrix version: one neg_binom_fit_offset() fit per gene (row) against its exposure vector, with the dataset's allele-share correction; optionally splits genes across a PSOCK cluster, shipping the functions the fit needs.
 ###     .fit_one() - The pipeline's single NB estimator (mu = sum(y)/sum(exposure), theta by 1-D likelihood given mu, disp = 1/theta, corrected for allele-share variation in a hybrid allele): observed fits, every bootstrap and permutation replicate, and the power grid.
+###     fit_dispersion() - The shared dispersion-fitting interface: NB likelihood or weighted method of moments (method), both with the allele-share correction; returns mu, corrected and apparent phi, the signed phi, boundary and convergence flags.
 ###     .fit_split() - Splits a pooled sample by a pre-drawn permutation and fits each half with .fit_one(); the gene-level null and the power grid share it.
 ###   1b. INTERNAL-PILOT SPLIT FRACTION (f*)
 ###     split_indices_by_depth() - Depth-matched split of depth-ordered hybrid cells at an arbitrary fraction.
@@ -350,28 +351,83 @@ LOG.THETA.RANGE <- c(-4, 15)
 # below PHI.FLOOR is reported as phi = 0, the Poisson limit, like any fit without detectable excess dispersion.
 # share_r = 0 (every parent, and the summed hybrid) leaves the estimate unchanged. The two shares cancel in the summed hybrid's
 # mean but not exactly in its dispersion, which keeps a share term of at most max(r_c, r_e) (1 + phi) that is not corrected.
-.fit_one <- function(counts, expo, share_r = 0) {
+.fit_one <- function(counts, expo, share_r = 0) fit_dispersion(counts, expo, share_r, "NB")[c("mu", "disp", "theta")]
+
+# fit_dispersion: the shared dispersion-fitting interface. Both methods take the same exposure-weighted mean,
+# mu = sum(y) / sum(exposure), then estimate the dispersion phi of Var(y_i) = M_i + phi M_i^2 with M_i = mu * exposure_i.
+#   "NB": the likelihood maximizer of the NB size given mu, after the Poisson pre-check (Pearson chi-square / df <= 1 is phi = 0).
+#   "weighted": a weighted method of moments that treats the NB only as a working model for the weights. With p_i = O_i / sum(O),
+#     r_i = y_i - M_i, A_i = M_i (1 - p_i) and B_i = M_i^2 (1 - 2 p_i) + p_i^2 sum(M^2), E[r_i^2] = A_i + phi B_i when mu is estimated
+#     from the same counts, so phi-hat = sum(w_i (r_i^2 - A_i)) / sum(w_i B_i). The working-NB weights
+#     w_i = 1 / [(1 + phi M_i)(1 + phi + phi M_i (1 + 3 phi))] (the inverse variance of (y_i - M_i)^2 - y_i under the working NB, up
+#     to the factor 2 M_i^2) enter through the root of the weighted moment equation sum(w(phi) (r_i^2 - A_i - phi B_i)) = 0 on
+#     [0, exp(-LOG.THETA.RANGE[1])], found with uniroot(), because the plain iteration phi <- f(w(phi)) can cycle between two
+#     values on sparse counts. No positive root gives phi = 0 and disp_raw keeps the signed unit-weight moment estimate.
+# The allele-share correction (share_r, see above) is applied after either fit. Returns a named numeric vector:
+#   mu, disp (the corrected phi, 0 at the boundary), theta = 1 / disp (Inf at 0),
+#   disp_app (the apparent phi before the share correction, NA for an NB fit stopped by the Poisson pre-check),
+#   disp_raw (the corrected phi before the floor at zero, signed for the weighted fit, NA when no apparent value exists),
+#   boundary (1 when disp = 0, a valid Poisson-limit estimate), converged (1 unless the fit failed) and iter (weighted only).
+# NA mu and disp mean too few cells; mu = 0 and NA disp mean no counts; mu with NA disp is a failed fit.
+fit_dispersion <- function(counts, expo, share_r = 0, method = c("NB", "weighted")) {
+  method <- match.arg(method)
   stopifnot(is.numeric(share_r), length(share_r) == 1, is.finite(share_r), share_r >= 0)
+  out <- c(mu = NA_real_, disp = NA_real_, theta = NA_real_, disp_app = NA_real_, disp_raw = NA_real_,
+           boundary = NA_real_, converged = NA_real_, iter = NA_real_)
   keep <- is.finite(counts) & is.finite(expo) & expo > 0
   y <- counts[keep]; e <- expo[keep]
-  if (length(y) < 2) return(c(mu = NA_real_, disp = NA_real_, theta = NA_real_))
+  if (length(y) < 2) return(out)
 
   mu_hat <- sum(y) / sum(e)
-  if (sum(y) == 0) return(c(mu = 0, disp = NA_real_, theta = NA_real_))
+  out[["mu"]] <- mu_hat
+  if (sum(y) == 0) { out[["mu"]] <- 0; return(out) }
 
   mu_i <- mu_hat * e
-  pearson <- sum((y - mu_i)^2 / mu_i) / (length(y) - 1)
-  if (pearson <= 1) return(c(mu = mu_hat, disp = 0, theta = Inf))
+  phi_app <- NA_real_
+  if (method == "NB") {
+    pearson <- sum((y - mu_i)^2 / mu_i) / (length(y) - 1)
+    if (pearson <= 1) { out[c("disp", "theta", "boundary", "converged")] <- c(0, Inf, 1, 1); return(out) }
 
-  # NB log-likelihood in log(theta), with the means fixed at mu_i
-  opt <- tryCatch(optimize(function(ltheta) {
-    th <- exp(ltheta)
-    sum(lgamma(y + th) - lgamma(th) + th*log(th) - (th + y)*log(th + mu_i) + y*log(mu_i))
-  }, LOG.THETA.RANGE, maximum = TRUE), error = function(e) NULL)
-  if (is.null(opt)) return(c(mu = mu_hat, disp = NA_real_, theta = NA_real_))
-
-  phi <- (exp(-opt$maximum) - share_r) / (1 + share_r)
-  if (phi < PHI.FLOOR) c(mu = mu_hat, disp = 0, theta = Inf) else c(mu = mu_hat, disp = phi, theta = 1 / phi)
+    # NB log-likelihood in log(theta), with the means fixed at mu_i
+    opt <- tryCatch(optimize(function(ltheta) {
+      th <- exp(ltheta)
+      sum(lgamma(y + th) - lgamma(th) + th*log(th) - (th + y)*log(th + mu_i) + y*log(mu_i))
+    }, LOG.THETA.RANGE, maximum = TRUE), error = function(e) NULL)
+    if (is.null(opt)) { out[["converged"]] <- 0; return(out) }
+    phi_app <- exp(-opt$maximum)
+    out[["converged"]] <- 1
+  } else {
+    p  <- e / sum(e)
+    A  <- mu_i * (1 - p)
+    B  <- mu_i^2 * (1 - 2 * p) + p^2 * sum(mu_i^2)
+    r2 <- (y - mu_i)^2
+    # g(phi) = sum w(phi) (r2 - A - phi B): the weighted moment equation with weights at phi, so its root is the fixed point
+    # phi = sum(w (r2 - A)) / sum(w B).
+    g <- function(phi) {
+      w <- 1 / ((1 + phi * mu_i) * (1 + phi + phi * mu_i * (1 + 3 * phi)))
+      sum(w * (r2 - A - phi * B))
+    }
+    g0 <- g(0)
+    upper <- exp(-LOG.THETA.RANGE[[1]])          # the largest phi the NB search allows
+    if (!is.finite(g0)) { out[["converged"]] <- 0; return(out) }
+    out[["converged"]] <- 1
+    if (g0 <= 0) {
+      # no positive root: the estimate sits at the boundary; the signed moment estimate (unit weights) is kept as a diagnostic
+      phi_app <- 0; est <- sum(r2 - A) / sum(B); out[["iter"]] <- 0
+    } else if (g(upper) >= 0) {
+      phi_app <- upper; est <- upper; out[["iter"]] <- 0
+    } else {
+      rt <- uniroot(g, c(0, upper), tol = 1e-10 * (1 + upper))
+      phi_app <- rt$root; est <- rt$root; out[["iter"]] <- rt$iter
+    }
+    out[["disp_raw"]] <- (est - share_r) / (1 + share_r)
+  }
+  out[["disp_app"]] <- phi_app
+  corrected <- (phi_app - share_r) / (1 + share_r)
+  if (method == "NB") out[["disp_raw"]] <- corrected
+  if (corrected < PHI.FLOOR) out[c("disp", "theta", "boundary")] <- c(0, Inf, 1)
+  else out[c("disp", "theta", "boundary")] <- c(corrected, 1 / corrected, 0)
+  out
 }
 
 # Splits a pooled sample at position n1 of a pre-drawn index permutation and fits each
@@ -664,6 +720,15 @@ make_draws <- function(ncells, B, seed = 1, hyc, hyc_n) {
     dom     = gv[["HYB.COMB"]] - 0.5 * (gv[["MIX.SC"]] + gv[["MIX.SE"]]),
     dpar_sc = 2^shift * gv[["HYB.COMB"]] - gv[["MIX.SC"]],
     dpar_se = 2^shift * gv[["HYB.COMB"]] - gv[["MIX.SE"]])
+}
+
+## .disp_contrasts: the log2 and the raw contrast of phi for one mode from a named list gv of per-group phi, as c(log, raw). The log2
+## contrast needs a finite phi > 0 in every group of the mode (.MODES), the raw one a finite phi >= 0, and each is NA otherwise.
+## Both come from the same phi values, which is how a bootstrap draw or a point fit yields the two scales together.
+.disp_contrasts <- function(mode, gv, shift = 0) {
+  bf <- unlist(gv[.MODES[[mode]]])
+  c(log = if (all(is.finite(bf) & bf > 0)) .contrast_value(mode, gv, "DISP") else NA_real_,
+    raw = if (all(is.finite(bf) & bf >= 0)) .contrast_raw(mode, gv, shift) else NA_real_)
 }
 
 ## CV2 (squared coefficient of variation) of one fitted group: 1/mu + disp (disp = phi), the Poisson plus
@@ -3579,13 +3644,19 @@ fit_group_values <- function(fits, g) {
 ## per-gene shift (PLOIDY.SHIFT) that puts the raw dpar contrasts on the parents' per-genome scale; NULL means none.
 ## Each draw yields the log2 contrasts of phi (rows need phi > 0 in every group) and the raw differences of phi (rows need a
 ## fitted phi >= 0 in every group, so a zero-boundary refit still contributes). Both come from the same refits.
-boot_contrasts_one <- function(g, expos, fits, mats, draws, share_r = NULL, ploidy_shift = NULL) {
+## methods lists the dispersion estimators: "NB" is the pipeline estimator (the fits table and .fit_one() refits); adding "weighted"
+## refits every resample with fit_dispersion(method = "weighted") on the same cells and adds the wdisp_* (log2) and wrdisp_* (raw)
+## columns, so the two estimators are compared on identical resamples. The mean axis stays with NB.
+boot_contrasts_one <- function(g, expos, fits, mats, draws, share_r = NULL, ploidy_shift = NULL, methods = "NB") {
+  stopifnot(all(methods %in% c("NB", "weighted")), "NB" %in% methods)
+  do_w <- "weighted" %in% methods
   shift <- if (is.null(ploidy_shift)) 0 else unname(ploidy_shift[g])
   if (is.null(share_r)) share_r <- setNames(numeric(length(.DRAW.KEY)), names(.DRAW.KEY))
   stopifnot(all(names(.DRAW.KEY) %in% names(share_r)), all(is.finite(share_r)), all(share_r >= 0))
   B <- length(draws); modes <- names(.MODES)
   mcol <- paste0("m.", modes); scol <- paste0("s.", modes); ccol <- paste0("c.", modes); rcol <- paste0("r.", modes)
   M <- matrix(NA_real_, B, 4 * length(modes), dimnames = list(NULL, c(mcol, scol, ccol, rcol)))
+  W <- matrix(NA_real_, B, 2 * length(modes), dimnames = list(NULL, c(paste0("ws.", modes), paste0("wr.", modes))))
   for (b in seq_len(B)) {
     d <- draws[[b]]
     ## Each dataset is refit on the resample of its draw key (.DRAW.KEY) with its own offsets and, for a hybrid allele, its
@@ -3594,6 +3665,12 @@ boot_contrasts_one <- function(g, expos, fits, mats, draws, share_r = NULL, ploi
     for (grp in names(f)) {
       key <- .DRAW.KEY[[grp]]
       f[[grp]] <- .fit_one(mats[[grp]][g, d[[key]]], expos[[grp]][d[[key]]], share_r[[grp]])
+    }
+    if (do_w) {
+      gv.w <- lapply(names(.DRAW.KEY), function(grp) { key <- .DRAW.KEY[[grp]]
+        unname(fit_dispersion(mats[[grp]][g, d[[key]]], expos[[grp]][d[[key]]], share_r[[grp]], "weighted")[["disp"]]) })
+      names(gv.w) <- names(.DRAW.KEY)
+      for (k in seq_along(modes)) W[b, c(paste0("ws.", modes[k]), paste0("wr.", modes[k]))] <- .disp_contrasts(modes[k], gv.w, shift)
     }
     mu_all <- lapply(f, `[[`, "mu"); disp_all <- lapply(f, `[[`, "disp")
     gv.mu <- lapply(mu_all, unname)
@@ -3618,9 +3695,23 @@ boot_contrasts_one <- function(g, expos, fits, mats, draws, share_r = NULL, ploi
   ps <- vapply(modes, .contrast_value, numeric(1), fv$disp, "DISP")
   pc <- vapply(modes, .contrast_value, numeric(1), fv$cv2,  "CV2")
   pr <- vapply(modes, function(m) { bf <- unlist(fv$disp[.MODES[[m]]]); if (all(is.finite(bf) & bf >= 0)) .contrast_raw(m, fv$disp, shift) else NA_real_ }, numeric(1))
+  if (do_w) {
+    fw <- lapply(names(.DRAW.KEY), function(grp) unname(fit_dispersion(mats[[grp]][g, ], expos[[grp]], share_r[[grp]], "weighted")[["disp"]]))
+    names(fw) <- names(.DRAW.KEY)
+    pw <- vapply(modes, .disp_contrasts, numeric(2), fw, shift)
+    sw <- apply(W, 2, sd, na.rm = TRUE)
+  }
   out <- list(gene = g)
   for (md in .OUT_MODES) {
     smd <- .DISP_SOURCE[[md]]
+    if (do_w) {
+      out[[paste0("wdisp_", md, "_est")]]   <- unname(pw["log", smd])
+      out[[paste0("wdisp_", md, "_se")]]    <- unname(sw[paste0("ws.", smd)])
+      out[[paste0("wdisp_", md, "_bdry")]]  <- mean(is.na(W[, paste0("ws.", smd)]))
+      out[[paste0("wrdisp_", md, "_est")]]  <- unname(pw["raw", smd])
+      out[[paste0("wrdisp_", md, "_se")]]   <- unname(sw[paste0("wr.", smd)])
+      out[[paste0("wrdisp_", md, "_nfin")]] <- mean(is.finite(W[, paste0("wr.", smd)]))
+    }
     out[[paste0("mean_", md, "_est")]]   <- unname(pm[md])
     out[[paste0("mean_", md, "_se")]]    <- unname(se[paste0("m.", md)])
     out[[paste0("disp_", md, "_est")]]  <- unname(ps[smd])

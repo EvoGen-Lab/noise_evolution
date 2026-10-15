@@ -55,7 +55,7 @@ for (k in seq_along(chunks)) {
   ## mean, disp (NB dispersion) and CV2 contrast per replicate, and returns the point estimate, bootstrap SE,
   ## boundary fraction and mean-disp draw correlation for the six reportable modes. Replicates where
   ## any needed fit is non-finite give NA for that contrast and are left out of its SD.
-  results[[k]] <- parLapply(cl, chunks[[k]], boot_contrasts_one, expos = CONTRAST.EXPOS, fits = CONTRAST.FITS, mats = CONTRAST.MATS, draws = DRAWS, share_r = SHARE.R, ploidy_shift = PLOIDY.SHIFT)
+  results[[k]] <- parLapply(cl, chunks[[k]], boot_contrasts_one, expos = CONTRAST.EXPOS, fits = CONTRAST.FITS, mats = CONTRAST.MATS, draws = DRAWS, share_r = SHARE.R, ploidy_shift = PLOIDY.SHIFT, methods = c("NB", "weighted"))
   done <- done + length(chunks[[k]])
   el   <- as.numeric(difftime(Sys.time(), t0, units = "mins"))
   eta  <- if (el > 0) (length(GENES) - done) * (el / done) else NA_real_
