@@ -499,6 +499,57 @@ stopifnot(FILTER.SUMMARY$genes_kept + FILTER.SUMMARY$lost_to_dispersion_only + F
 write.csv(FILTER.COUNTS,  file.path(TABLE.DIR, "gene_filter_counts_by_dataset.csv"), row.names = FALSE)
 write.csv(FILTER.SUMMARY, file.path(TABLE.DIR, "gene_filter_summary.csv"),           row.names = FALSE)
 
+## Master gene table: every fitted gene, whether or not it enters inference. Each dataset keeps its fitted mean and
+## dispersion, the fit status (gene_fit_status(): positive, zero_boundary, failed, no_information, missing) and the information
+## floor (info_ok: mean count and detected cells), so a zero-boundary estimate is a valid result and a failed fit a separate
+## state. Each reported mode then gets one validity flag per scale from the datasets that feed it (.MODES, with the noise axis
+## read through .DISP_SOURCE): raw_<mode>_valid needs every dataset informative and fitted (positive or zero_boundary), the
+## condition under which a raw difference of phi exists; log_<mode>_valid also needs phi > 0 in every dataset, the condition
+## under which a log2 ratio exists; mean_<mode>_valid needs a finite informative mean in the mean-axis datasets. Filtering
+## happens only where an analysis is built, by selecting on these flags. inference_set marks the genes the bootstrap and
+## permutation jobs currently run on (GENES: informative with phi > 0 in all 13 datasets).
+GENE.TABLE <- local({
+  fits <- SPLIT.FITS
+  genes <- rownames(fits[[1]])
+  tab <- data.frame(gene = genes, row.names = genes, stringsAsFactors = FALSE)
+  status <- sapply(FILTER.GROUPS, gene_fit_status, fits = fits)
+  info   <- sapply(FILTER.GROUPS, function(g) is.finite(fits[[g]]$MEAN_CT) & fits[[g]]$MEAN_CT >= FILTER.FLOOR[[g]] & fits[[g]]$N_EXPR >= FILTER.NMIN)
+  rownames(status) <- rownames(info) <- genes
+  for (g in FILTER.GROUPS) {
+    tab[[paste0(g, ".mu")]]     <- as.numeric(as.character(fits[[g]]$MU))
+    tab[[paste0(g, ".disp")]]   <- as.numeric(as.character(fits[[g]]$DISP))
+    tab[[paste0(g, ".status")]] <- status[, g]
+    tab[[paste0(g, ".info_ok")]] <- info[, g]
+  }
+  fitted <- (status == "positive" | status == "zero_boundary") & info
+  positive <- status == "positive" & info
+  for (md in .OUT_MODES) {
+    noise_groups <- .MODES[[.DISP_SOURCE[[md]]]]
+    tab[[paste0("raw_", md, "_valid")]]  <- rowSums(fitted[, noise_groups, drop = FALSE]) == length(noise_groups)
+    tab[[paste0("log_", md, "_valid")]]  <- rowSums(positive[, noise_groups, drop = FALSE]) == length(noise_groups)
+    mean_groups <- .MODES.MEAN[[md]]
+    tab[[paste0("mean_", md, "_valid")]] <- rowSums(info[, mean_groups, drop = FALSE] & is.finite(as.matrix(tab[, paste0(mean_groups, ".mu"), drop = FALSE]))) == length(mean_groups)
+  }
+  tab$inference_set <- rowSums(positive) == ncol(positive)
+  tab
+})
+stopifnot(identical(GENE.TABLE$gene[GENE.TABLE$inference_set], GENES))   # the table's flag reproduces the filter
+
+## Genes eligible for each comparison and scale, and the fit status of every group, so each analysis states its own reach.
+ELIGIBLE.COUNTS <- local({
+  flags <- grep("_valid$", names(GENE.TABLE), value = TRUE)
+  data.frame(flag = c(flags, "inference_set"), genes = c(colSums(GENE.TABLE[, flags]), sum(GENE.TABLE$inference_set)), of = nrow(GENE.TABLE), row.names = NULL)
+})
+FIT.STATUS.COUNTS <- local({
+  st <- sapply(FILTER.GROUPS, function(g) table(factor(GENE.TABLE[[paste0(g, ".status")]], levels = c("positive", "zero_boundary", "failed", "no_information", "missing"))))
+  data.frame(status = rownames(st), st, row.names = NULL, check.names = FALSE)
+})
+print(ELIGIBLE.COUNTS, row.names = FALSE)
+print(FIT.STATUS.COUNTS, row.names = FALSE)
+write.csv(GENE.TABLE,         file.path(TABLE.DIR, "gene_master_table.csv"),        row.names = FALSE)
+write.csv(ELIGIBLE.COUNTS,    file.path(TABLE.DIR, "gene_eligible_counts.csv"),     row.names = FALSE)
+write.csv(FIT.STATUS.COUNTS,  file.path(TABLE.DIR, "gene_fit_status_counts.csv"),   row.names = FALSE)
+
 # Create bootstrap and permutation input files  
 CONTRAST.MATS <- list(
   MIX.SC = MIX.SC[GENES, ], MIX.SE = MIX.SE[GENES, ],
@@ -670,7 +721,7 @@ dev.off()
 
 # Checkpoint: the fitted NB models, per-gene contrasts, and every Section 2
 # object that later sections read.
-save(GENES, FILTER.COUNTS, FILTER.SUMMARY, HYB.COMB, CONTRAST.FITS, CONTRAST.MATS, CONTRAST.EXPOS, SPLIT.FITS,
+save(GENES, GENE.TABLE, ELIGIBLE.COUNTS, FIT.STATUS.COUNTS, FILTER.COUNTS, FILTER.SUMMARY, HYB.COMB, CONTRAST.FITS, CONTRAST.MATS, CONTRAST.EXPOS, SPLIT.FITS,
      BOOT.CONTRASTS, BURST.CONTRASTS, PERM.RESULTS, PR, PLOIDY.SHIFT, N.PERM,
      HYB.SC, HYB.SE, EXPO.MIX.SC, EXPO.MIX.SE, EXPO.HYB.SC, EXPO.HYB.SE, EXPO.HYB, C.HAT, C.BAR, VAR.C, R.C, R.E, SHARE.R, SHARE.TABLE,
      WEIGHT.CHECK, ALLELE.DISP,

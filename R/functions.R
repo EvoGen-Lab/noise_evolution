@@ -135,6 +135,7 @@
 ###     qc_cell_cutoff() - library-size cell filter for one dataset s (a list with lib, the per-cell library.
 ###     fstar_from_r() - closed-form split fraction f* = [(2+r) - sqrt(r^2+4)] / (2r) for r = B*Nh/A.
 ###     gene_pass_group() - genes passing the filters in one group g: a finite NB dispersion, a mean count at or.
+###     gene_fit_status() - Fit status of every gene in one dataset (positive, zero_boundary, failed, no_information, missing), kept apart from the information floors.
 ###     gene_filter_counts() - One row per dataset: how many genes fail each gene filter (no fit, zero dispersion, low mean, low detection) and how many pass.
 ###     perm_label_draw() - one permutation's relabelings for every mode; cis and trans label the hybrid cells per original cell so the mean and noise splits agree on shared cells.
 ###     eiv_mode_ci_row() - errors-in-variables correlation for one mode m with a gene-resampling bootstrap CI.
@@ -3184,6 +3185,21 @@ fstar_from_r <- function(r) {
 gene_pass_group <- function(g, fits, floor_mean, n_min) {
   fit <- fits[[g]]
   is.finite(fit$DISP) & fit$DISP > 0 & fit$MEAN_CT >= floor_mean[[g]] & fit$N_EXPR >= n_min
+}
+
+## gene_fit_status: the outcome of the dispersion fit for every gene of dataset g, one label per row of fits[[g]]. positive: a
+## finite phi > 0. zero_boundary: phi = 0, a valid estimate at the Poisson limit. no_information: the gene has no counts in
+## the dataset, so no dispersion exists. failed: counts exist but the fit returned no value. missing: no fit row or no count
+## summary. The labels describe the fit alone; whether a gene is informative enough for an analysis is a separate floor
+## (mean count and detected cells, gene_pass_group()).
+gene_fit_status <- function(g, fits) {
+  fit <- fits[[g]]
+  out <- rep("positive", nrow(fit))
+  out[is.finite(fit$DISP) & fit$DISP == 0] <- "zero_boundary"
+  out[!is.finite(fit$DISP)] <- "failed"
+  out[is.finite(fit$MEAN_CT) & fit$MEAN_CT == 0] <- "no_information"
+  out[is.na(fit$MEAN_CT)] <- "missing"
+  out
 }
 
 ## gene_filter_counts: how many genes of dataset g fail each filter of gene_pass_group(), as one row. The reasons overlap (a
