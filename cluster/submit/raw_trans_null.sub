@@ -1,0 +1,35 @@
+#!/bin/sh -l
+# FILENAME:  raw_trans_null.sub
+#
+# Trans-null validation on the raw and the log2 scale (raw_trans_null_grid.R): 24 scenario rows (8 scenarios x 3 cell numbers) dealt
+# round-robin across the array tasks. Each task requests 1 node, 24 cores and 6 hours.
+#
+# Sizing. A dataset costs about (2 x NI + NBOOT) x 4 fits, about 4,000 fits at NI = NBOOT = 1,000 and 0.5 ms per fit at 200 cells,
+# so about 2 core-seconds per dataset (scale with the cell number). A row of NJ = 1,000 datasets is about 35 core-minutes at 200
+# cells and about 70 at 400, so the grid is about 15 core-hours. Four tasks of 24 cores finish in well under an hour; the limit
+# leaves room for a large error in the fit cost.
+#
+# Inputs. Copy functions.R, functions_power.R, raw_trans_null_grid.R and raw_trans_null_inputs.rda into the working directory.
+#
+# Restarts. A task writes its output file only when it finishes. Resubmitting the array recomputes only the tasks whose
+# raw_trans_null_output_<k>of<K>.rda is missing; a task stopped at the time limit starts over.
+
+#SBATCH --account=bphm
+#SBATCH --nodes=1
+#SBATCH --ntasks=1
+#SBATCH --partition=cpu
+#SBATCH --cpus-per-task=24
+#SBATCH --qos=normal
+#SBATCH --time=06:00:00
+#SBATCH --job-name raw_trans_null
+#SBATCH --array=1-4
+#SBATCH --output=raw_trans_null_%A_%a.out
+
+module load r/4.5.2
+
+export OMP_NUM_THREADS=1
+export MKL_NUM_THREADS=1
+export OPENBLAS_NUM_THREADS=1
+export VECLIB_MAXIMUM_THREADS=1
+
+Rscript raw_trans_null_grid.R

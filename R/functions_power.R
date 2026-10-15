@@ -16,6 +16,8 @@
 ###     paired_alleles_check() - Checks the paired-allele generator: recovered NB size against the target and the allele correlation against phi.
 ###     bh_power() - Power at a Benjamini-Hochberg FDR from the p-values of null and alternative datasets (the rule power_grid_row() uses).
 ###     power_modes_row() - power of the cis and trans contrasts (trans under two nulls) for one grid row, on paired-allele hybrid data, with the pipeline's own nulls.
+###     trans_both() - The raw and the log2 trans contrast of four dispersion fits, each defined only when its own condition holds (phi >= 0, phi > 0).
+###     raw_trans_null_row() - Type I error and power of three nulls for the raw and the log2 trans contrast in one scenario (pooled independent and paired relabeling, bootstrap-shift).
 ###     mde_interp() - Smallest log2 effect at which a power curve reaches a target, by linear interpolation.
 ###     modes_long() - Stacks the per-row results of power_modes_row() into long tables with the grid values attached.
 ###     modes_mde() - Minimum detectable log2 ratio at a target power for every grid point, mode and axis.
@@ -371,4 +373,82 @@ modes_f_cross <- function(pw, ratio, trans_mode = "trans_indep", axis = "disp", 
     fc <- if (is.na(k)) NA_real_ else w$f[k] + (0 - w$diff[k]) / (w$diff[k + 1] - w$diff[k]) * (w$f[k + 1] - w$f[k])
     cbind(w[1, keys], f_cross = fc, ratio = ratio, trans_mode = trans_mode, axis = axis)
   }))
+}
+
+## ============================================================
+## Validation of the trans null on the raw and the log2 scale (raw_trans_null_grid.R)
+## ============================================================
+
+## trans_both: the trans contrast of the dispersion phi from four .fit_one()-style fits, as c(raw, log): the parental difference
+## minus the hybrid allele difference of phi (raw), and the same on log2 phi (log). raw needs a finite phi >= 0 in every fit, so a
+## zero-boundary fit counts; log needs phi > 0 and is NA otherwise. fa_* are the parent-sized pair (Sc, Se), fb_* the hybrid-sized pair.
+trans_both <- function(fa_sc, fa_se, fb_sc, fb_se) {
+  d <- c(fa_sc[["disp"]], fa_se[["disp"]], fb_sc[["disp"]], fb_se[["disp"]])
+  c(raw = if (all(is.finite(d) & d >= 0)) (d[1] - d[2]) - (d[3] - d[4]) else NA_real_,
+    log = if (all(is.finite(d) & d > 0)) (log2(d[1]) - log2(d[2])) - (log2(d[3]) - log2(d[4])) else NA_real_)
+}
+
+## raw_trans_null_row: how three nulls behave for the trans contrast of phi on both scales in scenario i of GRID. A scenario fixes the
+## true phi of the four groups (phi_pc, phi_pe parents; phi_hc, phi_he hybrid alleles), the parental and hybrid mean reads (mu_p, mu_h) and the
+## exposure CV of each side and the cell number of every group (n_cells), so the truth of each null is known: the raw trans null (phi_pc - phi_pe = phi_hc - phi_he) and the log2 trans null (equal
+## ratios) hold or fail separately, and a scenario can satisfy one and not the other. Hybrid trans cells carry both alleles with a shared extrinsic
+## factor (sim_allele_counts(); SHARED is the shared fraction of the smaller allele phi), parents are unpaired NB.
+## Each of NJ simulated datasets is tested by
+##   pool_indep   the pipeline's pooled relabeling with independent Sc and Se shuffles (perm_trans_pool()),
+##   pool_paired  the pooled relabeling in which the same hybrid cells move in both alleles (perm_trans_pool_paired()),
+##   boot_shift   a null-constrained resampling: parents resample their own cells, the two hybrid alleles share one cell resample, and the
+##                bootstrap distribution of the contrast is recentered on the observed value, so each group keeps its own mean and exposures.
+## All three use perm_pval() and the same four-group fits. Returns one data.frame row per method and scale: the share of datasets with p < each
+## ALPHA (the type I error when the scale's null holds, the power when it fails), the number of datasets with a defined contrast, the mean and SD of
+## the observed contrast, and the median SD of the null draws, which shows whether a null is wider or narrower than the contrast's own sampling
+## spread.
+raw_trans_null_row <- function(i, GRID, SHARED, NJ, NI, NBOOT, ALPHA, SEED.BASE) {
+  g <- GRID[i, ]
+  N.P <- N.SE <- N.H <- g$n_cells               # every group has n_cells cells
+  stopifnot(all(c("n_cells", "phi_pc", "phi_pe", "phi_hc", "phi_he", "mu_p", "mu_h", "cv_p", "cv_h") %in% names(g)),
+            min(g$phi_pc, g$phi_pe, g$phi_hc, g$phi_he) > 0, SHARED >= 0, SHARED <= 1, NJ >= 2, NI >= 10, NBOOT >= 10)
+  expo_draw <- function(n, cv) { sdlog <- sqrt(log(1 + cv^2)); rlnorm(n, meanlog = -0.5 * sdlog^2, sdlog = sdlog) }
+  nb_draw <- function(mu, phi) rnbinom(length(mu), size = 1 / phi, mu = mu)
+  methods <- c("pool_indep", "pool_paired", "boot_shift"); scales <- c("raw", "log")
+  P <- array(NA_real_, c(length(methods), 2, NJ), dimnames = list(methods, scales, NULL))
+  OBS <- matrix(NA_real_, 2, NJ, dimnames = list(scales, NULL))
+  NULLSD <- array(NA_real_, c(length(methods), 2, NJ), dimnames = list(methods, scales, NULL))
+  set.seed(SEED.BASE + i)
+  for (j in seq_len(NJ)) {
+    e_psc <- expo_draw(N.P, g$cv_p); e_pse <- expo_draw(N.SE, g$cv_p); e_h <- expo_draw(N.H, g$cv_h)
+    par_sc <- nb_draw(g$mu_p * e_psc, g$phi_pc); par_se <- nb_draw(g$mu_p * e_pse, g$phi_pe)
+    u <- gamma_unit(N.H, SHARED * min(g$phi_hc, g$phi_he))
+    h_sc <- sim_allele_counts(g$mu_h, e_h, u, 1 / g$phi_hc, SHARED * min(g$phi_hc, g$phi_he))
+    h_se <- sim_allele_counts(g$mu_h, e_h, u, 1 / g$phi_he, SHARED * min(g$phi_hc, g$phi_he))
+    obs <- trans_both(.fit_one(par_sc, e_psc), .fit_one(par_se, e_pse), .fit_one(h_sc, e_h), .fit_one(h_se, e_h))
+    OBS[, j] <- obs
+    pooled <- function(perm) {
+      sSC <- .fit_split(c(par_sc, h_sc), c(e_psc, e_h), perm$sc, N.P)
+      sSE <- .fit_split(c(par_se, h_se), c(e_pse, e_h), perm$se, N.SE)
+      trans_both(sSC$a, sSE$a, sSC$b, sSE$b)
+    }
+    nul <- list(
+      pool_indep  = vapply(seq_len(NI), function(b) pooled(list(sc = perm_trans_pool(N.P, seq_len(N.H), seq_len(N.H))$m,
+                                                              se = perm_trans_pool(N.SE, seq_len(N.H), seq_len(N.H))$m)), numeric(2)),
+      pool_paired = vapply(seq_len(NI), function(b) pooled(perm_trans_pool_paired(N.P, N.SE, N.H)), numeric(2)),
+      boot_shift  = vapply(seq_len(NBOOT), function(b) {
+        ip <- sample.int(N.P, N.P, TRUE); ie <- sample.int(N.SE, N.SE, TRUE); ih <- sample.int(N.H, N.H, TRUE)
+        trans_both(.fit_one(par_sc[ip], e_psc[ip]), .fit_one(par_se[ie], e_pse[ie]), .fit_one(h_sc[ih], e_h[ih]), .fit_one(h_se[ih], e_h[ih]))
+      }, numeric(2)))
+    for (m in methods) for (sc in scales) {
+      x <- nul[[m]][sc, ]
+      if (m == "boot_shift") x <- x - obs[[sc]]            # the shift null: the bootstrap spread recentered on the observed value
+      P[m, sc, j] <- perm_pval(obs[[sc]], x)
+      NULLSD[m, sc, j] <- sd(x, na.rm = TRUE)
+    }
+  }
+  truth <- c(raw = (g$phi_pc - g$phi_pe) - (g$phi_hc - g$phi_he),
+             log = (log2(g$phi_pc) - log2(g$phi_pe)) - (log2(g$phi_hc) - log2(g$phi_he)))
+  do.call(rbind, lapply(methods, function(m) do.call(rbind, lapply(scales, function(sc) {
+    p <- P[m, sc, ]
+    data.frame(i = i, method = m, scale = sc, truth = truth[[sc]], n_valid = sum(is.finite(p)),
+               rate_a1 = mean(p < ALPHA[1], na.rm = TRUE), rate_a2 = mean(p < ALPHA[2], na.rm = TRUE),
+               mean_obs = mean(OBS[sc, ], na.rm = TRUE), sd_obs = sd(OBS[sc, ], na.rm = TRUE),
+               null_sd = median(NULLSD[m, sc, ], na.rm = TRUE), row.names = NULL)
+  }))))
 }
