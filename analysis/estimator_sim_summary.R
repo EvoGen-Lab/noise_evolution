@@ -10,9 +10,7 @@
 ###   A cell is FLAGGED for an estimator when |bias| exceeds BIAS.FRAC x its bootstrap SE and the bias is
 ###   distinguishable from zero (|bias| > 2 x its replicate and truth Monte Carlo error).
 ###   The flagged share is the share of observed genes (the grid weights w) that fall in flagged cells.
-###   KEEP the MLE        : its flagged share is below KEEP.BELOW over the non-gamma families.
-###   ADOPT the moment est.: the MLE share is at least ADOPT.ABOVE, the moment estimator's share is under half of
-###                          it, and its RMSE is at most RMSE.RATIO times the MLE's in the MLE's flagged cells.
+###   KEEP the MLE as is  : its flagged share is below KEEP.BELOW over the non-gamma families.
 ###   otherwise KEEP the MLE and add the correction terms, and report the flagged regions.
 ###############################################################
 
@@ -21,8 +19,6 @@ if (!exists("OUTPUT.DIR")) OUTPUT.DIR <- "."
 if (!exists("wmean")) source("R/functions.R")   # wmean() lives in functions.R
 BIAS.FRAC   <- 0.25      # bias must stay under this fraction of the bootstrap SE
 KEEP.BELOW  <- 0.05      # flagged share of genes under which the MLE is kept as is
-ADOPT.ABOVE <- 0.20      # flagged share of genes at which a switch is considered
-RMSE.RATIO  <- 1.25      # largest acceptable RMSE of the moment estimator relative to the MLE
 
 ## ---- load and verify ------------------------------------------------------------------------
 load(file.path(INPUT.DIR, "estimator_sim_inputs.rda"))                # GRID and the settings
@@ -71,7 +67,7 @@ CELLS <- NULLROWS[NULLROWS$target %in% c("Hc", "He", "H", "Pc"), ]
 CELLS$flag_num <- as.numeric(CELLS$flag)
 TAB.CELL <- aggregate(cbind(fail, bias, rmse, sd_emp, se_boot, cover, flag_num) ~ target + est + family + mu + phi + frac, data = CELLS,
                       FUN = function(x) mean(x, na.rm = TRUE), na.action = na.pass)
-cat("\n== MLE and moment estimator by mean (averaged over the other axes), target Hc and H ==\n")
+cat("\n== MLE by mean (averaged over the other axes), target Hc and H ==\n")
 for (tg in c("Hc", "H")) {
   d <- TAB.CELL[TAB.CELL$target == tg, ]
   by_mu <- aggregate(cbind(fail, bias, rmse, se_boot, flag_num) ~ est + family + mu, data = d, FUN = function(x) mean(x, na.rm = TRUE), na.action = na.pass)
@@ -80,21 +76,15 @@ for (tg in c("Hc", "H")) {
 
 ## ---- 2. decision -------------------------------------------------------------------------------
 DEC <- NULLROWS[NULLROWS$target %in% c("Hc", "He", "H") & NULLROWS$family != "gamma" & NULLROWS$usable, ]
-SHARE <- c(mle = wmean(DEC$flag[DEC$est == "mle"], DEC$w[DEC$est == "mle"]),
-           mom = wmean(DEC$flag[DEC$est == "mom"], DEC$w[DEC$est == "mom"]))
-MLE <- DEC[DEC$est == "mle", ]; MOM <- DEC[DEC$est == "mom", ]
-BOTH <- merge(MLE[MLE$flag, c("i", "target", "rmse", "w")], MOM[, c("i", "target", "rmse")], by = c("i", "target"), suffixes = c("_mle", "_mom"))
-RMSE.REL <- if (nrow(BOTH)) wmean(BOTH$rmse_mom / BOTH$rmse_mle, BOTH$w) else NA_real_
-cat(sprintf("\n== Decision ==\nFlagged share of genes (Hc, He, H; lognormal and bimodal): MLE %.3f, moment %.3f\n", SHARE[["mle"]], SHARE[["mom"]]))
-cat(sprintf("Moment RMSE relative to MLE in the MLE's flagged cells (weighted): %.2f\n", RMSE.REL))
-DECISION <- if (SHARE[["mle"]] < KEEP.BELOW) "KEEP the MLE as is" else if (SHARE[["mle"]] >= ADOPT.ABOVE && SHARE[["mom"]] < SHARE[["mle"]] / 2 &&
-              is.finite(RMSE.REL) && RMSE.REL <= RMSE.RATIO) "ADOPT the moment estimator" else "KEEP the MLE and add the correction terms; report the flagged regions"
+MLE <- DEC
+SHARE <- wmean(MLE$flag, MLE$w)
+cat(sprintf("\n== Decision ==\nFlagged share of genes (Hc, He, H; lognormal and bimodal): MLE %.3f\n", SHARE))
+DECISION <- if (SHARE < KEEP.BELOW) "KEEP the MLE as is" else "KEEP the MLE and add the correction terms; report the flagged regions"
 cat("Decision:", DECISION, "\n")
-cat("\nFlagged share of genes by family and target (MLE | moment):\n")
+cat("\nFlagged share of genes by family and target (MLE):\n")
 BYFAM <- NULLROWS[NULLROWS$target %in% c("Hc", "He", "H", "Pc") & NULLROWS$usable, ]
 BYFAM$tag <- paste(BYFAM$family, BYFAM$target)
-print(round(rbind(mle = vapply(split(BYFAM[BYFAM$est == "mle", ], BYFAM$tag[BYFAM$est == "mle"]), function(d) wmean(d$flag, d$w), 0),
-                  mom = vapply(split(BYFAM[BYFAM$est == "mom", ], BYFAM$tag[BYFAM$est == "mom"]), function(d) wmean(d$flag, d$w), 0)), 3))
+print(round(vapply(split(BYFAM, BYFAM$tag), function(d) wmean(d$flag, d$w), 0), 3))
 
 ## Flagged regions of the MLE: share of the (omega, cbar, frac, family, target) cells flagged at each mean and dispersion.
 REG <- MLE[MLE$family != "gamma", ]

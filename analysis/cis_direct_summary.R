@@ -1,13 +1,13 @@
 ###############################################################
 ### cis_direct_summary.R
 ### Local. Reads the cis_direct_output_<k>of<K>.rda files from cluster/scripts/cis_direct_sim.R, verifies that every
-### selected grid row arrived, and compares the three estimators of the cis contrast of dispersion: option 2 (an NB
-### fit per allele, then the log2 ratio), the joint profile likelihood, and the paired moment difference.
+### selected grid row arrived, and compares two estimators of the cis contrast of dispersion: option 2 (an NB
+### fit per allele, then the log2 ratio) and the joint profile likelihood.
 ###
 ### Needs   : R/functions.R (sourced here if wmean() is not loaded), <INPUT.DIR>/estimator_sim_inputs.rda (GRID,
 ###           its weights w) and <OUTPUT.DIR>/cis_direct_output_*.rda
-### Reports : (1) how much of the cis contrast option 2 loses, and what the profile interval and the moment difference
-###           recover there; (2) coverage and width where option 2 works; (3) the gain from pairing the alleles.
+### Reports : (1) how much of the cis contrast option 2 loses, and what the profile interval
+###           recovers there; (2) coverage and width where option 2 works.
 ###############################################################
 
 if (!exists("INPUT.DIR"))  INPUT.DIR  <- "."
@@ -41,12 +41,11 @@ TAB.REC <- data.frame(
   rec_two_sided = vapply(SPLIT, function(d) sum(d$w * d$rec_two_sided * d$miss, na.rm = TRUE) / sum(d$w * d$miss), 0),
   rec_one_sided = vapply(SPLIT, function(d) sum(d$w * d$rec_one_sided * d$miss, na.rm = TRUE) / sum(d$w * d$miss), 0),
   rec_excl0 = vapply(SPLIT, function(d) sum(d$w * d$rec_excl0 * d$miss, na.rm = TRUE) / sum(d$w * d$miss), 0),
-  rec_cover = vapply(SPLIT, function(d) sum(d$w * d$rec_cover * d$miss, na.rm = TRUE) / sum(d$w * d$miss), 0),
-  moment_excl0 = vapply(SPLIT, function(d) sum(d$w * d$rec_m_excl0 * d$miss, na.rm = TRUE) / sum(d$w * d$miss), 0), row.names = NULL)
+  rec_cover = vapply(SPLIT, function(d) sum(d$w * d$rec_cover * d$miss, na.rm = TRUE) / sum(d$w * d$miss), 0), row.names = NULL)
 print(TAB.REC, digits = 3, row.names = FALSE)
-cat(sprintf("\nAll rows: option 2 gives no contrast for %.3f of datasets; among those the profile interval is one-sided in %.3f,\ntwo-sided in %.3f, excludes zero in %.3f (covers the truth in %.3f); the moment difference excludes zero in %.3f.\n",
+cat(sprintf("\nAll rows: option 2 gives no contrast for %.3f of datasets; among those the profile interval is one-sided in %.3f,\ntwo-sided in %.3f, excludes zero in %.3f (covers the truth in %.3f).\n",
             wmean(D$miss, D$w), sum(D$w * D$rec_one_sided * D$miss, na.rm = TRUE) / sum(D$w * D$miss), sum(D$w * D$rec_two_sided * D$miss, na.rm = TRUE) / sum(D$w * D$miss), sum(D$w * D$rec_excl0 * D$miss, na.rm = TRUE) / sum(D$w * D$miss),
-            sum(D$w * D$rec_cover * D$miss, na.rm = TRUE) / sum(D$w * D$miss), sum(D$w * D$rec_m_excl0 * D$miss, na.rm = TRUE) / sum(D$w * D$miss)))
+            sum(D$w * D$rec_cover * D$miss, na.rm = TRUE) / sum(D$w * D$miss)))
 cat("Where it is recovered, by mean (rows) and dispersion (columns): share of option-2-failed datasets whose profile interval excludes 0\n")
 print(round(tapply(D$rec_excl0, list(mu = D$mu, phi = D$phi), mean, na.rm = TRUE), 2))
 cat("Share of datasets where option 2 fails, same layout:\n")
@@ -62,15 +61,6 @@ CMP <- data.frame(
 print(CMP, digits = 3, row.names = FALSE)
 cat(sprintf("Profile interval width / option 2 width: %.2f\n", wmean(D$p_width_e2ok, D$w) / wmean(D$e2_width, D$w)))
 cat("Coverage over all datasets, including those option 2 drops: profile", round(wmean(D$p_cover, D$w), 3), "\n")
-
-## ---- 3. the gain from pairing the alleles ---------------------------------------------------------
-cat("\n== 3. Pairing (moment difference of phi, a scale on which the contrast is always defined) ==\n")
-cat(sprintf("Paired SE / unpaired SE of phi_Hc - phi_He (median over datasets, gene-weighted): %.3f\n", wmean(D$m_se_ratio, D$w)))
-cat(sprintf("Coverage of the true difference by +/-1.96 SE: paired %.3f, unpaired %.3f\n", wmean(D$m_diff_cover, D$w), wmean(D$m_diff_cover_unpaired, D$w)))
-cat(sprintf("Sandwich SE of the moment log ratio / option 2 bootstrap SE: %.3f; coverage of the log contrast %.3f; log ratio undefined in %.3f of datasets\n",
-            wmean(D$m_selog_over_boot, D$w), wmean(D$m_log_cover, D$w), wmean(D$m_log_fail, D$w)))
-cat("Paired / unpaired SE by omega (rows) and family (columns); a smaller ratio means pairing helps more:\n")
-print(round(tapply(D$m_se_ratio, list(omega = D$omega, family = D$family), mean, na.rm = TRUE), 3))
 
 if (exists("TABLE.DIR") && dir.exists(TABLE.DIR)) {
   write.csv(TAB.REC, file.path(TABLE.DIR, "cis_direct_recovery.csv"), row.names = FALSE)

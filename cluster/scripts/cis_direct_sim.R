@@ -1,11 +1,10 @@
 ###############################################################
 ### cis_direct_sim.R
-### Compares three estimators of the cis contrast of dispersion on the same simulated paired hybrid cells:
+### Compares two estimators of the cis contrast of dispersion on the same simulated paired hybrid cells:
 ### option 2 (an NB maximum-likelihood fit per allele, then log2 phi_Hc - log2 phi_He, with a percentile
-### bootstrap), a direct joint-likelihood estimate with a likelihood-ratio interval (cis_profile), and a
-### direct paired moment estimate of phi_Hc - phi_He (cis_paired_moment). The question is how much of the
-### cis contrast that option 2 loses to failed fits the direct estimators recover, and whether pairing the
-### alleles tightens the contrast. A separate study; it reads no existing result.
+### bootstrap) and a direct joint-likelihood estimate with a likelihood-ratio interval (cis_profile). The
+### question is how much of the cis contrast that option 2 loses to failed fits the direct estimate recovers.
+### A separate study; it reads no existing result.
 ###
 ### Inputs  : estimator_sim_inputs.rda, written by analysis/sim_inputs.R (the same file estimator_sim.R reads)
 ### Output  : cis_direct_output_<k>of<K>.rda for array task k of K, holding CIS.DIRECT (one row per grid row)
@@ -66,8 +65,8 @@ chunks     <- split(MY.ROWS, ceiling(seq_along(MY.ROWS) / CHUNK.SIZE))
 results <- vector("list", length(chunks))
 t0 <- Sys.time(); done <- 0
 for (k in seq_along(chunks)) {
-  ## cis_direct_row: one GRID row. It simulates NREP hybrid datasets, applies the three cis estimators to the same
-  ## cells (option 2 with a cell bootstrap, the joint profile likelihood, the paired moment difference) and scores
+  ## cis_direct_row: one GRID row. It simulates NREP hybrid datasets, applies the two cis estimators to the same
+  ## cells (option 2 with a cell bootstrap, the joint profile likelihood) and scores
   ## each against the latent cis truth: failure and bias, SE, coverage and interval width, and for the datasets
   ## where option 2 fails, how often the profile interval is one- or two-sided and excludes zero.
   results[[k]] <- parLapply(cl, chunks[[k]], cis_direct_row, GRID = GRID, TRUTH = TRUTH, LIB.HYB = LIB.HYB, DEPTH.REF = DEPTH.REF,

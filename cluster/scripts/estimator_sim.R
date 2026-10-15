@@ -1,8 +1,7 @@
 ###############################################################
 ### estimator_sim.R
 ### Simulation study of the dispersion estimators: does the NB maximum-likelihood fit
-### (.fit_one()) recover the dispersion of a count-scale factor that is not gamma, and how does
-### a Poisson-corrected moment estimator compare on the same simulated cells? Runs one
+### (.fit_one()) recover the dispersion of a count-scale factor that is not gamma? Runs one
 ### estimator_sim_row() per GRID row on a FORK cluster and saves the per-row summaries. Mirrors
 ### the structure of power_grid.R. A separate study: no existing result depends on it.
 ###
@@ -73,8 +72,7 @@ results <- vector("list", length(chunks))
 t0 <- Sys.time(); done <- 0
 for (k in seq_along(chunks)) {
   ## estimator_sim_row: one GRID row (mean x dispersion x intrinsic fraction x mean share x cell fraction x
-  ## factor family x scenario). It simulates NREP datasets from the latent model, fits the MLE and the moment
-  ## estimator on Hc, He, the summed hybrid and both parents, bootstraps the cells for standard errors and
+  ## factor family x scenario). It simulates NREP datasets from the latent model, fits the MLE on Hc, He, the summed hybrid and both parents, bootstraps the cells for standard errors and
   ## coverage, and compares everything with the latent truth and the Appendix A predictions.
   results[[k]] <- parLapply(cl, chunks[[k]], estimator_sim_row, GRID = GRID, TRUTH = TRUTH, LIB.HYB = LIB.HYB, LIB.PAR = LIB.PAR,
                             DEPTH.REF = DEPTH.REF, N.OBS = N.OBS, NREP = NREP, NBOOT = NBOOT, SEED.BASE = SEED.BASE,
