@@ -3729,6 +3729,24 @@ boot_contrasts_one <- function(g, expos, fits, mats, draws, share_r = NULL, ploi
     ## give finite values for both.
     x <- M[, paste0("m.", md)]; y <- M[, paste0("s.", smd)]; ok <- is.finite(x) & is.finite(y)
     out[[paste0("cor_", md)]] <- if (sum(ok) > 2) cor(x[ok], y[ok]) else NA_real_
+    ## Trans test: the bootstrap-shift null. The null is the resample distribution of the contrast recentered on its own estimate
+    ## (draw - estimate), so each group keeps its own mean, exposures and dispersion, the two hybrid alleles share their cell
+    ## resample, and the hypothesis tested is that the trans contrast itself is zero on the scale in question (log2 or raw), not that
+    ## the groups are exchangeable. The p-value is two-sided (perm_pval()); draws without a defined contrast are dropped, which for
+    ## the log2 scale are the resamples with phi = 0 in some group. bsize and kbal use the draw-wise sums of the mean and noise draws.
+    if (md == "trans") {
+      boot_p <- function(est, draws_) perm_pval(est, draws_ - est)
+      m_d <- M[, "m.trans"]; s_d <- M[, "s.trans_n"]; est_d <- out[["disp_trans_est"]]; est_bs <- out[["mean_trans_est"]] + est_d
+      out$disp_trans_p_boot  <- boot_p(est_d, s_d)
+      out$bsize_trans_p_boot <- boot_p(est_bs, m_d + s_d)
+      out$kbal_trans_p_boot  <- boot_p(-(est_bs + est_d), -(m_d + 2 * s_d))
+      out$cv2_trans_p_boot   <- boot_p(out[["cv2_trans_est"]], M[, "c.trans_n"])
+      out$rdisp_trans_p_boot <- boot_p(out[["rdisp_trans_est"]], M[, "r.trans_n"])
+      if (do_w) {
+        out$wdisp_trans_p_boot  <- boot_p(out[["wdisp_trans_est"]],  W[, "ws.trans_n"])
+        out$wrdisp_trans_p_boot <- boot_p(out[["wrdisp_trans_est"]], W[, "wr.trans_n"])
+      }
+    }
   }
   .r2 <- function(c1, c2) {
 	x <- M[, c1]; y <- M[, c2]; ok <- is.finite(x) & is.finite(y)

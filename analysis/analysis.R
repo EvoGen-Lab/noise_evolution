@@ -643,6 +643,21 @@ BURST.CONTRASTS <- local({
   df
 })
 PR <- PERM.RESULTS[match(BURST.CONTRASTS$gene, PERM.RESULTS$gene), ]   
+# Trans test. The trans p-values of the noise quantities come from the bootstrap-shift null computed in the bootstrap job
+# (boot_contrasts_one(): the resample distribution of the contrast recentered on its estimate), which tests that the trans contrast
+# itself is zero on its own scale. The pooled-relabeling p-values (gene_perm), which also require the groups to share one distribution,
+# stay beside them as <quantity>_trans_p_pooled. The raw (rdisp) and weighted-moment (wdisp, wrdisp) trans contrasts have bootstrap-shift
+# p-values only. The mean-axis trans p-value remains the permutation one.
+PR <- local({
+  df <- PR
+  bp <- BOOT.CONTRASTS[match(df$gene, BOOT.CONTRASTS$gene), ]
+  for (q in c("disp", "bsize", "kbal", "cv2")) {
+    df[[paste0(q, "_trans_p_pooled")]] <- df[[paste0(q, "_trans_p")]]
+    df[[paste0(q, "_trans_p")]]        <- bp[[paste0(q, "_trans_p_boot")]]
+  }
+  for (q in c("rdisp", "wdisp", "wrdisp")) df[[paste0(q, "_trans_p")]] <- bp[[paste0(q, "_trans_p_boot")]]
+  df
+})
 # Benjamini-Hochberg FDR across genes, one family per contrast and quantity.
 # Adds a _q column beside every _p column.
 PR <- local({
