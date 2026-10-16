@@ -430,14 +430,20 @@ fit_dispersion <- function(counts, expo, share_r = 0, method = c("NB", "weighted
   out
 }
 
+# .fit_m: one fit by the chosen dispersion method, as c(mu, disp, theta): "NB" is .fit_one(), "weighted" the weighted method of moments of
+# fit_dispersion(). The null helpers below take the method so a permutation null can be run with either estimator on the same relabelings.
+.fit_m <- function(counts, expo, share_r = 0, method = "NB") {
+  if (method == "NB") .fit_one(counts, expo, share_r) else fit_dispersion(counts, expo, share_r, method)[c("mu", "disp", "theta")]
+}
+
 # Splits a pooled sample at position n1 of a pre-drawn index permutation and fits each
 # half with .fit_one(): the permutation null for a two-group contrast (labels
 # are exchangeable under H0). Used by the gene-level null and the power grid. Returns
-# list(a = first n1 cells, b = remaining cells).
-.fit_split <- function(counts, expo, perm, n1) {
+# list(a = first n1 cells, b = remaining cells). method selects the dispersion estimator (.fit_m()).
+.fit_split <- function(counts, expo, perm, n1, method = "NB") {
   stopifnot(n1 >= 1, n1 <= length(perm))
   g1 <- perm[seq_len(n1)]; g0 <- perm[seq_along(perm) > n1]   # empty second group when n1 == length(perm)
-  list(a = .fit_one(counts[g1], expo[g1]), b = .fit_one(counts[g0], expo[g0]))
+  list(a = .fit_m(counts[g1], expo[g1], 0, method), b = .fit_m(counts[g0], expo[g0], 0, method))
 }
 
 ## Fits every gene (row) of a genes x cells matrix against one shared exposure vector
@@ -3363,36 +3369,39 @@ perm_trans_pool_paired <- function(nSC, nSE, nHYT) {
        se = c(par_a, nSE + a_h, setdiff(seq_len(nSE), par_a), nSE + setdiff(seq_len(nHYT), a_h)))
 }
 
-## fit_ratio_axes: the log2 ratio of two .fit_one() results on each axis, as c(mu, disp, cv2); an axis is NA
-## unless both sides are finite and positive. The one definition of a contrast between two groups for the
-## gene-level permutation null and the power grid.
-fit_ratio_axes <- function(fa, fb) {
+## fit_ratio_axes: the log2 ratio of two fits (.fit_one() or fit_dispersion() results) on each axis, as c(mu, disp, cv2); an axis is NA
+## unless both sides are finite and positive. With raw = TRUE a fourth element, rdisp, is the raw difference of phi, defined whenever both
+## phi are finite and >= 0 (a phi = 0 fit counts). The one definition of a contrast between two groups for the gene-level permutation null
+## and the power grid.
+fit_ratio_axes <- function(fa, fb, raw = FALSE) {
   ratio <- function(x, y) if (is.finite(x) && x > 0 && is.finite(y) && y > 0) log2(x) - log2(y) else NA_real_
-  c(mu   = ratio(fa[["mu"]], fb[["mu"]]),
-    disp = ratio(fa[["disp"]], fb[["disp"]]),
-    cv2  = ratio(.cv2_of(fa[["mu"]], fa[["disp"]]), .cv2_of(fb[["mu"]], fb[["disp"]])))
+  out <- c(mu   = ratio(fa[["mu"]], fb[["mu"]]),
+           disp = ratio(fa[["disp"]], fb[["disp"]]),
+           cv2  = ratio(.cv2_of(fa[["mu"]], fa[["disp"]]), .cv2_of(fb[["mu"]], fb[["disp"]])))
+  if (raw) out[["rdisp"]] <- if (all(is.finite(c(fa[["disp"]], fb[["disp"]])) & c(fa[["disp"]], fb[["disp"]]) >= 0)) fa[["disp"]] - fb[["disp"]] else NA_real_
+  out
 }
 
 ## null_cis_axes: one draw of the cis null for hybrid cells with allele counts sc, se and the offsets
 ## expo_sc, expo_se of the two alleles (equal in the pipeline, S_H / 2). swap (logical per cell) exchanges the two alleles
 ## within a cell, count and offset together, which keeps the allele pairing; share_r holds the
 ## allele-share corrections of the first and second fit (the Sc and Se allele positions, .fit_one()); the
-## contrast is the swapped Sc allele against the swapped Se allele (fit_ratio_axes()). Shared by
+## contrast is the swapped Sc allele against the swapped Se allele (fit_ratio_axes(); raw adds the raw difference, method picks the estimator). Shared by
 ## permute_contrasts_one() and the power grid (which passes one exposure for both alleles).
-null_cis_axes <- function(sc, se, expo_sc, expo_se, swap, share_r = c(0, 0)) {
-  fit_ratio_axes(.fit_one(ifelse(swap, se, sc), ifelse(swap, expo_se, expo_sc), share_r[[1]]),
-                 .fit_one(ifelse(swap, sc, se), ifelse(swap, expo_sc, expo_se), share_r[[2]]))
+null_cis_axes <- function(sc, se, expo_sc, expo_se, swap, share_r = c(0, 0), raw = FALSE, method = "NB") {
+  fit_ratio_axes(.fit_m(ifelse(swap, se, sc), ifelse(swap, expo_se, expo_sc), share_r[[1]], method),
+                 .fit_m(ifelse(swap, sc, se), ifelse(swap, expo_sc, expo_se), share_r[[2]], method), raw)
 }
 
 ## null_trans_axes: one draw of the trans null. For each allele the parent cells and the hybrid cells of the
 ## trans group are pooled (each allele's hybrid cells with that allele's offset) and relabeled by perm_sc / perm_se (pooled indices: parents first, then hybrid
 ## cells; the first length(par) entries form the parent-sized group, .fit_split()). The contrast is the
 ## parental ratio minus the hybrid allele ratio of the relabeled groups. Shared by permute_contrasts_one()
-## and the power grid.
-null_trans_axes <- function(par_sc, par_se, hyb_sc, hyb_se, expo_par_sc, expo_par_se, expo_hyb_sc, expo_hyb_se, perm_sc, perm_se) {
-  sSC <- .fit_split(c(par_sc, hyb_sc), c(expo_par_sc, expo_hyb_sc), perm_sc, length(par_sc))
-  sSE <- .fit_split(c(par_se, hyb_se), c(expo_par_se, expo_hyb_se), perm_se, length(par_se))
-  fit_ratio_axes(sSC$a, sSE$a) - fit_ratio_axes(sSC$b, sSE$b)
+## and the power grid; raw and method as in null_cis_axes().
+null_trans_axes <- function(par_sc, par_se, hyb_sc, hyb_se, expo_par_sc, expo_par_se, expo_hyb_sc, expo_hyb_se, perm_sc, perm_se, raw = FALSE, method = "NB") {
+  sSC <- .fit_split(c(par_sc, hyb_sc), c(expo_par_sc, expo_hyb_sc), perm_sc, length(par_sc), method)
+  sSE <- .fit_split(c(par_se, hyb_se), c(expo_par_se, expo_hyb_se), perm_se, length(par_se), method)
+  fit_ratio_axes(sSC$a, sSE$a, raw) - fit_ratio_axes(sSC$b, sSE$b, raw)
 }
 
 ## eiv_mode_ci_row: errors-in-variables correlation for one mode m with a gene-resampling bootstrap CI
@@ -3753,6 +3762,8 @@ permute_contrasts_one <- function(g, expos, fits, mats, perms, ploidy_shift, see
   Nm <- matrix(NA_real_, B, length(modes), dimnames = list(NULL, modes))
   Ns <- matrix(NA_real_, B, length(modes), dimnames = list(NULL, modes))
   Nc <- matrix(NA_real_, B, length(modes), dimnames = list(NULL, modes))
+  Nr <- Ns; Nws <- Ns; Nwr <- Ns          # nulls of the raw (NB), log2 (weighted) and raw (weighted) dispersion contrasts
+  do_w <- "weighted" %in% methods
   fv   <- fit_group_values(fits, g)
   gvmu <- fv$mu; gvbf <- fv$disp; gvcv <- fv$cv2
   obs.m <- vapply(modes, .contrast_value, numeric(1), gvmu, "MU")
@@ -3768,6 +3779,17 @@ permute_contrasts_one <- function(g, expos, fits, mats, perms, ploidy_shift, see
   mp.s <- 0.5 * (l2(gvbf[["MIX.SC"]]) + l2(gvbf[["MIX.SE"]]))
   mp.c <- 0.5 * (l2(gvcv[["MIX.SC"]]) + l2(gvcv[["MIX.SE"]]))
   nSC <- length(cMIXsc); nSE <- length(cMIXse); nHYB <- length(cHYBc)
+  ## Observed dispersion contrasts on the other three scale x estimator combinations. The raw NB contrasts come from the NB fits already
+  ## in hand; the weighted ones refit every dataset on all its cells. .disp_contrasts() gives c(log, raw) of each mode from its groups' phi.
+  oc_nb <- vapply(modes, .disp_contrasts, numeric(2), gvbf)
+  obs.r <- oc_nb["raw", ]
+  gvw <- NULL
+  if (do_w) {
+    gvw <- lapply(setNames(names(.DRAW.KEY), names(.DRAW.KEY)), function(k) unname(fit_dispersion(mats[[k]][g, ], expos[[k]], share_r[[k]], "weighted")[["disp"]]))
+    oc_w <- vapply(modes, .disp_contrasts, numeric(2), gvw)
+    obs.ws <- oc_w["log", ]; obs.wr <- oc_w["raw", ]
+    mp.sw <- 0.5 * (l2(gvw[["MIX.SC"]]) + l2(gvw[["MIX.SE"]]))
+  }
   ## dom surrogate: every UMI of a parent cell is kept with probability rho and that cell's offset is scaled by rho,
   ## which leaves the NB dispersion unchanged (a thinned NB is an NB) and gives the two parents equal offset totals.
   ## The surrogate's mean rate is then the unweighted midparent. The thinning draws come from a stream seeded by
@@ -3778,34 +3800,47 @@ permute_contrasts_one <- function(g, expos, fits, mats, perms, ploidy_shift, see
   if (is.na(gi)) stop("permute_contrasts_one(): gene ", g, " is not a row of mats$MIX.SC")
   ## store: one row of the Nm / Ns / Nc null matrices (mean, disp and CV2 axes) for mode md, from the
   ## c(mu, disp, cv2) contrast that fit_ratio_axes() returns
-  store <- function(b, md, ax) { Nm[b, md] <<- ax[["mu"]]; Ns[b, md] <<- ax[["disp"]]; Nc[b, md] <<- ax[["cv2"]] }
+  ## The NB fit fills the mean, log2 disp, CV2 and raw disp nulls; the weighted fit (methods = c("NB", "weighted")) fills the log2 and raw disp nulls
+  ## of the weighted-moment estimator. Both read the same relabelings of the same permutation.
+  store <- function(b, md, ax) { Nm[b, md] <<- ax[["mu"]]; Ns[b, md] <<- ax[["disp"]]; Nc[b, md] <<- ax[["cv2"]]; Nr[b, md] <<- ax[["rdisp"]] }
+  storew <- function(b, md, ax) { Nws[b, md] <<- ax[["disp"]]; Nwr[b, md] <<- ax[["rdisp"]] }
   with_local_seed(seed + gi, for (b in seq_len(B)) {
     p <- perms[[b]]
-    sp <- .fit_split(c(cMIXsc, cMIXse), c(expos$MIX.SC, expos$MIX.SE), p$total, nSC)
-    store(b, "total", fit_ratio_axes(sp$a, sp$b))
-
-    ## cis swap: a swapped allele carries its own offset, so every count keeps its offset
-    store(b, "cis", null_cis_axes(cHYCsc, cHYCse, expos$HYC.SC, expos$HYC.SE, p$cis, share_r[c("HYC.SC", "HYC.SE")]))
-    ## Noise-split (f_disp) version of the cis null, used only for
-    ## the disp_cis/cv2_cis output columns, mirroring cis_n in .MODES
-    store(b, "cis_n", null_cis_axes(cHYCsc.N, cHYCse.N, expos$HYC.SC.N, expos$HYC.SE.N, p$cis_n, share_r[c("HYC.SC.N", "HYC.SE.N")]))
-
-    store(b, "trans", null_trans_axes(cMIXsc, cMIXse, cHYTsc, cHYTse, expos$MIX.SC, expos$MIX.SE, expos$HYT.SC, expos$HYT.SE, p$transSC, p$transSE))
-    ## Noise-split version of the trans null, used only for the
-    ## disp_trans/cv2_trans output columns, mirroring trans_n in .MODES
-    store(b, "trans_n", null_trans_axes(cMIXsc, cMIXse, cHYTsc.N, cHYTse.N, expos$MIX.SC, expos$MIX.SE, expos$HYT.SC.N, expos$HYT.SE.N, p$transSC_n, p$transSE_n))
-
+    ## dom surrogate draws (one thinning per permutation, shared by both estimators)
     synth <- rbinom(nHYB, cMIXsc[p$dom_i], rho.sc) + rbinom(nHYB, cMIXse[p$dom_j], rho.se)
     es    <- rho.sc * e.sc[p$dom_i] + rho.se * e.se[p$dom_j]
-    fs <- .fit_one(synth, es)
-    if (is.finite(fs["mu"])   && fs["mu"]   > 0) Nm[b,"dom"] <- l2(fs["mu"])   - mp.m
-    if (is.finite(fs["disp"]) && fs["disp"] > 0) Ns[b,"dom"] <- l2(fs["disp"]) - mp.s
-    fs.cv <- .cv2_of(fs[["mu"]], fs[["disp"]])
-    if (is.finite(fs.cv) && fs.cv > 0) Nc[b,"dom"] <- l2(fs.cv) - mp.c
-    d1 <- .fit_split(c(cHYBc, cMIXsc), c(expos$HYB.COMB, expos$MIX.SC), p$dparSC, nHYB)
-    store(b, "dpar_sc", fit_ratio_axes(d1$a, d1$b))
-    d2 <- .fit_split(c(cHYBc, cMIXse), c(expos$HYB.COMB, expos$MIX.SE), p$dparSE, nHYB)
-    store(b, "dpar_se", fit_ratio_axes(d2$a, d2$b))
+    for (mt in methods) {
+      st <- if (mt == "NB") store else storew
+      sp <- .fit_split(c(cMIXsc, cMIXse), c(expos$MIX.SC, expos$MIX.SE), p$total, nSC, mt)
+      st(b, "total", fit_ratio_axes(sp$a, sp$b, raw = TRUE))
+
+      ## cis swap: a swapped allele carries its own offset, so every count keeps its offset
+      st(b, "cis", null_cis_axes(cHYCsc, cHYCse, expos$HYC.SC, expos$HYC.SE, p$cis, share_r[c("HYC.SC", "HYC.SE")], raw = TRUE, method = mt))
+      ## Noise-split (f_disp) version of the cis null, used only for
+      ## the disp_cis/cv2_cis output columns, mirroring cis_n in .MODES
+      st(b, "cis_n", null_cis_axes(cHYCsc.N, cHYCse.N, expos$HYC.SC.N, expos$HYC.SE.N, p$cis_n, share_r[c("HYC.SC.N", "HYC.SE.N")], raw = TRUE, method = mt))
+
+      st(b, "trans", null_trans_axes(cMIXsc, cMIXse, cHYTsc, cHYTse, expos$MIX.SC, expos$MIX.SE, expos$HYT.SC, expos$HYT.SE, p$transSC, p$transSE, raw = TRUE, method = mt))
+      ## Noise-split version of the trans null, used only for the
+      ## disp_trans/cv2_trans output columns, mirroring trans_n in .MODES
+      st(b, "trans_n", null_trans_axes(cMIXsc, cMIXse, cHYTsc.N, cHYTse.N, expos$MIX.SC, expos$MIX.SE, expos$HYT.SC.N, expos$HYT.SE.N, p$transSC_n, p$transSE_n, raw = TRUE, method = mt))
+
+      fs <- .fit_m(synth, es, 0, mt)
+      if (mt == "NB") {
+        if (is.finite(fs["mu"])   && fs["mu"]   > 0) Nm[b,"dom"] <- l2(fs["mu"])   - mp.m
+        if (is.finite(fs["disp"]) && fs["disp"] > 0) Ns[b,"dom"] <- l2(fs["disp"]) - mp.s
+        fs.cv <- .cv2_of(fs[["mu"]], fs[["disp"]])
+        if (is.finite(fs.cv) && fs.cv > 0) Nc[b,"dom"] <- l2(fs.cv) - mp.c
+        if (is.finite(fs[["disp"]]) && fs[["disp"]] >= 0) Nr[b,"dom"] <- fs[["disp"]] - 0.5 * (gvbf[["MIX.SC"]] + gvbf[["MIX.SE"]])
+      } else {
+        if (is.finite(fs["disp"]) && fs["disp"] > 0) Nws[b,"dom"] <- l2(fs["disp"]) - mp.sw
+        if (is.finite(fs[["disp"]]) && fs[["disp"]] >= 0) Nwr[b,"dom"] <- fs[["disp"]] - 0.5 * (gvw[["MIX.SC"]] + gvw[["MIX.SE"]])
+      }
+      d1 <- .fit_split(c(cHYBc, cMIXsc), c(expos$HYB.COMB, expos$MIX.SC), p$dparSC, nHYB, mt)
+      st(b, "dpar_sc", fit_ratio_axes(d1$a, d1$b, raw = TRUE))
+      d2 <- .fit_split(c(cHYBc, cMIXse), c(expos$HYB.COMB, expos$MIX.SE), p$dparSE, nHYB, mt)
+      st(b, "dpar_se", fit_ratio_axes(d2$a, d2$b, raw = TRUE))
+    }
   })
   out <- list(gene = g)
   for (md in .OUT_MODES) {
@@ -3816,6 +3851,12 @@ permute_contrasts_one <- function(g, expos, fits, mats, perms, ploidy_shift, see
     out[[paste0("disp_", md, "_p")]]   <- perm_pval(obs.s[smd], Ns[, smd])
     out[[paste0("cv2_", md, "_obs")]]   <- unname(obs.c[smd])
     out[[paste0("cv2_", md, "_p")]]     <- perm_pval(obs.c[smd], Nc[, smd])
+    ## the other scale x estimator combinations of the dispersion contrast: raw NB (rdisp), log2 weighted (wdisp), raw weighted (wrdisp)
+    out[[paste0("rdisp_", md, "_obs")]] <- unname(obs.r[smd]);  out[[paste0("rdisp_", md, "_p")]]  <- perm_pval(obs.r[smd], Nr[, smd])
+    if (do_w) {
+      out[[paste0("wdisp_", md, "_obs")]]  <- unname(obs.ws[smd]); out[[paste0("wdisp_", md, "_p")]]  <- perm_pval(obs.ws[smd], Nws[, smd])
+      out[[paste0("wrdisp_", md, "_obs")]] <- unname(obs.wr[smd]); out[[paste0("wrdisp_", md, "_p")]] <- perm_pval(obs.wr[smd], Nwr[, smd])
+    }
 
     ## bsize null: mean null plus disp null, permutation by permutation. Where md == smd the two
     ## draws share one relabeling, so their correlation carries through. For cis and trans they come
@@ -3852,6 +3893,13 @@ permute_contrasts_one <- function(g, expos, fits, mats, perms, ploidy_shift, see
         cv2 <- if (is.finite(cvh) && cvh > 0 && is.finite(cvp) && cvp > 0) l2(cvh) - l2(cvp) else NA_real_
         ob <- list(disp = unname(obs.s[smd]) + s, bsize = obs.bs + s, kbal = obs.kbal - 2 * s, cv2 = cv2)
         for (q in names(nulls)) out[[paste0(q, "_", md, "_p_", tag)]] <- perm_pval(ob[[q]], nulls[[q]])
+        ## raw contrasts: the summed hybrid's phi times 2^s sits on the parents' per-genome scale, which adds (2^s - 1) phi_H to the raw difference;
+        ## the log2 weighted contrast adds s as the NB one does
+        out[[paste0("rdisp_", md, "_p_", tag)]] <- perm_pval(obs.r[smd] + (2^s - 1) * ph, Nr[, smd])
+        if (do_w) {
+          out[[paste0("wdisp_", md, "_p_", tag)]]  <- perm_pval(obs.ws[smd] + s, Nws[, smd])
+          out[[paste0("wrdisp_", md, "_p_", tag)]] <- perm_pval(obs.wr[smd] + (2^s - 1) * gvw[["HYB.COMB"]], Nwr[, smd])
+        }
       }
     }
   }
@@ -3885,7 +3933,7 @@ permute_contrasts_one <- function(g, expos, fits, mats, perms, ploidy_shift, see
     }
     shift_p <- function(est, draws_) perm_pval(est, draws_ - est)
     est_m <- unname(obs.m["trans"]); est_s <- unname(obs.s["trans_n"]); est_bs <- est_m + est_s
-    for (q in c("disp", "bsize", "kbal", "cv2")) out[[paste0(q, "_trans_p_pooled")]] <- out[[paste0(q, "_trans_p")]]
+    for (q in c("disp", "bsize", "kbal", "cv2", "rdisp", if (do_w) c("wdisp", "wrdisp"))) out[[paste0(q, "_trans_p_pooled")]] <- out[[paste0(q, "_trans_p")]]
     out$disp_trans_p  <- shift_p(est_s, Ds)
     out$bsize_trans_p <- shift_p(est_bs, Dm + Ds)
     out$kbal_trans_p  <- shift_p(-(est_bs + est_s), -(Dm + 2 * Ds))
