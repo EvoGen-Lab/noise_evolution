@@ -136,6 +136,7 @@
 ###     report_within_between_by_class() - Plots the within/between ratio by class (with class_anova()'s omnibus test and Tukey comparisons) for two datasets side by side against one classification axis; writes the combined figure and prints both datasets' test statistics.
 ###   13b. FUNCTIONS APPLIED ACROSS ITEMS BY analysis.R
 ###     qc_upper_outliers() - Upper-tail library and detected-gene outliers of one dataset (median + k MAD on the log10 scale), the count-based multiplet signals.
+###     qc_mito_flag() - Soft dying-cell signal of one dataset: a logit mitochondrial fraction above median + k MAD together with a below-median library.
 ###     doublet_score_knn() - Simulated-doublet nearest-neighbour posterior of every cell of one dataset (Scrublet-style, base R).
 ###     qc_cell_cutoff() - library-size cell filter for one dataset s (a list with lib, the per-cell library.
 ###     fstar_from_r() - closed-form split fraction f* = [(2+r) - sqrt(r^2+4)] / (2r) for r = B*Nh/A.
@@ -539,9 +540,12 @@ split_indices_by_depth <- function(n, f) {
 ## scale. lambda0 is the mean count per cell required at the shallowest
 ## dataset; deeper datasets face a proportionally higher mean-count floor.
 ## The detection floor is an absolute number of cells because the precision
-## of a dispersion fit depends on informative cells, not on their fraction. Returns the passing genes (those that pass in every dataset),
-## the floors, and pass, a genes x datasets logical matrix of the per-dataset decisions.
-qc_gene_keep <- function(mats, lambda0 = 0.20, cell_frac = 0.10) {
+## of a dispersion fit depends on informative cells, not on their fraction. A gene is informative in a dataset when it meets both floors there, that
+## is, when the dataset holds enough data to estimate its mean and noise. rule "any" keeps a gene informative in at least one dataset, so a gene that
+## is low in one dataset stays and each comparison that needs that dataset drops it case by case; rule "all" keeps only genes informative in every
+## dataset. Returns the kept genes, the floors, and pass, a genes x datasets logical matrix of the per-dataset decisions.
+qc_gene_keep <- function(mats, lambda0 = 0.20, cell_frac = 0.10, rule = c("any", "all")) {
+  rule <- match.arg(rule)
   stopifnot(is.list(mats), length(mats) >= 1, is.numeric(lambda0), length(lambda0) == 1, lambda0 > 0,
             is.numeric(cell_frac), length(cell_frac) == 1, cell_frac > 0, cell_frac <= 1)
   genes <- Reduce(intersect, lapply(mats, rownames))
@@ -551,7 +555,7 @@ qc_gene_keep <- function(mats, lambda0 = 0.20, cell_frac = 0.10) {
   n_min <- ceiling(cell_frac * min(vapply(mats, ncol, integer(1))))
   pass  <- vector("list", length(mats)); names(pass) <- names(mats)
   for (i in seq_along(mats)) pass[[i]] <- rowSums(mats[[i]]) / sum(mats[[i]]) >= p_min & rowSums(mats[[i]] > 0) >= n_min
-  list(genes = sort(genes[Reduce(`&`, pass)]), p_min = p_min, n_min = n_min,
+  list(genes = sort(genes[Reduce(if (rule == "any") `|` else `&`, pass)]), p_min = p_min, n_min = n_min,
        depth = depth, exp_mean = p_min * depth, pass = do.call(cbind, pass))
 }
 
@@ -3305,6 +3309,22 @@ qc_upper_outliers <- function(s, k) {
   lx <- log10(s$lib[s$lib > 0]); dx <- log10(s$det[s$det > 0])
   lib_cut <- 10^(median(lx) + k * mad(lx)); det_cut <- 10^(median(dx) + k * mad(dx))
   list(lib_hi = s$lib > lib_cut, det_hi = s$det > det_cut, lib_cut = lib_cut, det_cut = det_cut)
+}
+
+## qc_mito_flag: the dying-cell signal of one dataset s (a list with mito, the mitochondrial reads per cell, and lib, the library size including them,
+## both named by cell). A cell that has lost its cytoplasm keeps its mitochondrial transcripts, so its mitochondrial fraction rises while its library
+## falls. A cell is flagged when its logit mitochondrial fraction lies above median + k MAD and its library is below the median: both signals are
+## needed, because yeast cells in a respiring state have a high mitochondrial fraction and a normal or large library, and those are kept. The rule is a
+## soft one, with no fixed fraction cutoff. Returns list(flag, frac, cut), cut being the fraction at the MAD limit.
+qc_mito_flag <- function(s, k) {
+  stopifnot(is.list(s), is.numeric(s$mito), is.numeric(s$lib), length(s$mito) == length(s$lib), is.numeric(k), length(k) == 1, k > 0)
+  ok <- s$lib > 0
+  frac <- ifelse(ok, s$mito / s$lib, NA_real_)
+  lg <- qlogis(pmin(pmax(frac, 1e-4), 1 - 1e-4))
+  m <- median(lg[ok]); sc <- mad(lg[ok])
+  cut <- m + k * sc
+  flag <- ok & lg > cut & s$lib < median(s$lib[ok]) & sc > 0
+  list(flag = setNames(flag, names(s$lib)), frac = frac, cut = plogis(cut))
 }
 
 ## doublet_score_knn: the posterior probability that each cell of one dataset is a doublet (Scrublet's idea in base R). mat is a genes x cells count

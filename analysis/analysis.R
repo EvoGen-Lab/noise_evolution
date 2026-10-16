@@ -203,6 +203,30 @@ hist(colSums(HYB.SC[,HYB.MITO.CELLS[MITO.OK]]),breaks=seq(0,max(80000, colSums(H
 if (length(MITO.IGNORE) > 0) hist(colSums(HYB.SC[,HYB.MITO.CELLS[MITO.IGNORE], drop = FALSE]),breaks=seq(0,max(80000, colSums(HYB.SC)),2500),col=COLOR.GREY[["dark"]],add=TRUE)
 dev.off()
 
+# Dying cells. A cell that has lost its cytoplasm keeps its mitochondrial transcripts, so its mitochondrial fraction rises while its library falls.
+# A cell is flagged when its logit mitochondrial fraction lies above median + MITO.MAD.K MAD and its library is below the median (qc_mito_flag()).
+# Respiring yeast cells also have a high mitochondrial fraction but a normal or large library, so they are kept, and no fixed fraction is a cutoff.
+# The fractions are taken here, before the mitochondrial rows are removed; hybrid cells pool the two alleles' reads.
+MITO.MAD.K <- 5
+HYB.MITO.ALL <- union(colnames(HYB.SC), colnames(HYB.SE))
+HYB.MITO.READS <- setNames(numeric(length(HYB.MITO.ALL)), HYB.MITO.ALL); HYB.MITO.LIB <- HYB.MITO.READS
+HYB.MITO.READS[colnames(HYB.SC)] <- HYB.SC["MT_F", ]; HYB.MITO.READS[colnames(HYB.SE)] <- HYB.MITO.READS[colnames(HYB.SE)] + HYB.SE["MT_F", ]
+HYB.MITO.LIB[colnames(HYB.SC)] <- colSums(HYB.SC); HYB.MITO.LIB[colnames(HYB.SE)] <- HYB.MITO.LIB[colnames(HYB.SE)] + colSums(HYB.SE)
+MITO.QC <- lapply(list(MIX.SC = list(mito = MIX.SC["MT_F", ], lib = colSums(MIX.SC)), MIX.SE = list(mito = MIX.SE["MT_F", ], lib = colSums(MIX.SE)),
+                       HYB = list(mito = HYB.MITO.READS, lib = HYB.MITO.LIB)), qc_mito_flag, k = MITO.MAD.K)
+MITO.DYING <- lapply(MITO.QC, function(x) names(x$flag)[x$flag])
+MITO.SUMMARY <- data.frame(n_cells = vapply(MITO.QC, function(x) length(x$flag), integer(1)), n_flagged = vapply(MITO.DYING, length, integer(1)),
+                           median_fraction = vapply(MITO.QC, function(x) median(x$frac, na.rm = TRUE), numeric(1)), fraction_at_limit = vapply(MITO.QC, `[[`, numeric(1), "cut"))
+cat("Mitochondrial fraction and dying-cell flags (high fraction and below-median library)\n"); print(round(MITO.SUMMARY, 4))
+fig_pdf("extra/S_mito_fraction_dying_cells.pdf", 12, 4)
+par(mfrow = c(1, 3))
+for (nm in names(MITO.QC)) {
+  x <- MITO.QC[[nm]]; lib <- if (nm == "HYB") HYB.MITO.LIB else colSums(get(nm))
+  plot(lib, x$frac, log = "x", pch = 19, cex = 0.5, col = ifelse(x$flag, COLOR.ACCENT, COLOR.GREY[["dark"]]), xlab = "Count per cell (with mitochondrial)", ylab = "Mitochondrial fraction", main = nm)
+  abline(h = x$cut, v = median(lib[lib > 0]), col = COLOR.ACCENT, lty = 2)
+}
+dev.off()
+
 # Remove mitochondrial reads from remainder of analyses.
 MIX.SC <- MIX.SC[rownames(MIX.SC) != "MT_F", , drop = FALSE]
 MIX.SE <- MIX.SE[rownames(MIX.SE) != "MT_F", , drop = FALSE]
@@ -268,6 +292,9 @@ for (nm in names(QC.STATS)) {
   abline(v=QC.CELLS[[nm]]$lib_cut, col=COLOR.ACCENT, lty=2)
 }
 dev.off()
+QC.CELLS$MIX.SC$keep <- QC.CELLS$MIX.SC$keep & !(colnames(MIX.SC) %in% MITO.DYING$MIX.SC)
+QC.CELLS$MIX.SE$keep <- QC.CELLS$MIX.SE$keep & !(colnames(MIX.SE) %in% MITO.DYING$MIX.SE)
+QC.CELLS$HYB$keep    <- QC.CELLS$HYB$keep    & !(colnames(HYB.SC) %in% MITO.DYING$HYB)
 MIX.SC <- MIX.SC[, QC.CELLS$MIX.SC$keep]; MIX.SE <- MIX.SE[, QC.CELLS$MIX.SE$keep]
 HYB.SC <- HYB.SC[, QC.CELLS$HYB$keep];    HYB.SE <- HYB.SE[, QC.CELLS$HYB$keep]
 
@@ -329,9 +356,12 @@ dev.off()
 MIX.SC <- MIX.SC[, !MULTIPLET.FLAG$MIX.SC, drop = FALSE]; MIX.SE <- MIX.SE[, !MULTIPLET.FLAG$MIX.SE, drop = FALSE]
 HYB.SC <- HYB.SC[, !MULTIPLET.FLAG$HYB, drop = FALSE];    HYB.SE <- HYB.SE[, !MULTIPLET.FLAG$HYB, drop = FALSE]
 
-# Genes are filtered second, using the retained cells and one relative abundance floor
+# Genes are filtered second, using the retained cells and one relative abundance floor. The floors only remove genes with too little data to
+# estimate a mean and a noise level at all: a gene is informative in a dataset when it meets the abundance floor (GENE.LAMBDA0 at the shallowest
+# dataset, scaled by depth) and the detection floor there, and it is kept when it is informative in at least one dataset (the union). A gene that is low
+# in one dataset therefore stays, and Section 2 asks of each comparison whether the datasets it needs are informative for that gene.
 GENE.QC <- qc_gene_keep(list(MIX.SC = MIX.SC, MIX.SE = MIX.SE, HYB.SC = HYB.SC, HYB.SE = HYB.SE),
-                        lambda0 = GENE.LAMBDA0, cell_frac = GENE.CELL.FRAC)
+                        lambda0 = GENE.LAMBDA0, cell_frac = GENE.CELL.FRAC, rule = "any")
 fig_pdf("extra/S_gene_count_threshold_qc.pdf", 8, 8)
 par(mfrow=c(2,2))
 GENE.QC.MATS <- list(MIX.SC = MIX.SC, MIX.SE = MIX.SE, HYB.SC = HYB.SC, HYB.SE = HYB.SE)
@@ -343,10 +373,10 @@ for (nm in names(GENE.QC.MATS)) {
 }
 dev.off()
 
-# Which datasets each gene passed in. A gene is kept only when it passes in all four, so a gene expressed in one species and near-silent in the
-# other is dropped; the patterns below count the genes lost to each combination (columns MIX.SC MIX.SE HYB.SC HYB.SE, 1 = passed).
+# Which datasets each gene is informative in (columns MIX.SC MIX.SE HYB.SC HYB.SE, 1 = informative). The genes kept are those with at least one 1; the
+# patterns count how many genes each combination holds, and a gene absent from a dataset's comparisons is handled by the per-comparison flags in Section 2.
 GENE.QC.PATTERN <- table(apply(GENE.QC$pass, 1, function(r) paste(as.integer(r), collapse = "")))
-cat("Genes by the datasets they pass the abundance and detection floors in (MIX.SC MIX.SE HYB.SC HYB.SE):\n"); print(GENE.QC.PATTERN[order(-GENE.QC.PATTERN)])
+cat("Genes by the datasets they are informative in (MIX.SC MIX.SE HYB.SC HYB.SE); the all-zero pattern is dropped:\n"); print(GENE.QC.PATTERN[order(-GENE.QC.PATTERN)])
 
 # Subset to the same set of genes across all samples, in the same order
 GENE.SET <- GENE.QC$genes
@@ -364,7 +394,7 @@ cat("Cell and gene QC summary\n"); print(round(QC.SUMMARY, 3))
 cat(sprintf("Genes retained: %d, minimum detected cells: %d\n", length(GENE.SET), GENE.QC$n_min))
 
 # Checkpoint
-save(MIX.SC, MIX.SE, HYB.SC, HYB.SE, QC.SUMMARY, MULTIPLET.SUMMARY, MULTIPLET.CALIBRATION, MULTIPLET.K.SWEEP, GENE.QC.PATTERN, HYB.SHARE.SWEEP.N, file = ckpt_path(1))
+save(MIX.SC, MIX.SE, HYB.SC, HYB.SE, QC.SUMMARY, MULTIPLET.SUMMARY, MULTIPLET.CALIBRATION, MULTIPLET.K.SWEEP, GENE.QC.PATTERN, HYB.SHARE.SWEEP.N, MITO.SUMMARY, file = ckpt_path(1))
 
 console_start(2)
 set.seed(SEED.SECTION + 2)
@@ -453,7 +483,7 @@ N.COEXPR <- 5000; SEED.COEXPR <- 1        # Coexpression
 # have similar power to detect significant differences
 PILOT.MATS  <- list(MIX.SC = MIX.SC, MIX.SE = MIX.SE, HYB.SC = HYB.SC, HYB.SE = HYB.SE)
 PILOT.EXPOS <- list(MIX.SC = EXPO.MIX.SC, MIX.SE = EXPO.MIX.SE, HYB.SC = EXPO.HYB.SC, HYB.SE = EXPO.HYB.SE)
-PILOT.GENES <- qc_gene_keep(PILOT.MATS, lambda0 = 0.001, cell_frac = 0.10)$genes
+PILOT.GENES <- qc_gene_keep(PILOT.MATS, lambda0 = 0.001, cell_frac = 0.10, rule = "all")$genes   # the split fraction needs genes informative in all four datasets
 
 ## ---- Cluster round trip: Rscript gene_pilot.R ----
 ## Reads gene_pilot_inputs.rda (saved below), writes gene_pilot_output.rda (PILOT.SE)
@@ -571,24 +601,16 @@ NCELLS <- c(MIX.SC = ncol(MIX.SC), MIX.SE = ncol(MIX.SE), HYC.SC = ncol(HYC.SC),
 
 ## 2.3 Per-gene contrasts, bootstrap SEs, and permutation null
 
-## Genes whose fit passes in every dataset of `fits`: a positive finite DISP (phi = 0 is the Poisson limit, a
-## non-identifiable dispersion), a raw mean count above the dataset's depth-scaled floor, and
-## detection in at least min_expr_frac of the smallest dataset's cells. depth is a named vector of
-## mean reads per cell for each dataset. The mean floor min_mean applies at the shallowest dataset
-## and scales up in proportion to depth; the detected-cell floor is one absolute number of cells,
-## so every dataset faces the same information requirement. The fit tables must be gene-aligned.
-## Returns the passing gene names.
-# Gene filter: requires an NB fit with a finite, non-degenerate
-# dispersion estimate, a mean count above a floor that scales with dataset
-# depth, and detection in an absolute number of cells set from the smallest
-# dataset, in every one of the 13 datasets
+## Information floors of the 13 datasets. They are the Section 1 floors applied to each dataset: a raw mean count above the relative abundance
+## floor times the dataset's depth, and detection in at least GENE.QC$n_min cells, one absolute number, so every dataset faces the same information
+## requirement (enough data to estimate a mean and a noise level). A gene is informative in a dataset when it meets both. GENES, the log-valid set that the
+## log2 analyses downstream use, needs a positive finite DISP as well (phi = 0 is the Poisson limit, where a log2 contrast does not exist) in every
+## dataset; the genes the bootstrap and permutation jobs run on are chosen per comparison below (GENE.TABLE). The fit tables must be gene-aligned.
 SPLIT.DEPTH <- vapply(SPLIT.FIT.MATS, function(m) sum(m) / ncol(m), numeric(1))
 FILTER.GROUPS <- names(SPLIT.FITS)
 stopifnot(all(FILTER.GROUPS %in% names(NCELLS)), all(FILTER.GROUPS %in% names(SPLIT.DEPTH)))
-FILTER.MIN.MEAN      <- 0.001
-FILTER.MIN.EXPR.FRAC <- 0.1
-FILTER.FLOOR <- FILTER.MIN.MEAN * SPLIT.DEPTH[FILTER.GROUPS] / min(SPLIT.DEPTH[FILTER.GROUPS])   # mean floor, scaled by depth
-FILTER.NMIN  <- ceiling(FILTER.MIN.EXPR.FRAC * min(NCELLS[FILTER.GROUPS]))                          # detected-cell floor, one number
+FILTER.FLOOR <- GENE.QC$p_min * SPLIT.DEPTH[FILTER.GROUPS]   # the Section 1 relative abundance floor times each dataset's depth, so it is the same rule at every depth
+FILTER.NMIN  <- GENE.QC$n_min                                 # the Section 1 detected-cell floor, one number for every dataset
 GENES <- local({
   fits <- SPLIT.FITS
   genes <- rownames(fits[[1]])
@@ -629,9 +651,10 @@ write.csv(FILTER.SUMMARY, file.path(TABLE.DIR, "gene_filter_summary.csv"),      
 ## condition under which a raw difference of phi exists; log_<mode>_valid also needs phi > 0 in every dataset, the condition
 ## under which a log2 ratio exists; mean_<mode>_valid needs a finite informative mean in the mean-axis datasets. Filtering
 ## happens only where an analysis is built, by selecting on these flags. inference_set marks the genes the bootstrap and permutation
-## jobs run on (GENES.INFER): informative with a fitted phi, positive or zero, in all 13 datasets, so a gene at the Poisson boundary in some
-## dataset is still tested on the mean and raw axes. log_set marks the genes with phi > 0 in all 13 datasets (GENES), the set every log2
-## analysis downstream uses.
+## jobs run on (GENES.INFER): every gene for which at least one comparison is eligible (a raw or mean flag below), so a gene that is low in one
+## dataset stays in for the comparisons whose datasets are informative, and a gene at the Poisson boundary is still tested on the mean and raw
+## axes. A quantity the gene's datasets cannot support is undefined for it and carries no p-value. log_set marks the genes with phi > 0 in all 13
+## datasets (GENES), the set every log2 analysis downstream uses.
 ## Weighted method-of-moments fits of every gene in the 13 datasets, in the layout of SPLIT.FITS (MU, DISP; MEAN_CT and N_EXPR are shared), local
 ## and serial (a few seconds per dataset per thousand genes).
 SPLIT.FITS.W <- lapply(setNames(FILTER.GROUPS, FILTER.GROUPS), function(g) {
@@ -663,7 +686,7 @@ GENE.TABLE <- local({
     mean_groups <- .MODES.MEAN[[md]]
     tab[[paste0("mean_", md, "_valid")]] <- rowSums(info[, mean_groups, drop = FALSE] & is.finite(as.matrix(tab[, paste0(mean_groups, ".mu"), drop = FALSE]))) == length(mean_groups)
   }
-  tab$inference_set <- rowSums(fitted) == ncol(fitted)
+  tab$inference_set <- rowSums(tab[, grep("^(raw|mean)_.*_valid$", names(tab))]) > 0
   tab$log_set <- rowSums(positive) == ncol(positive)
   ## The same fit statuses and eligibility flags for the weighted method of moments (SPLIT.FITS.W, one fit per gene and dataset on the
   ## same exposures and share corrections); the mean and the information floors are shared with NB, so only the dispersion differs.
