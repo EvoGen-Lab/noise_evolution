@@ -509,6 +509,15 @@ write.csv(FILTER.SUMMARY, file.path(TABLE.DIR, "gene_filter_summary.csv"),      
 ## under which a log2 ratio exists; mean_<mode>_valid needs a finite informative mean in the mean-axis datasets. Filtering
 ## happens only where an analysis is built, by selecting on these flags. inference_set marks the genes the bootstrap and
 ## permutation jobs currently run on (GENES: informative with phi > 0 in all 13 datasets).
+## Weighted method-of-moments fits of every gene in the 13 datasets, in the layout of SPLIT.FITS (MU, DISP; MEAN_CT and N_EXPR are shared), local
+## and serial (a few seconds per dataset per thousand genes).
+SPLIT.FITS.W <- lapply(setNames(FILTER.GROUPS, FILTER.GROUPS), function(g) {
+  f <- fit_counts_dispersion(SPLIT.FIT.MATS[[g]], SPLIT.FIT.EXPOS[[g]], SHARE.R[[g]], "weighted")
+  data.frame(MU = f[, "mu"], DISP = f[, "disp"], BOUNDARY = f[, "boundary"], CONVERGED = f[, "converged"],
+             MEAN_CT = SPLIT.FITS[[g]]$MEAN_CT, N_EXPR = SPLIT.FITS[[g]]$N_EXPR, row.names = rownames(f))
+})
+stopifnot(all(vapply(SPLIT.FITS.W, function(f) identical(rownames(f), rownames(SPLIT.FITS[[1]])), logical(1))))
+
 GENE.TABLE <- local({
   fits <- SPLIT.FITS
   genes <- rownames(fits[[1]])
@@ -532,13 +541,25 @@ GENE.TABLE <- local({
     tab[[paste0("mean_", md, "_valid")]] <- rowSums(info[, mean_groups, drop = FALSE] & is.finite(as.matrix(tab[, paste0(mean_groups, ".mu"), drop = FALSE]))) == length(mean_groups)
   }
   tab$inference_set <- rowSums(positive) == ncol(positive)
+  ## The same fit statuses and eligibility flags for the weighted method of moments (SPLIT.FITS.W, one fit per gene and dataset on the
+  ## same exposures and share corrections); the mean and the information floors are shared with NB, so only the dispersion differs.
+  wstatus <- sapply(FILTER.GROUPS, gene_fit_status, fits = SPLIT.FITS.W)
+  rownames(wstatus) <- genes
+  for (g in FILTER.GROUPS) { tab[[paste0(g, ".w_disp")]] <- SPLIT.FITS.W[[g]]$DISP; tab[[paste0(g, ".w_status")]] <- wstatus[, g] }
+  wfitted <- (wstatus == "positive" | wstatus == "zero_boundary") & info
+  wpositive <- wstatus == "positive" & info
+  for (md in .OUT_MODES) {
+    noise_groups <- .MODES[[.DISP_SOURCE[[md]]]]
+    tab[[paste0("raw_", md, "_valid_w")]] <- rowSums(wfitted[, noise_groups, drop = FALSE]) == length(noise_groups)
+    tab[[paste0("log_", md, "_valid_w")]] <- rowSums(wpositive[, noise_groups, drop = FALSE]) == length(noise_groups)
+  }
   tab
 })
 stopifnot(identical(GENE.TABLE$gene[GENE.TABLE$inference_set], GENES))   # the table's flag reproduces the filter
 
 ## Genes eligible for each comparison and scale, and the fit status of every group, so each analysis states its own reach.
 ELIGIBLE.COUNTS <- local({
-  flags <- grep("_valid$", names(GENE.TABLE), value = TRUE)
+  flags <- grep("_valid(_w)?$", names(GENE.TABLE), value = TRUE)
   data.frame(flag = c(flags, "inference_set"), genes = c(colSums(GENE.TABLE[, flags]), sum(GENE.TABLE$inference_set)), of = nrow(GENE.TABLE), row.names = NULL)
 })
 FIT.STATUS.COUNTS <- local({
@@ -661,6 +682,17 @@ PR <- local({
   for (nm in pc) df[[sub("_p(?=(_ploidy|_ind)?$)", "_q", nm, perl = TRUE)]] <- p.adjust(df[[nm]], method = method)
   df
 })
+## Status of every gene for every quantity and mode, in one long table, so each analysis reports the genes it could use and how far each got:
+## eligible (defined from the fits), run (went through the jobs), est_ok, ci_ok (a bootstrap interval exists), test_ok (a permutation p-value exists)
+## and sig (BH q < 0.05). ANALYSIS.COUNTS tallies them per quantity and mode. Nothing here removes a gene; an analysis selects on the flags it needs.
+ANALYSIS.QUANTITIES <- c("mean", "disp", "rdisp", "wdisp", "wrdisp", "bsize", "kbal", "rbsize", "rkbal", "wbsize", "wkbal", "wrbsize", "wrkbal")
+ANALYSIS.STATUS <- do.call(rbind, Map(analysis_status_rows, rep(ANALYSIS.QUANTITIES, each = length(.OUT_MODES)), rep(.OUT_MODES, times = length(ANALYSIS.QUANTITIES)),
+                                      MoreArgs = list(tab = GENE.TABLE, burst = BURST.CONTRASTS, pr = PR)))
+ANALYSIS.COUNTS <- aggregate(cbind(eligible, run, est_ok, ci_ok, test_ok, sig) ~ quantity + mode, data = ANALYSIS.STATUS, FUN = sum)
+ANALYSIS.COUNTS$eligible_and_run <- aggregate(eligible & run ~ quantity + mode, data = ANALYSIS.STATUS, FUN = sum)[[3]]
+ANALYSIS.COUNTS <- ANALYSIS.COUNTS[order(match(ANALYSIS.COUNTS$quantity, ANALYSIS.QUANTITIES), match(ANALYSIS.COUNTS$mode, .OUT_MODES)), ]
+print(ANALYSIS.COUNTS, row.names = FALSE)
+write.csv(ANALYSIS.COUNTS, file.path(TABLE.DIR, "analysis_status_counts.csv"), row.names = FALSE)
 local({
   modes <- c("cis", "trans", "total")
   B <- 2000
@@ -737,7 +769,7 @@ dev.off()
 
 # Checkpoint: the fitted NB models, per-gene contrasts, and every Section 2
 # object that later sections read.
-save(GENES, GENE.TABLE, ELIGIBLE.COUNTS, FIT.STATUS.COUNTS, FILTER.COUNTS, FILTER.SUMMARY, HYB.COMB, CONTRAST.FITS, CONTRAST.MATS, CONTRAST.EXPOS, SPLIT.FITS,
+save(GENES, GENE.TABLE, SPLIT.FITS.W, ANALYSIS.STATUS, ANALYSIS.COUNTS, ELIGIBLE.COUNTS, FIT.STATUS.COUNTS, FILTER.COUNTS, FILTER.SUMMARY, HYB.COMB, CONTRAST.FITS, CONTRAST.MATS, CONTRAST.EXPOS, SPLIT.FITS,
      BOOT.CONTRASTS, BURST.CONTRASTS, PERM.RESULTS, PR, PLOIDY.SHIFT, N.PERM,
      HYB.SC, HYB.SE, EXPO.MIX.SC, EXPO.MIX.SE, EXPO.HYB.SC, EXPO.HYB.SE, EXPO.HYB, C.HAT, C.BAR, VAR.C, R.C, R.E, SHARE.R, SHARE.TABLE,
      WEIGHT.CHECK, ALLELE.DISP,

@@ -139,6 +139,8 @@
 ###     fstar_from_r() - closed-form split fraction f* = [(2+r) - sqrt(r^2+4)] / (2r) for r = B*Nh/A.
 ###     gene_pass_group() - genes passing the filters in one group g: a finite NB dispersion, a mean count at or.
 ###     gene_fit_status() - Fit status of every gene in one dataset (positive, zero_boundary, failed, no_information, missing), kept apart from the information floors.
+###     fit_counts_dispersion() - One fit_dispersion() per gene (row) of a matrix against one exposure vector: mu, phi, boundary and convergence flags.
+###     analysis_status_rows() - One long-table block of eligibility, run, estimate, CI, test and significance flags for a (quantity, mode) over every gene.
 ###     gene_filter_counts() - One row per dataset: how many genes fail each gene filter (no fit, zero dispersion, low mean, low detection) and how many pass.
 ###     perm_label_draw() - one permutation's relabelings for every mode; cis and trans label the hybrid cells per original cell so the mean and noise splits agree on shared cells.
 ###     eiv_mode_ci_row() - errors-in-variables correlation for one mode m with a gene-resampling bootstrap CI.
@@ -3320,6 +3322,35 @@ gene_fit_status <- function(g, fits) {
   out[is.finite(fit$MEAN_CT) & fit$MEAN_CT == 0] <- "no_information"
   out[is.na(fit$MEAN_CT)] <- "missing"
   out
+}
+
+## fit_counts_dispersion: fit_dispersion() on every gene (row) of a genes x cells matrix against one exposure vector, returned as a genes x
+## (mu, disp, boundary, converged) matrix. share_r is the dataset's allele-share correction and method the estimator ("NB" or "weighted").
+fit_counts_dispersion <- function(mat, expo, share_r = 0, method = "weighted") {
+  out <- t(vapply(seq_len(nrow(mat)), function(i) fit_dispersion(mat[i, ], expo, share_r, method)[c("mu", "disp", "boundary", "converged")], numeric(4)))
+  rownames(out) <- rownames(mat)
+  out
+}
+
+## analysis_status_rows: the status of every gene for one quantity q (mean, disp, bsize, kbal and their rdisp, wdisp, wrdisp, rbsize, rkbal,
+## wbsize, wkbal, wrbsize, wrkbal variants) in mode md, as a long-table block. tab is GENE.TABLE (all genes, with the eligibility flags),
+## burst the BURST.CONTRASTS table and pr the PR table, both of which hold only the genes the cluster jobs ran. Flags, each FALSE where it does
+## not apply: eligible (the quantity is defined from the gene's fits: the log2 and kappa quantities need phi > 0 in the contributing datasets,
+## the raw difference and raw burst size only phi >= 0, the weighted ones use the weighted fits), run (the gene went through the jobs),
+## est_ok (a finite estimate), ci_ok (a finite bootstrap SE, so an interval exists), test_ok (a permutation p-value was produced), sig (BH q < alpha).
+## A zero-boundary estimate is a valid result and a non-significant one is not a failure; the flags keep fit, interval and test validity apart.
+analysis_status_rows <- function(q, md, tab, burst, pr, alpha = 0.05) {
+  flag <- switch(q, mean = paste0("mean_", md, "_valid"),
+                 disp = , bsize = , kbal = , rkbal = paste0("log_", md, "_valid"),
+                 rdisp = , rbsize = paste0("raw_", md, "_valid"),
+                 wdisp = , wbsize = , wkbal = , wrkbal = paste0("log_", md, "_valid_w"),
+                 wrdisp = , wrbsize = paste0("raw_", md, "_valid_w"), stop("analysis_status_rows(): unknown quantity ", q))
+  bi <- match(tab$gene, burst$gene); pi_ <- match(tab$gene, pr$gene)
+  est <- burst[[paste0(q, "_", md, "_est")]][bi]; se <- burst[[paste0(q, "_", md, "_se")]][bi]
+  p   <- pr[[paste0(q, "_", md, "_p")]][pi_];     qv <- pr[[paste0(q, "_", md, "_q")]][pi_]
+  data.frame(gene = tab$gene, mode = md, quantity = q, eligible = tab[[flag]], run = !is.na(bi),
+             est_ok = is.finite(est), ci_ok = is.finite(se), test_ok = is.finite(p), q = qv, sig = !is.na(qv) & qv < alpha,
+             stringsAsFactors = FALSE)
 }
 
 ## gene_filter_counts: how many genes of dataset g fail each filter of gene_pass_group(), as one row. The reasons overlap (a
