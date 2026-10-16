@@ -135,6 +135,8 @@
 ###     plot_within_between_vs_quantity() - Scatter of within_between_decomp()'s ratio against one burst kinetics quantity (mean, dispersion, or burst size), with Spearman rho reported.
 ###     report_within_between_by_class() - Plots the within/between ratio by class (with class_anova()'s omnibus test and Tukey comparisons) for two datasets side by side against one classification axis; writes the combined figure and prints both datasets' test statistics.
 ###   13b. FUNCTIONS APPLIED ACROSS ITEMS BY analysis.R
+###     qc_upper_outliers() - Upper-tail library and detected-gene outliers of one dataset (median + k MAD on the log10 scale), the count-based multiplet signals.
+###     doublet_score_knn() - Simulated-doublet nearest-neighbour posterior of every cell of one dataset (Scrublet-style, base R).
 ###     qc_cell_cutoff() - library-size cell filter for one dataset s (a list with lib, the per-cell library.
 ###     fstar_from_r() - closed-form split fraction f* = [(2+r) - sqrt(r^2+4)] / (2r) for r = B*Nh/A.
 ###     gene_pass_group() - genes passing the filters in one group g: a finite NB dispersion, a mean count at or.
@@ -537,7 +539,8 @@ split_indices_by_depth <- function(n, f) {
 ## scale. lambda0 is the mean count per cell required at the shallowest
 ## dataset; deeper datasets face a proportionally higher mean-count floor.
 ## The detection floor is an absolute number of cells because the precision
-## of a dispersion fit depends on informative cells, not on their fraction.
+## of a dispersion fit depends on informative cells, not on their fraction. Returns the passing genes (those that pass in every dataset),
+## the floors, and pass, a genes x datasets logical matrix of the per-dataset decisions.
 qc_gene_keep <- function(mats, lambda0 = 0.20, cell_frac = 0.10) {
   stopifnot(is.list(mats), length(mats) >= 1, is.numeric(lambda0), length(lambda0) == 1, lambda0 > 0,
             is.numeric(cell_frac), length(cell_frac) == 1, cell_frac > 0, cell_frac <= 1)
@@ -549,7 +552,7 @@ qc_gene_keep <- function(mats, lambda0 = 0.20, cell_frac = 0.10) {
   pass  <- vector("list", length(mats)); names(pass) <- names(mats)
   for (i in seq_along(mats)) pass[[i]] <- rowSums(mats[[i]]) / sum(mats[[i]]) >= p_min & rowSums(mats[[i]] > 0) >= n_min
   list(genes = sort(genes[Reduce(`&`, pass)]), p_min = p_min, n_min = n_min,
-       depth = depth, exp_mean = p_min * depth)
+       depth = depth, exp_mean = p_min * depth, pass = do.call(cbind, pass))
 }
 
 ## ============================================================
@@ -3290,6 +3293,63 @@ qc_cell_cutoff <- function(s, k, min_reads = 500) {
   lx <- log10(lib[lib > 0])
   lib_cut <- max(min_reads, 10^(median(lx) - k * mad(lx)))
   list(keep = lib >= lib_cut, lib_cut = lib_cut)
+}
+
+## qc_upper_outliers: the count-based multiplet signals of one dataset s (a list with lib, the per-cell library sizes, and det, the number of
+## detected genes per cell). A cell is a library outlier above median + k MAD of log10 lib and a gene-count outlier above the same rule on log10 det.
+## Working in logs keeps the rule scale-free. Two cells in one droplet raise both counts, while a large G2 cell raises the library more than
+## the number of detected genes, so the caller treats a cell as a multiplet on count evidence only when it is high on both.
+## Returns list(lib_hi, det_hi, lib_cut, det_cut).
+qc_upper_outliers <- function(s, k) {
+  stopifnot(is.list(s), is.numeric(s$lib), is.numeric(s$det), length(s$lib) == length(s$det), is.numeric(k), length(k) == 1, k > 0)
+  lx <- log10(s$lib[s$lib > 0]); dx <- log10(s$det[s$det > 0])
+  lib_cut <- 10^(median(lx) + k * mad(lx)); det_cut <- 10^(median(dx) + k * mad(dx))
+  list(lib_hi = s$lib > lib_cut, det_hi = s$det > det_cut, lib_cut = lib_cut, det_cut = det_cut)
+}
+
+## doublet_score_knn: the posterior probability that each cell of one dataset is a doublet (Scrublet's idea in base R). mat is a genes x cells count
+## matrix and rho the expected doublet fraction (the prior). Doublets are simulated by adding the counts of random cell pairs (n_sim of them),
+## and observed and simulated cells are embedded together: counts are scaled to the median depth and log1p transformed, the n_hvg most variable
+## genes of the observed cells are kept, and every cell is projected on the first n_pc principal components of the observed cells. For a cell, q is the
+## share of simulated doublets among its n_nn nearest neighbours (itself excluded). Where nothing distinguishes simulated from observed cells q / (1 - q)
+## equals n_sim / n, so q / (1 - q) divided by n_sim / n is the likelihood ratio for a doublet-like neighbourhood; with the prior odds rho / (1 - rho)
+## it gives the posterior odds, and the score is the posterior probability. Expression-based scores see doublets of cells in different states and are
+## weak for two cells in the same state, so the caller flags a cell only when this score agrees with a count signal. The RNG is seeded locally, so the
+## result does not move other random streams. Returns list(score, frac, sim_score, n_pc, n_nn, rho); sim_score is the same posterior for a
+## sample of the simulated doublets.
+doublet_score_knn <- function(mat, rho = 0.05, n_sim = NULL, n_hvg = 1000, n_pc = 15, n_nn = NULL, seed = 1) {
+  stopifnot(is.matrix(mat), ncol(mat) >= 50, nrow(mat) >= n_pc + 5, all(mat >= 0), is.numeric(rho), length(rho) == 1, rho > 0, rho < 0.5, is.numeric(n_hvg), is.numeric(n_pc), n_pc >= 2)
+  n <- ncol(mat)
+  if (is.null(n_sim)) n_sim <- 2 * n
+  if (is.null(n_nn)) n_nn <- max(10L, round(0.5 * sqrt(n + n_sim)))
+  with_local_seed(seed, {
+    pa <- sample.int(n, n_sim, replace = TRUE); pb <- sample.int(n, n_sim, replace = TRUE)
+    clash <- pa == pb; pb[clash] <- (pb[clash] %% n) + 1L                       # a doublet joins two different cells
+    sim <- mat[, pa, drop = FALSE] + mat[, pb, drop = FALSE]
+    depth <- median(colSums(mat))
+    lognorm <- function(m) { cs <- colSums(m); cs[cs == 0] <- 1; log1p(sweep(m, 2, cs, "/") * depth) }
+    xo <- lognorm(mat); xs <- lognorm(sim)
+    keep <- order(apply(xo, 1, var), decreasing = TRUE)[seq_len(min(n_hvg, nrow(mat)))]
+    pc <- prcomp(t(xo[keep, , drop = FALSE]), center = TRUE, scale. = FALSE, rank. = n_pc)
+    emb_s <- scale(t(xs[keep, , drop = FALSE]), center = pc$center, scale = FALSE) %*% pc$rotation
+    emb <- rbind(pc$x, emb_s); is_sim <- c(rep(FALSE, n), rep(TRUE, n_sim))
+    ## neighbours of the observed cells and of a sample of the simulated ones (enough to read their score distribution)
+    q <- c(seq_len(n), n + sample.int(n_sim, min(n_sim, 2000)))
+    sq <- rowSums(emb^2)
+    chunks <- split(q, ceiling(seq_along(q) / 500))
+    frac <- unlist(lapply(chunks, function(idx) {
+      d <- outer(sq[idx], sq, "+") - 2 * tcrossprod(emb[idx, , drop = FALSE], emb)
+      d[cbind(seq_along(idx), idx)] <- Inf                                       # a point is not its own neighbour
+      apply(d, 1, function(r) sum(is_sim[order(r)[seq_len(n_nn)]]))
+    }), use.names = FALSE)
+    ## q: the share of simulated doublets among a cell's neighbours (continuity-corrected). Simulated and observed points meet in the ratio
+    ## n_sim : n where nothing distinguishes them, so q / (1 - q) divided by n_sim / n is the likelihood ratio for "doublet-like"; multiplied by the
+    ## prior odds rho / (1 - rho) it gives the posterior odds, and the score is the posterior probability that the cell is a doublet.
+    q <- (frac + 0.5) / (n_nn + 1)
+    post <- function(q) { o <- rho / (1 - rho) * (q / (1 - q)) / (n_sim / n); o / (1 + o) }
+    list(score = setNames(post(q[seq_len(n)]), colnames(mat)), frac = setNames(q[seq_len(n)], colnames(mat)), sim_score = post(q[-seq_len(n)]),
+         n_pc = n_pc, n_nn = n_nn, rho = rho)
+  })
 }
 
 ## fstar_from_r: closed-form split fraction f* = [(2+r) - sqrt(r^2+4)] / (2r) for r = B*Nh/A. r -> 0

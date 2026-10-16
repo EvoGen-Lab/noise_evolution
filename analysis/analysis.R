@@ -110,6 +110,14 @@ MIX.SE <- as.matrix(read.csv(file = file.path(SC.DIR, "MixSe_for_genes_percell_p
 HYB.SC <- as.matrix(read.csv(file = file.path(SC.DIR, "HybSc_for_genes_percell_pergene_count.csv"), row.names = 1))
 HYB.SE <- as.matrix(read.csv(file = file.path(SC.DIR, "HybSe_for_genes_percell_pergene_count.csv"), row.names = 1))
 
+# Composition of the mixed parent sample before any cell is removed. A cell is an Sc cell when most of its reads map to the Sc genome. If a
+# fraction rho of droplets hold two cells drawn at random, the share of droplets that hold one cell of each species is 2 p_c p_e rho, so the
+# observed share of cross-species cells (below) estimates rho and with it the multiplet rate of this loading, homotypic doublets included.
+MIX.CELLS.ALL <- union(colnames(MIX.SC), colnames(MIX.SE))
+MIX.LIB.SC.ALL <- setNames(numeric(length(MIX.CELLS.ALL)), MIX.CELLS.ALL); MIX.LIB.SC.ALL[colnames(MIX.SC)] <- colSums(MIX.SC)
+MIX.LIB.SE.ALL <- setNames(numeric(length(MIX.CELLS.ALL)), MIX.CELLS.ALL); MIX.LIB.SE.ALL[colnames(MIX.SE)] <- colSums(MIX.SE)
+MIX.P.SC <- mean(MIX.LIB.SC.ALL > MIX.LIB.SE.ALL)
+
 # Remove cells that have substantial reads from both species in the mixed
 # parent sample. For cells with only a small fraction of reads from the
 # minority species, remove from the minority species only
@@ -136,8 +144,28 @@ legend("topright",
        col = COLOR.ACCENT, lwd = 2, lty = 2, bty = "n")
 dev.off()
 
+# Where the minority fraction separates ambient contamination from cross-species cells: the density of log10(minority fraction) among shared cells
+# has an ambient mode at small fractions and a doublet mode near the cells' own share of the other species. MIX.FRAC.VALLEY is the density minimum
+# between the two highest modes (NA without a valley); compare it with MINORITY.FRAC.THRESHOLD, which is set by eye from the sweep above.
+MIX.FRAC.VALLEY <- local({
+  x <- log10(MIX.MINORITY.FRAC[is.finite(MIX.MINORITY.FRAC) & MIX.MINORITY.FRAC > 0])
+  if (length(x) < 50) return(NA_real_)
+  d <- density(x, adjust = 1.5)
+  pk <- which(diff(sign(diff(d$y))) == -2) + 1
+  if (length(pk) < 2) return(NA_real_)
+  top2 <- sort(pk[order(d$y[pk], decreasing = TRUE)[1:2]])
+  10^d$x[top2[1] + which.min(d$y[top2[1]:top2[2]]) - 1]
+})
+cat(sprintf("Cross-species threshold %.2f%%; density valley of the minority fraction: %s\n", 100 * MINORITY.FRAC.THRESHOLD,
+            if (is.na(MIX.FRAC.VALLEY)) "none found" else sprintf("%.2f%%", 100 * MIX.FRAC.VALLEY)))
+
 # Cells with substantial reads from both species: drop from both matrices
 MIX.DOUBLET.CELLS <- MIX.SHARED.CELLS[MIX.MINORITY.FRAC > MINORITY.FRAC.THRESHOLD]
+MIX.DOUBLET.LIB <- MIX.LIB.SC.ALL[MIX.DOUBLET.CELLS] + MIX.LIB.SE.ALL[MIX.DOUBLET.CELLS]       # library and detected genes of the cross-species cells, kept for the multiplet calibration
+MIX.DOUBLET.DET <- colSums(MIX.SC[, MIX.DOUBLET.CELLS, drop = FALSE] > 0) + colSums(MIX.SE[, MIX.DOUBLET.CELLS, drop = FALSE] > 0)
+MIX.DOUBLET.RATE <- min(0.4, max(0.01, length(MIX.DOUBLET.CELLS) / length(MIX.CELLS.ALL) / (2 * MIX.P.SC * (1 - MIX.P.SC))))
+cat(sprintf("Cross-species cells: %d of %d (%.2f%%); Sc share %.2f, so the multiplet rate of the loading is about %.1f%%\n",
+            length(MIX.DOUBLET.CELLS), length(MIX.CELLS.ALL), 100 * length(MIX.DOUBLET.CELLS) / length(MIX.CELLS.ALL), MIX.P.SC, 100 * MIX.DOUBLET.RATE))
 # Cells with only minor cross-contamination: drop from the minority species only
 MIX.MINOR.CONTAM.CELLS <- MIX.SHARED.CELLS[MIX.MINORITY.FRAC <= MINORITY.FRAC.THRESHOLD]
 MIX.MINOR.CONTAM.IN.SC <- MIX.MINOR.CONTAM.CELLS[MIX.SC.SHARED.SUM[MIX.MINOR.CONTAM.CELLS] < MIX.SE.SHARED.SUM[MIX.MINOR.CONTAM.CELLS]]
@@ -160,7 +188,8 @@ HYB.MITO.CELLS <- intersect(colnames(HYB.SC), colnames(HYB.SE))
 HYB.SC.MITO <- HYB.SC['MT_F', HYB.MITO.CELLS]
 HYB.SE.MITO <- HYB.SE['MT_F', HYB.MITO.CELLS]
 MITO.IGNORE <- which(HYB.SC.MITO == 0 | HYB.SE.MITO == 0)
-MITO.RATIO  <- log2(HYB.SC.MITO[-MITO.IGNORE]/HYB.SE.MITO[-MITO.IGNORE])
+MITO.OK     <- setdiff(seq_along(HYB.MITO.CELLS), MITO.IGNORE)       # an index set, so an empty MITO.IGNORE removes nothing
+MITO.RATIO  <- log2(HYB.SC.MITO[MITO.OK]/HYB.SE.MITO[MITO.OK])
 fig_pdf("extra/S_mito_ratio_hybrid.pdf", 6, 5)
 par(mfrow=c(1,1))
 hist(MITO.RATIO,breaks=40,xlab="log2(Sc/Se) mitochondrial ratio in hybrid",main="")
@@ -170,8 +199,8 @@ cat("Mitochondrial log2(Sc/Se) ratio in hybrid, quantiles:\n")
 print(round(quantile(MITO.RATIO, probs = c(0, 0.25, 0.5, 0.75, 1)), 3))
 
 fig_pdf("extra/S_mito_ignore_depth.pdf", 6, 5)
-hist(colSums(HYB.SC[,HYB.MITO.CELLS[-MITO.IGNORE]]),breaks=seq(0,80000,2500), xlab="Hybrid Sc Reads/cell",main="")
-hist(colSums(HYB.SC[,HYB.MITO.CELLS[MITO.IGNORE]]),breaks=seq(0,80000,2500),col=COLOR.GREY[["dark"]],add=TRUE)
+hist(colSums(HYB.SC[,HYB.MITO.CELLS[MITO.OK]]),breaks=seq(0,max(80000, colSums(HYB.SC)),2500), xlab="Hybrid Sc Reads/cell",main="")
+if (length(MITO.IGNORE) > 0) hist(colSums(HYB.SC[,HYB.MITO.CELLS[MITO.IGNORE], drop = FALSE]),breaks=seq(0,max(80000, colSums(HYB.SC)),2500),col=COLOR.GREY[["dark"]],add=TRUE)
 dev.off()
 
 # Remove mitochondrial reads from remainder of analyses.
@@ -186,8 +215,37 @@ CELL.MAD.K     <- 3     # keep cells above median - 3 MAD on the log10 scale
 GENE.LAMBDA0   <- 0.10  # mean reads per cell required at the shallowest dataset
 GENE.CELL.FRAC <- 0.10  # detected-cell floor as a fraction of the smallest dataset
 
-# Hybrid alleles come from the same cells, so they share one QC decision
-HYB.CELLS <- intersect(colnames(HYB.SC), colnames(HYB.SE))
+# Hybrid alleles come from the same cells, so they share one QC decision. A hybrid cell holds reads from both genomes in a narrow range of allele
+# shares (the Sc share of its reads varies by well under a percent around one half). A cell with no reads from one genome, or whose share lies beyond
+# HYB.SHARE.Z.CUT standard deviations of the population's, is not a clean hybrid cell (a parental cell, a cell that lost a genome, or a mixed droplet)
+# and is removed. The standard deviation of a cell's logit share is its binomial term 1 / (L p (1 - p)) plus the population's extra spread tau^2, read
+# from the MAD of the logit shares, so low-depth cells get wider limits and the cut works at every depth.
+HYB.SHARE.Z.CUT <- 5
+HYB.ALL.CELLS <- union(colnames(HYB.SC), colnames(HYB.SE))
+HYB.LIB.SC <- setNames(numeric(length(HYB.ALL.CELLS)), HYB.ALL.CELLS); HYB.LIB.SC[colnames(HYB.SC)] <- colSums(HYB.SC)
+HYB.LIB.SE <- setNames(numeric(length(HYB.ALL.CELLS)), HYB.ALL.CELLS); HYB.LIB.SE[colnames(HYB.SE)] <- colSums(HYB.SE)
+HYB.SHARE.Z <- local({
+  both <- HYB.LIB.SC > 0 & HYB.LIB.SE > 0
+  lg <- qlogis(HYB.LIB.SC[both] / (HYB.LIB.SC[both] + HYB.LIB.SE[both]))
+  p0 <- plogis(median(lg))
+  v  <- 1 / ((HYB.LIB.SC[both] + HYB.LIB.SE[both]) * p0 * (1 - p0))
+  tau2 <- max(0, mad(lg)^2 - median(v))
+  z <- setNames(rep(Inf, length(HYB.ALL.CELLS)), HYB.ALL.CELLS)
+  z[both] <- abs(lg - median(lg)) / sqrt(v + tau2)
+  z
+})
+HYB.SHARE.SWEEP <- c(3, 4, 5, 6, 8, 10, 15, 20)
+HYB.SHARE.SWEEP.N <- sapply(HYB.SHARE.SWEEP, function(t) sum(HYB.SHARE.Z > t))
+fig_pdf("extra/S_hybrid_allele_share_filter.pdf", 11, 4.5)
+par(mfrow = c(1, 2))
+hist(pmin(HYB.SHARE.Z[is.finite(HYB.SHARE.Z)], 30), breaks = 60, xlab = "|z| of the logit Sc share (capped at 30)", main = "Hybrid cells: allele share")
+abline(v = HYB.SHARE.Z.CUT, col = COLOR.ACCENT, lwd = 2, lty = 2)
+plot(HYB.SHARE.SWEEP, HYB.SHARE.SWEEP.N, type = "b", log = "y", xlab = "z cutoff", ylab = "cells beyond the cutoff (log scale)", main = "Sweep of the share cutoff")
+abline(v = HYB.SHARE.Z.CUT, col = COLOR.ACCENT, lwd = 2, lty = 2)
+dev.off()
+cat(sprintf("Hybrid cells: %d with reads from one genome only, %d more beyond |z| > %g of %d; removed\n", sum(!is.finite(HYB.SHARE.Z)),
+            sum(is.finite(HYB.SHARE.Z) & HYB.SHARE.Z > HYB.SHARE.Z.CUT), HYB.SHARE.Z.CUT, length(HYB.SHARE.Z)))
+HYB.CELLS <- intersect(colnames(HYB.SC), names(HYB.SHARE.Z)[HYB.SHARE.Z <= HYB.SHARE.Z.CUT])
 HYB.SC <- HYB.SC[, HYB.CELLS]; HYB.SE <- HYB.SE[, HYB.CELLS]
 
 ## Cell QC from precomputed library size (lib). A vector input lets hybrid alleles
@@ -213,6 +271,64 @@ dev.off()
 MIX.SC <- MIX.SC[, QC.CELLS$MIX.SC$keep]; MIX.SE <- MIX.SE[, QC.CELLS$MIX.SE$keep]
 HYB.SC <- HYB.SC[, QC.CELLS$HYB$keep];    HYB.SE <- HYB.SE[, QC.CELLS$HYB$keep]
 
+# Multiplets. Two cells in one droplet add their counts, which no cell-level model of one cell's noise describes, and they inflate library size and
+# dispersion. The cross-species cells of the mixed parent sample and the hybrid cells without a clean allele share are removed above; what remains
+# are multiplets of two cells of one kind, which composition cannot see. Three signals, computed on the cells that passed the lower-tail filter:
+#   library and detected-gene outliers: above median + MULTIPLET.MAD.K MAD on the log10 scale (qc_upper_outliers());
+#   a simulated-doublet score: the posterior probability (doublet_score_knn()) that the cell is a doublet, at the multiplet rate the mixed parent
+#     sample implies (MIX.DOUBLET.RATE; the hybrid sample is assumed to have the same loading).
+# A cell is removed when it is high on both counts, or when the doublet posterior reaches MULTIPLET.POST and one count is high. A G2 cell raises
+# the library more than the gene count and an unusual cell state alone does not raise the score, so a single signal does not remove a cell.
+# The thresholds are deliberately conservative: a cell that is simply large, or in a rare state, carries real noise, and trimming the upper tail
+# of a variable would bias dispersion downward.
+MULTIPLET.MAD.K <- 4
+MULTIPLET.POST  <- 0.5
+MULTIPLET.MATS <- list(MIX.SC = MIX.SC, MIX.SE = MIX.SE, HYB = HYB.SC[intersect(rownames(HYB.SC), rownames(HYB.SE)), ] + HYB.SE[intersect(rownames(HYB.SC), rownames(HYB.SE)), ])
+MULTIPLET.STATS <- lapply(MULTIPLET.MATS, function(m) list(lib = colSums(m), det = colSums(m > 0)))
+MULTIPLET.COUNT <- lapply(MULTIPLET.STATS, qc_upper_outliers, k = MULTIPLET.MAD.K)
+MULTIPLET.SCORE <- lapply(MULTIPLET.MATS, doublet_score_knn, rho = MIX.DOUBLET.RATE, seed = SEED.SECTION + 11)
+MULTIPLET.FLAG <- Map(function(cnt, sc) (cnt$lib_hi & cnt$det_hi) | (sc$score >= MULTIPLET.POST & (cnt$lib_hi | cnt$det_hi)), MULTIPLET.COUNT, MULTIPLET.SCORE)
+MULTIPLET.SUMMARY <- data.frame(
+  n_cells = vapply(MULTIPLET.MATS, ncol, integer(1)),
+  lib_cut = vapply(MULTIPLET.COUNT, `[[`, numeric(1), "lib_cut"), det_cut = vapply(MULTIPLET.COUNT, `[[`, numeric(1), "det_cut"),
+  n_lib_hi = vapply(MULTIPLET.COUNT, function(x) sum(x$lib_hi), integer(1)), n_det_hi = vapply(MULTIPLET.COUNT, function(x) sum(x$det_hi), integer(1)),
+  n_score_hi = vapply(MULTIPLET.SCORE, function(x) sum(x$score >= MULTIPLET.POST), integer(1)),
+  n_removed = vapply(MULTIPLET.FLAG, sum, integer(1)))
+MULTIPLET.SUMMARY$frac_removed <- MULTIPLET.SUMMARY$n_removed / MULTIPLET.SUMMARY$n_cells
+# Calibration against the cross-species cells, which are known two-cell droplets (their library and gene count are the sum over both genomes). Their
+# library relative to a single cell's shows whether doublets sit near twice a cell's library. MULTIPLET.K.SWEEP gives, for each cutoff k, the share of
+# those droplets above both count cutoffs of the Sc parent (the recall of the count signal for two-cell droplets) and the share of all cells in each
+# dataset above both cutoffs (the cost): a k that recovers the known droplets removes that share of every dataset's cells, and a cutoff set below the
+# spread of cell size removes large single cells with them.
+MULTIPLET.K.SWEEP <- do.call(rbind, lapply(c(2, 2.5, 3, 3.5, 4, 5, 6), function(k) {
+  cuts <- lapply(MULTIPLET.STATS, qc_upper_outliers, k = k)
+  c(k = k, recall_two_cell = mean(MIX.DOUBLET.LIB > cuts$MIX.SC$lib_cut & MIX.DOUBLET.DET > cuts$MIX.SC$det_cut),
+    vapply(cuts, function(x) mean(x$lib_hi & x$det_hi), numeric(1)))
+}))
+MULTIPLET.CALIBRATION <- c(
+  doublet_lib_ratio = unname(median(MIX.DOUBLET.LIB) / median(MULTIPLET.STATS$MIX.SC$lib)),
+  recall_two_cell = unname(MULTIPLET.K.SWEEP[MULTIPLET.K.SWEEP[, "k"] == MULTIPLET.MAD.K, "recall_two_cell"]),
+  expected_homotypic_cells = unname(length(MIX.DOUBLET.CELLS) * (MIX.P.SC^2 + (1 - MIX.P.SC)^2) / (2 * MIX.P.SC * (1 - MIX.P.SC))))
+cat("Multiplet filter\n"); print(round(MULTIPLET.SUMMARY, 4))
+cat(sprintf("Cross-species (two-cell) droplets: median library %.2fx a single cell's, %.0f%% above both count cutoffs at k = %g; about %.0f same-species doublets expected in the mixed sample against %d removed by the filter\n",
+            MULTIPLET.CALIBRATION[["doublet_lib_ratio"]], 100 * MULTIPLET.CALIBRATION[["recall_two_cell"]], MULTIPLET.MAD.K, MULTIPLET.CALIBRATION[["expected_homotypic_cells"]],
+            sum(MULTIPLET.SUMMARY[c("MIX.SC", "MIX.SE"), "n_removed"])))
+cat("Count cutoff sweep (recall of two-cell droplets; share of each dataset's cells above both cutoffs):\n"); print(round(MULTIPLET.K.SWEEP, 4))
+fig_pdf("extra/S_multiplet_filter.pdf", 12, 8)
+par(mfrow = c(2, 3))
+for (nm in names(MULTIPLET.MATS)) {
+  st <- MULTIPLET.STATS[[nm]]; cnt <- MULTIPLET.COUNT[[nm]]
+  plot(st$lib, st$det, log = "xy", pch = 19, cex = 0.5, col = ifelse(MULTIPLET.FLAG[[nm]], COLOR.ACCENT, COLOR.GREY[["dark"]]), xlab = "Count per cell", ylab = "Genes detected", main = nm)
+  abline(v = cnt$lib_cut, h = cnt$det_cut, col = COLOR.ACCENT, lty = 2)
+}
+for (nm in names(MULTIPLET.MATS)) {
+  hist(MULTIPLET.SCORE[[nm]]$score, breaks = seq(0, 1, 0.05), xlab = "Doublet posterior", main = nm, col = COLOR.GREY[["dark"]])
+  abline(v = MULTIPLET.POST, col = COLOR.ACCENT, lwd = 2, lty = 2)
+}
+dev.off()
+MIX.SC <- MIX.SC[, !MULTIPLET.FLAG$MIX.SC, drop = FALSE]; MIX.SE <- MIX.SE[, !MULTIPLET.FLAG$MIX.SE, drop = FALSE]
+HYB.SC <- HYB.SC[, !MULTIPLET.FLAG$HYB, drop = FALSE];    HYB.SE <- HYB.SE[, !MULTIPLET.FLAG$HYB, drop = FALSE]
+
 # Genes are filtered second, using the retained cells and one relative abundance floor
 GENE.QC <- qc_gene_keep(list(MIX.SC = MIX.SC, MIX.SE = MIX.SE, HYB.SC = HYB.SC, HYB.SE = HYB.SE),
                         lambda0 = GENE.LAMBDA0, cell_frac = GENE.CELL.FRAC)
@@ -226,6 +342,11 @@ for (nm in names(GENE.QC.MATS)) {
   abline(v=GENE.QC$p_min * sum(m) + 1, col=COLOR.ACCENT, lty=2); abline(h=GENE.QC$n_min, col=COLOR.ACCENT, lty=2)
 }
 dev.off()
+
+# Which datasets each gene passed in. A gene is kept only when it passes in all four, so a gene expressed in one species and near-silent in the
+# other is dropped; the patterns below count the genes lost to each combination (columns MIX.SC MIX.SE HYB.SC HYB.SE, 1 = passed).
+GENE.QC.PATTERN <- table(apply(GENE.QC$pass, 1, function(r) paste(as.integer(r), collapse = "")))
+cat("Genes by the datasets they pass the abundance and detection floors in (MIX.SC MIX.SE HYB.SC HYB.SE):\n"); print(GENE.QC.PATTERN[order(-GENE.QC.PATTERN)])
 
 # Subset to the same set of genes across all samples, in the same order
 GENE.SET <- GENE.QC$genes
@@ -243,7 +364,7 @@ cat("Cell and gene QC summary\n"); print(round(QC.SUMMARY, 3))
 cat(sprintf("Genes retained: %d, minimum detected cells: %d\n", length(GENE.SET), GENE.QC$n_min))
 
 # Checkpoint
-save(MIX.SC, MIX.SE, HYB.SC, HYB.SE, QC.SUMMARY, file = ckpt_path(1))
+save(MIX.SC, MIX.SE, HYB.SC, HYB.SE, QC.SUMMARY, MULTIPLET.SUMMARY, MULTIPLET.CALIBRATION, MULTIPLET.K.SWEEP, GENE.QC.PATTERN, HYB.SHARE.SWEEP.N, file = ckpt_path(1))
 
 console_start(2)
 set.seed(SEED.SECTION + 2)
