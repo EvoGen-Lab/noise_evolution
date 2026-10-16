@@ -31,7 +31,7 @@ library('MASS')
 source("functions.R")
 write_pkg_versions("gene_perm")   # R and package versions of this job, compared with renv.lock by check_pkg_versions()
 
-load("gene_perm_inputs.rda")     # CONTRAST.MATS, CONTRAST.EXPOS, CONTRAST.FITS, GENES, PERMS, N.PERM, SEED.PERM, PLOIDY.SHIFT (when present), SHARE.R, NULL.DRAWS
+load("gene_perm_inputs.rda")     # GENES is the inference set (every gene with a fitted phi in all 13 datasets, zero included), not only the genes with phi > 0. CONTRAST.MATS, CONTRAST.EXPOS, CONTRAST.FITS, GENES, PERMS, N.PERM, SEED.PERM, PLOIDY.SHIFT (when present), SHARE.R, NULL.DRAWS
 
 NUM.CORES <- max(1L, as.integer(Sys.getenv("SLURM_CPUS_PER_TASK", unset = detectCores() - 1L)))
 ## The dpar contrasts are read against the ploidy-expected value, so PLOIDY.SHIFT must come with the

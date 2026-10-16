@@ -507,8 +507,10 @@ write.csv(FILTER.SUMMARY, file.path(TABLE.DIR, "gene_filter_summary.csv"),      
 ## read through .DISP_SOURCE): raw_<mode>_valid needs every dataset informative and fitted (positive or zero_boundary), the
 ## condition under which a raw difference of phi exists; log_<mode>_valid also needs phi > 0 in every dataset, the condition
 ## under which a log2 ratio exists; mean_<mode>_valid needs a finite informative mean in the mean-axis datasets. Filtering
-## happens only where an analysis is built, by selecting on these flags. inference_set marks the genes the bootstrap and
-## permutation jobs currently run on (GENES: informative with phi > 0 in all 13 datasets).
+## happens only where an analysis is built, by selecting on these flags. inference_set marks the genes the bootstrap and permutation
+## jobs run on (GENES.INFER): informative with a fitted phi, positive or zero, in all 13 datasets, so a gene at the Poisson boundary in some
+## dataset is still tested on the mean and raw axes. log_set marks the genes with phi > 0 in all 13 datasets (GENES), the set every log2
+## analysis downstream uses.
 ## Weighted method-of-moments fits of every gene in the 13 datasets, in the layout of SPLIT.FITS (MU, DISP; MEAN_CT and N_EXPR are shared), local
 ## and serial (a few seconds per dataset per thousand genes).
 SPLIT.FITS.W <- lapply(setNames(FILTER.GROUPS, FILTER.GROUPS), function(g) {
@@ -540,7 +542,8 @@ GENE.TABLE <- local({
     mean_groups <- .MODES.MEAN[[md]]
     tab[[paste0("mean_", md, "_valid")]] <- rowSums(info[, mean_groups, drop = FALSE] & is.finite(as.matrix(tab[, paste0(mean_groups, ".mu"), drop = FALSE]))) == length(mean_groups)
   }
-  tab$inference_set <- rowSums(positive) == ncol(positive)
+  tab$inference_set <- rowSums(fitted) == ncol(fitted)
+  tab$log_set <- rowSums(positive) == ncol(positive)
   ## The same fit statuses and eligibility flags for the weighted method of moments (SPLIT.FITS.W, one fit per gene and dataset on the
   ## same exposures and share corrections); the mean and the information floors are shared with NB, so only the dispersion differs.
   wstatus <- sapply(FILTER.GROUPS, gene_fit_status, fits = SPLIT.FITS.W)
@@ -555,12 +558,14 @@ GENE.TABLE <- local({
   }
   tab
 })
-stopifnot(identical(GENE.TABLE$gene[GENE.TABLE$inference_set], GENES))   # the table's flag reproduces the filter
+stopifnot(identical(GENE.TABLE$gene[GENE.TABLE$log_set], GENES),             # the table's flag reproduces the filter
+          all(GENE.TABLE$log_set <= GENE.TABLE$inference_set))
+GENES.INFER <- GENE.TABLE$gene[GENE.TABLE$inference_set]
 
 ## Genes eligible for each comparison and scale, and the fit status of every group, so each analysis states its own reach.
 ELIGIBLE.COUNTS <- local({
   flags <- grep("_valid(_w)?$", names(GENE.TABLE), value = TRUE)
-  data.frame(flag = c(flags, "inference_set"), genes = c(colSums(GENE.TABLE[, flags]), sum(GENE.TABLE$inference_set)), of = nrow(GENE.TABLE), row.names = NULL)
+  data.frame(flag = c(flags, "inference_set", "log_set"), genes = c(colSums(GENE.TABLE[, flags]), sum(GENE.TABLE$inference_set), sum(GENE.TABLE$log_set)), of = nrow(GENE.TABLE), row.names = NULL)
 })
 FIT.STATUS.COUNTS <- local({
   st <- sapply(FILTER.GROUPS, function(g) table(factor(GENE.TABLE[[paste0(g, ".status")]], levels = c("positive", "zero_boundary", "failed", "no_information", "missing"))))
@@ -572,23 +577,25 @@ write.csv(GENE.TABLE,         file.path(TABLE.DIR, "gene_master_table.csv"),    
 write.csv(ELIGIBLE.COUNTS,    file.path(TABLE.DIR, "gene_eligible_counts.csv"),     row.names = FALSE)
 write.csv(FIT.STATUS.COUNTS,  file.path(TABLE.DIR, "gene_fit_status_counts.csv"),   row.names = FALSE)
 
-# Create bootstrap and permutation input files  
-CONTRAST.MATS <- list(
-  MIX.SC = MIX.SC[GENES, ], MIX.SE = MIX.SE[GENES, ],
-  HYC.SC = HYC.SC[GENES, ], HYC.SE = HYC.SE[GENES, ],
-  HYT.SC = HYT.SC[GENES, ], HYT.SE = HYT.SE[GENES, ],
-  HYC.SC.N = HYC.SC.N[GENES, ], HYC.SE.N = HYC.SE.N[GENES, ],
-  HYT.SC.N = HYT.SC.N[GENES, ], HYT.SE.N = HYT.SE.N[GENES, ],
-  HYB.SC = HYB.SC[GENES, ], HYB.SE = HYB.SE[GENES, ], HYB.COMB = HYB.COMB[GENES, ])
+# Create bootstrap and permutation input files. The jobs run on the inference set (GENES.INFER), the genes with a fitted phi in every
+# dataset, so each *.INFER object below holds those genes; after the cluster round trip the objects of the same names without the suffix
+# are rebuilt on GENES (phi > 0 in every dataset), the set the log2 analyses downstream use.
+CONTRAST.MATS.INFER <- list(
+  MIX.SC = MIX.SC[GENES.INFER, ], MIX.SE = MIX.SE[GENES.INFER, ],
+  HYC.SC = HYC.SC[GENES.INFER, ], HYC.SE = HYC.SE[GENES.INFER, ],
+  HYT.SC = HYT.SC[GENES.INFER, ], HYT.SE = HYT.SE[GENES.INFER, ],
+  HYC.SC.N = HYC.SC.N[GENES.INFER, ], HYC.SE.N = HYC.SE.N[GENES.INFER, ],
+  HYT.SC.N = HYT.SC.N[GENES.INFER, ], HYT.SE.N = HYT.SE.N[GENES.INFER, ],
+  HYB.SC = HYB.SC[GENES.INFER, ], HYB.SE = HYB.SE[GENES.INFER, ], HYB.COMB = HYB.COMB[GENES.INFER, ])
 
 CONTRAST.EXPOS <- SPLIT.FIT.EXPOS       # offsets keyed by dataset, as the fits used them
 
-CONTRAST.FITS <- lapply(SPLIT.FITS, function(fr) data.frame(MU = as.numeric(as.character(fr[GENES, "MU"])), DISP = as.numeric(as.character(fr[GENES, "DISP"])), row.names = GENES))
+CONTRAST.FITS.INFER <- lapply(SPLIT.FITS, function(fr) data.frame(MU = as.numeric(as.character(fr[GENES.INFER, "MU"])), DISP = as.numeric(as.character(fr[GENES.INFER, "DISP"])), row.names = GENES.INFER))
 
 # Expected fall in disp (log2 phi) when HYB.COMB sums the two hybrid alleles, per gene
 # in log2 units (0 to 1). The permutation job reads the dpar noise contrasts
 # against it, and the BURST.CONTRASTS block below removes it from the dpar estimates.
-PLOIDY.SHIFT <- ploidy_shift(CONTRAST.MATS, CONTRAST.EXPOS)[GENES]
+PLOIDY.SHIFT.INFER <- ploidy_shift(CONTRAST.MATS.INFER, CONTRAST.EXPOS)[GENES.INFER]
 
 ## Pre-draws every permutation label vector (one list entry per permutation, all modes) from one
 ## seeded stream, so each gene is tested against the same relabelings. total/dpar shuffle pooled
@@ -617,11 +624,18 @@ NULL.DRAWS <- make_draws(NCELLS, N.NULL, SEED.PERM + 500, hyc = SPLIT.IDX.MEAN$c
 ## assembled from the same resampled cell IDs (make_draws()), so the mean and noise contrasts share their cells.
 ## gene_perm.R reads gene_perm_inputs.rda and writes gene_perm_output.rda (PERM.RESULTS).
 DRAWS.REPS <- lapply(SEED.BOOT + seq_len(N.BOOT.REP) - 1, function(seed) make_draws(NCELLS, N.BOOT, seed, hyc = SPLIT.IDX.MEAN$c, hyc_n = SPLIT.IDX.DISP$c))
-save(CONTRAST.MATS, CONTRAST.EXPOS, CONTRAST.FITS, GENES, DRAWS.REPS, N.BOOT, SHARE.R, PLOIDY.SHIFT, file = file.path(INPUT.DIR, "gene_boot_inputs.rda"))
-save(CONTRAST.MATS, CONTRAST.EXPOS, CONTRAST.FITS, GENES, PERMS, N.PERM, SEED.PERM, PLOIDY.SHIFT, SHARE.R, NULL.DRAWS, file = file.path(INPUT.DIR, "gene_perm_inputs.rda"))
-BOOT.CONTRASTS.REPS <- load_replicates("gene_boot", "BOOT.CONTRASTS", N.BOOT.REP, expected = length(GENES))
-BOOT.CONTRASTS <- BOOT.CONTRASTS.REPS[[1]]
+## The cluster scripts read the objects under their plain names, with GENES the genes to run, so the inputs are saved from an environment that
+## holds the inference-set objects under those names.
+JOB.INPUTS <- list2env(list(CONTRAST.MATS = CONTRAST.MATS.INFER, CONTRAST.EXPOS = CONTRAST.EXPOS, CONTRAST.FITS = CONTRAST.FITS.INFER, GENES = GENES.INFER,
+                            DRAWS.REPS = DRAWS.REPS, N.BOOT = N.BOOT, SHARE.R = SHARE.R, PLOIDY.SHIFT = PLOIDY.SHIFT.INFER, PERMS = PERMS, N.PERM = N.PERM,
+                            SEED.PERM = SEED.PERM, NULL.DRAWS = NULL.DRAWS))
+save(list = c("CONTRAST.MATS", "CONTRAST.EXPOS", "CONTRAST.FITS", "GENES", "DRAWS.REPS", "N.BOOT", "SHARE.R", "PLOIDY.SHIFT"), envir = JOB.INPUTS, file = file.path(INPUT.DIR, "gene_boot_inputs.rda"))
+save(list = c("CONTRAST.MATS", "CONTRAST.EXPOS", "CONTRAST.FITS", "GENES", "PERMS", "N.PERM", "SEED.PERM", "PLOIDY.SHIFT", "SHARE.R", "NULL.DRAWS"), envir = JOB.INPUTS, file = file.path(INPUT.DIR, "gene_perm_inputs.rda"))
+BOOT.CONTRASTS.REPS.INFER <- load_replicates("gene_boot", "BOOT.CONTRASTS", N.BOOT.REP, expected = length(GENES.INFER))
+BOOT.CONTRASTS.INFER <- BOOT.CONTRASTS.REPS.INFER[[1]]
 load(file.path(OUTPUT.DIR, "gene_perm_output.rda"))            # PERM.RESULTS
+PERM.RESULTS.INFER <- PERM.RESULTS
+stopifnot(identical(sort(PERM.RESULTS.INFER$gene), sort(GENES.INFER)), identical(sort(BOOT.CONTRASTS.INFER$gene), sort(GENES.INFER)))
 ## ---- end cluster round trip ----
 
 ## One row per mode: n, raw and attenuation-corrected mean-disp correlation, and its bootstrap CI.
@@ -642,15 +656,15 @@ load(file.path(OUTPUT.DIR, "gene_perm_output.rda"))            # PERM.RESULTS
 # (kinetic balance, minus mean minus 2 disp).
 # The rdisp_<mode>_est / _se / _nfin columns hold the raw difference of phi for the same modes, from the same bootstrap refits as
 # the log2 columns; a zero-boundary refit contributes to them (rdisp_*_nfin is the share of draws that did), and the raw dpar
-# columns already carry the ploidy shift (the summed hybrid's phi times 2^s). Raw contrasts have no permutation p-value yet.
+# columns already carry the ploidy shift (the summed hybrid's phi times 2^s); their permutation p-values are in PR.
 # The wdisp_* and wrdisp_* columns repeat both scales with the weighted method of moments (fit_dispersion(method = "weighted")) on
 # the same resamples, a sensitivity analysis next to the NB estimator; wdisp_dpar_* carries the same ploidy shift.
 # The dpar noise estimates then leave the HYB.COMB allele-summing shift behind
 # (ploidy_adjust_dpar), with the raw values kept in the _est_raw columns.
-BURST.CONTRASTS <- local({
-  df <- add_burst_contrasts(BOOT.CONTRASTS)
-  fits <- CONTRAST.FITS
-  shift <- PLOIDY.SHIFT
+BURST.CONTRASTS.INFER <- local({
+  df <- add_burst_contrasts(BOOT.CONTRASTS.INFER)
+  fits <- CONTRAST.FITS.INFER
+  shift <- PLOIDY.SHIFT.INFER
   s   <- unname(shift[df$gene])
   hyb <- fits$HYB.COMB[df$gene, ]
   cv_h <- 1 / hyb$MU + 2^s * hyb$DISP                # latent term (phi) scaled by 2^s
@@ -672,11 +686,11 @@ BURST.CONTRASTS <- local({
   }
   df
 })
-PR <- PERM.RESULTS[match(BURST.CONTRASTS$gene, PERM.RESULTS$gene), ]   
+PR.INFER <- PERM.RESULTS.INFER[match(BURST.CONTRASTS.INFER$gene, PERM.RESULTS.INFER$gene), ]   
 # Benjamini-Hochberg FDR across genes, one family per contrast and quantity.
 # Adds a _q column beside every _p column.
-PR <- local({
-  df <- PR
+PR.INFER <- local({
+  df <- PR.INFER
   method <- "BH"
   pc <- grep("_p(_ploidy|_ind)?$", names(df), value = TRUE)
   for (nm in pc) df[[sub("_p(?=(_ploidy|_ind)?$)", "_q", nm, perl = TRUE)]] <- p.adjust(df[[nm]], method = method)
@@ -687,12 +701,26 @@ PR <- local({
 ## and sig (BH q < 0.05). ANALYSIS.COUNTS tallies them per quantity and mode. Nothing here removes a gene; an analysis selects on the flags it needs.
 ANALYSIS.QUANTITIES <- c("mean", "disp", "rdisp", "wdisp", "wrdisp", "bsize", "kbal", "rbsize", "rkbal", "wbsize", "wkbal", "wrbsize", "wrkbal")
 ANALYSIS.STATUS <- do.call(rbind, Map(analysis_status_rows, rep(ANALYSIS.QUANTITIES, each = length(.OUT_MODES)), rep(.OUT_MODES, times = length(ANALYSIS.QUANTITIES)),
-                                      MoreArgs = list(tab = GENE.TABLE, burst = BURST.CONTRASTS, pr = PR)))
+                                      MoreArgs = list(tab = GENE.TABLE, burst = BURST.CONTRASTS.INFER, pr = PR.INFER)))
 ANALYSIS.COUNTS <- aggregate(cbind(eligible, run, est_ok, ci_ok, test_ok, sig) ~ quantity + mode, data = ANALYSIS.STATUS, FUN = sum)
 ANALYSIS.COUNTS$eligible_and_run <- aggregate(eligible & run ~ quantity + mode, data = ANALYSIS.STATUS, FUN = sum)[[3]]
 ANALYSIS.COUNTS <- ANALYSIS.COUNTS[order(match(ANALYSIS.COUNTS$quantity, ANALYSIS.QUANTITIES), match(ANALYSIS.COUNTS$mode, .OUT_MODES)), ]
 print(ANALYSIS.COUNTS, row.names = FALSE)
 write.csv(ANALYSIS.COUNTS, file.path(TABLE.DIR, "analysis_status_counts.csv"), row.names = FALSE)
+
+## Downstream analyses work on the log-valid genes (GENES: phi > 0 in all 13 datasets), as before the inference set was widened. The objects below
+## carry the plain names every later section reads and are the *.INFER objects restricted to GENES. The BH q-values in PR come from the full inference
+## set: the mean-axis family now also contains the genes with a Poisson-boundary dispersion in some dataset, and a quantity undefined for a gene
+## (a log2 contrast at phi = 0) has no p-value and does not count as a test.
+CONTRAST.MATS  <- lapply(CONTRAST.MATS.INFER, function(m) m[GENES, , drop = FALSE])
+CONTRAST.FITS  <- lapply(CONTRAST.FITS.INFER, function(f) f[GENES, , drop = FALSE])
+PLOIDY.SHIFT   <- PLOIDY.SHIFT.INFER[GENES]
+BOOT.CONTRASTS.REPS <- lapply(BOOT.CONTRASTS.REPS.INFER, function(d) { d <- d[match(GENES, d$gene), ]; rownames(d) <- NULL; d })
+BOOT.CONTRASTS <- BOOT.CONTRASTS.REPS[[1]]
+PERM.RESULTS   <- PERM.RESULTS.INFER[match(GENES, PERM.RESULTS.INFER$gene), ]; rownames(PERM.RESULTS) <- NULL
+BURST.CONTRASTS <- BURST.CONTRASTS.INFER[match(GENES, BURST.CONTRASTS.INFER$gene), ]; rownames(BURST.CONTRASTS) <- NULL
+PR             <- PR.INFER[match(GENES, PR.INFER$gene), ]; rownames(PR) <- NULL
+stopifnot(identical(BURST.CONTRASTS$gene, GENES), identical(PR$gene, GENES))
 local({
   modes <- c("cis", "trans", "total")
   B <- 2000
@@ -769,7 +797,7 @@ dev.off()
 
 # Checkpoint: the fitted NB models, per-gene contrasts, and every Section 2
 # object that later sections read.
-save(GENES, GENE.TABLE, SPLIT.FITS.W, ANALYSIS.STATUS, ANALYSIS.COUNTS, ELIGIBLE.COUNTS, FIT.STATUS.COUNTS, FILTER.COUNTS, FILTER.SUMMARY, HYB.COMB, CONTRAST.FITS, CONTRAST.MATS, CONTRAST.EXPOS, SPLIT.FITS,
+save(GENES, GENES.INFER, GENE.TABLE, SPLIT.FITS.W, BURST.CONTRASTS.INFER, PR.INFER, CONTRAST.FITS.INFER, PLOIDY.SHIFT.INFER, ANALYSIS.STATUS, ANALYSIS.COUNTS, ELIGIBLE.COUNTS, FIT.STATUS.COUNTS, FILTER.COUNTS, FILTER.SUMMARY, HYB.COMB, CONTRAST.FITS, CONTRAST.MATS, CONTRAST.EXPOS, SPLIT.FITS,
      BOOT.CONTRASTS, BURST.CONTRASTS, PERM.RESULTS, PR, PLOIDY.SHIFT, N.PERM,
      HYB.SC, HYB.SE, EXPO.MIX.SC, EXPO.MIX.SE, EXPO.HYB.SC, EXPO.HYB.SE, EXPO.HYB, C.HAT, C.BAR, VAR.C, R.C, R.E, SHARE.R, SHARE.TABLE,
      WEIGHT.CHECK, ALLELE.DISP,

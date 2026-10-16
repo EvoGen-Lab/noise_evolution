@@ -22,7 +22,7 @@ library('MASS')          # glm.nb ships with base R; set lib= if your cluster ne
 source("functions.R")
 write_pkg_versions("gene_boot")   # R and package versions of this job, compared with renv.lock by check_pkg_versions()
 
-load("gene_boot_inputs.rda")     # CONTRAST.MATS, CONTRAST.EXPOS, CONTRAST.FITS, GENES, DRAWS.REPS, N.BOOT, SHARE.R, PLOIDY.SHIFT
+load("gene_boot_inputs.rda")     # GENES is the inference set (every gene with a fitted phi in all 13 datasets, zero included), not only the genes with phi > 0. CONTRAST.MATS, CONTRAST.EXPOS, CONTRAST.FITS, GENES, DRAWS.REPS, N.BOOT, SHARE.R, PLOIDY.SHIFT
 
 ## Job-array position: task k bootstraps replicate k. A finished task leaves its
 ## output file, so resubmitting the array only computes the missing replicates.
