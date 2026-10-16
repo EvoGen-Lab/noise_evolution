@@ -754,23 +754,26 @@ make_draws <- function(ncells, B, seed = 1, hyc, hyc_n) {
 ## that dependence, so kbal against the mean asks whether a gene's overall change leans toward frequency or size.
 add_burst_contrasts <- function(df) {
   ## Loops over the reportable modes; BOOT.CONTRASTS has columns only for .OUT_MODES (cis_n and
-  ## trans_n are folded into cis and trans through .DISP_SOURCE).
-  for (ct in .OUT_MODES) {
+  ## trans_n are folded into cis and trans through .DISP_SOURCE). The NB estimator ("") gives bsize_ and kbal_; when the
+  ## bootstrap also carried the weighted method of moments (wdisp_, wcor_ columns) the same derivation gives wbsize_ and wkbal_,
+  ## with the mean contrast shared because both estimators use the same exposure-weighted mean.
+  for (ct in .OUT_MODES) for (pre in c("", "w")) {
+    if (!paste0(pre, "disp_", ct, "_est") %in% names(df)) next
     m  <- df[[paste0("mean_",ct,"_est")]];  sm <- df[[paste0("mean_",ct,"_se")]]
-    d  <- df[[paste0("disp_",ct,"_est")]];  sd_ <- df[[paste0("disp_",ct,"_se")]]
-    r  <- df[[paste0("cor_",ct)]]
+    d  <- df[[paste0(pre, "disp_",ct,"_est")]];  sd_ <- df[[paste0(pre, "disp_",ct,"_se")]]
+    r  <- df[[paste0(pre, "cor_",ct)]]
     ## cor_<ct> is measured from the bootstrap draws for every mode; a gene with too few finite draws
     ## (NA) enters the SE propagation as a zero covariance.
     r[!is.finite(r)] <- 0
     bs    <- m + d
     bs_se <- sqrt(pmax(0, sm^2 + sd_^2 + 2 * r * sm * sd_))
-    df[[paste0("bsize_",ct,"_est")]] <- bs
-    df[[paste0("bsize_",ct,"_se")]]  <- bs_se
+    df[[paste0(pre, "bsize_",ct,"_est")]] <- bs
+    df[[paste0(pre, "bsize_",ct,"_se")]]  <- bs_se
     ## covDB = Cov(disp_est, bsize_est) = r*sm*sd + sd^2, the covariance of the two estimation errors.
     ## kbal = -(bsize + disp), so it gets its SE from the variances of bsize and disp and covDB.
     covDB <- r * sm * sd_ + sd_^2
-    df[[paste0("kbal_",ct,"_est")]] <- -(bs + d)
-    df[[paste0("kbal_",ct,"_se")]]  <- sqrt(pmax(0, bs_se^2 + sd_^2 + 2 * covDB))
+    df[[paste0(pre, "kbal_",ct,"_est")]] <- -(bs + d)
+    df[[paste0(pre, "kbal_",ct,"_se")]]  <- sqrt(pmax(0, bs_se^2 + sd_^2 + 2 * covDB))
   }
   df
 }
@@ -3738,6 +3741,10 @@ boot_contrasts_one <- function(g, expos, fits, mats, draws, share_r = NULL, ploi
     ## give finite values for both.
     x <- M[, paste0("m.", md)]; y <- M[, paste0("s.", smd)]; ok <- is.finite(x) & is.finite(y)
     out[[paste0("cor_", md)]] <- if (sum(ok) > 2) cor(x[ok], y[ok]) else NA_real_
+    if (do_w) {                  # the same correlation for the weighted estimator's noise draws, which feeds its bsize and kbal SEs
+      yw <- W[, paste0("ws.", smd)]; okw <- is.finite(x) & is.finite(yw)
+      out[[paste0("wcor_", md)]] <- if (sum(okw) > 2) cor(x[okw], yw[okw]) else NA_real_
+    }
   }
   .r2 <- function(c1, c2) {
 	x <- M[, c1]; y <- M[, c2]; ok <- is.finite(x) & is.finite(y)
@@ -3856,6 +3863,12 @@ permute_contrasts_one <- function(g, expos, fits, mats, perms, ploidy_shift, see
     if (do_w) {
       out[[paste0("wdisp_", md, "_obs")]]  <- unname(obs.ws[smd]); out[[paste0("wdisp_", md, "_p")]]  <- perm_pval(obs.ws[smd], Nws[, smd])
       out[[paste0("wrdisp_", md, "_obs")]] <- unname(obs.wr[smd]); out[[paste0("wrdisp_", md, "_p")]] <- perm_pval(obs.wr[smd], Nwr[, smd])
+      ## burst size and kinetic balance of the weighted estimator: the mean null (shared, the mean does not depend on the estimator)
+      ## plus the weighted noise null of the same permutation, as for the NB quantities below
+      wbs_null <- Nm[, md] + Nws[, smd]; obs.wbs <- unname(obs.m[md]) + unname(obs.ws[smd])
+      out[[paste0("wbsize_", md, "_obs")]] <- obs.wbs; out[[paste0("wbsize_", md, "_p")]] <- perm_pval(obs.wbs, wbs_null)
+      wkbal_null <- -(wbs_null + Nws[, smd]); obs.wkbal <- -(obs.wbs + unname(obs.ws[smd]))
+      out[[paste0("wkbal_", md, "_obs")]] <- obs.wkbal; out[[paste0("wkbal_", md, "_p")]] <- perm_pval(obs.wkbal, wkbal_null)
     }
 
     ## bsize null: mean null plus disp null, permutation by permutation. Where md == smd the two
@@ -3898,6 +3911,8 @@ permute_contrasts_one <- function(g, expos, fits, mats, perms, ploidy_shift, see
         out[[paste0("rdisp_", md, "_p_", tag)]] <- perm_pval(obs.r[smd] + (2^s - 1) * ph, Nr[, smd])
         if (do_w) {
           out[[paste0("wdisp_", md, "_p_", tag)]]  <- perm_pval(obs.ws[smd] + s, Nws[, smd])
+          out[[paste0("wbsize_", md, "_p_", tag)]] <- perm_pval(obs.wbs + s, wbs_null)
+          out[[paste0("wkbal_", md, "_p_", tag)]]  <- perm_pval(obs.wkbal - 2 * s, wkbal_null)
           out[[paste0("wrdisp_", md, "_p_", tag)]] <- perm_pval(obs.wr[smd] + (2^s - 1) * gvw[["HYB.COMB"]], Nwr[, smd])
         }
       }
@@ -3933,7 +3948,7 @@ permute_contrasts_one <- function(g, expos, fits, mats, perms, ploidy_shift, see
     }
     shift_p <- function(est, draws_) perm_pval(est, draws_ - est)
     est_m <- unname(obs.m["trans"]); est_s <- unname(obs.s["trans_n"]); est_bs <- est_m + est_s
-    for (q in c("disp", "bsize", "kbal", "cv2", "rdisp", if (do_w) c("wdisp", "wrdisp"))) out[[paste0(q, "_trans_p_pooled")]] <- out[[paste0(q, "_trans_p")]]
+    for (q in c("disp", "bsize", "kbal", "cv2", "rdisp", if (do_w) c("wdisp", "wrdisp", "wbsize", "wkbal"))) out[[paste0(q, "_trans_p_pooled")]] <- out[[paste0(q, "_trans_p")]]
     out$disp_trans_p  <- shift_p(est_s, Ds)
     out$bsize_trans_p <- shift_p(est_bs, Dm + Ds)
     out$kbal_trans_p  <- shift_p(-(est_bs + est_s), -(Dm + 2 * Ds))
@@ -3944,6 +3959,9 @@ permute_contrasts_one <- function(g, expos, fits, mats, perms, ploidy_shift, see
       wo <- .disp_contrasts("trans_n", fw)
       out$wdisp_trans_p  <- shift_p(wo[["log"]], Dws)
       out$wrdisp_trans_p <- shift_p(wo[["raw"]], Dwr)
+      est_wbs <- est_m + wo[["log"]]
+      out$wbsize_trans_p <- shift_p(est_wbs, Dm + Dws)
+      out$wkbal_trans_p  <- shift_p(-(est_wbs + wo[["log"]]), -(Dm + 2 * Dws))
     }
   }
   out$ploidy_shift <- unname(ploidy_shift[g])

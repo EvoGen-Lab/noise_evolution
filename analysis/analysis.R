@@ -643,8 +643,11 @@ BURST.CONTRASTS <- local({
     df[[est[["bsize"]]]] <- df[[est[["bsize"]]]] + s
     df[[est[["kbal"]]]]  <- df[[est[["kbal"]]]]  - 2 * s
     df[[est[["cv2"]]]]   <- ifelse(is.finite(cv_h) & cv_h > 0 & is.finite(cv_p) & cv_p > 0, log2(cv_h) - log2(cv_p), NA_real_)
-    wcol <- paste0("wdisp_dpar_", sp, "_est")        # the weighted-moment log2 contrast takes the same shift
-    if (wcol %in% names(df)) { df[[paste0(wcol, "_raw")]] <- df[[wcol]]; df[[wcol]] <- df[[wcol]] + s }
+    ## the weighted-moment log2 contrasts take the same shifts: disp and bsize rise by s, kbal falls by 2 s
+    for (wq in c("wdisp", "wbsize", "wkbal")) {
+      wcol <- paste0(wq, "_dpar_", sp, "_est")
+      if (wcol %in% names(df)) { df[[paste0(wcol, "_raw")]] <- df[[wcol]]; df[[wcol]] <- df[[wcol]] + if (wq == "wkbal") -2 * s else s }
+    }
   }
   df
 })
