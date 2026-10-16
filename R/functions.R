@@ -36,6 +36,7 @@
 ###     make_draws() - Builds the resampling index draws used by the paired per-gene bootstrap: parents resampled whole, hybrid cells resampled within the four strata of the mean-split by noise-split overlap and every hybrid dataset assembled from the same resampled cell IDs.
 ###     add_burst_contrasts() - Derives burst-size and kinetic-balance contrasts from the mean and size contrasts already in a data frame.
 ###     .contrast_raw() - The raw (difference) contrast of phi for one mode, defined when phi = 0.
+###     .burst_q() / .contrast_burst_raw() - The raw burst size (mu phi) and kinetic balance (1 / (mu phi^2)) of a group, and their raw difference contrast for one reporting mode.
 ###     .contrast_value() - Log2 contrast for one mode (total, cis, trans, dom, dpar) from a named list of per-group fitted values.
 ###     .cv2_of() - CV2 (1/mu + 1/disp) of one fitted group; NA unless mu and disp are finite and positive.
 ###   4. DISATTENUATED MEAN-DISP COUPLING (population summary)
@@ -735,6 +736,32 @@ make_draws <- function(ncells, B, seed = 1, hyc, hyc_n) {
   bf <- unlist(gv[.MODES[[mode]]])
   c(log = if (all(is.finite(bf) & bf > 0)) .contrast_value(mode, gv, "DISP") else NA_real_,
     raw = if (all(is.finite(bf) & bf >= 0)) .contrast_raw(mode, gv, shift) else NA_real_)
+}
+
+## .burst_q: the raw burst quantity of one group from its rate mu and dispersion phi. kind "bsize" is the burst size b = mu phi (counts per
+## burst), defined whenever mu and phi are finite and >= 0, so a phi = 0 group has b = 0. kind "kbal" is the kinetic balance kappa =
+## theta / b = 1 / (mu phi^2), which is infinite at phi = 0, so it is defined only for mu > 0 and phi > 0 and is NA otherwise.
+.burst_q <- function(mu, phi, kind) {
+  if (!is.finite(mu) || !is.finite(phi)) return(NA_real_)
+  if (kind == "bsize") { if (mu >= 0 && phi >= 0) mu * phi else NA_real_ }
+  else                 { if (mu > 0 && phi > 0) 1 / (mu * phi^2) else NA_real_ }
+}
+
+## .contrast_burst_raw: the raw (difference) contrast of burst size or kinetic balance for reporting mode md (one of .OUT_MODES) from named lists
+## of per-group rates (gv_mu) and dispersions (gv_phi). Each group's quantity pairs its dispersion with the rate of the matching mean-split
+## dataset (HYC.SC.N with HYC.SC, and so on), the same pairing the log2 bsize uses (mean from the mean split, noise from the noise split), so
+## the two estimates come from independent cells; the summed hybrid takes the average of the two allele rates. The summed hybrid's phi is
+## multiplied by 2^shift in the dpar modes (ploidy_shift()), which puts it on the parents' per-genome scale. The difference then follows
+## .contrast_raw() on the noise-source mode, so cis, trans, dom and dpar read their groups exactly as the dispersion contrasts do.
+.contrast_burst_raw <- function(md, gv_mu, gv_phi, kind, shift = 0) {
+  smd <- .DISP_SOURCE[[md]]
+  hyb_shift <- if (md %in% c("dpar_sc", "dpar_se")) shift else 0
+  q <- lapply(setNames(.MODES[[smd]], .MODES[[smd]]), function(k) {
+    mu  <- if (k == "HYB.COMB") 0.5 * (gv_mu[["HYB.SC"]] + gv_mu[["HYB.SE"]]) else gv_mu[[sub("\\.N$", "", k)]]
+    phi <- gv_phi[[k]] * (if (k == "HYB.COMB") 2^hyb_shift else 1)
+    .burst_q(mu, phi, kind)
+  })
+  .contrast_raw(smd, q)
 }
 
 ## CV2 (squared coefficient of variation) of one fitted group: 1/mu + disp (disp = phi), the Poisson plus
@@ -3385,6 +3412,13 @@ fit_ratio_axes <- function(fa, fb, raw = FALSE) {
   out
 }
 
+## null_cis_fits: the two fits behind one draw of the cis null, list(a = the swapped Sc position, b = the swapped Se position); arguments as in
+## null_cis_axes(), which contrasts them.
+null_cis_fits <- function(sc, se, expo_sc, expo_se, swap, share_r = c(0, 0), method = "NB") {
+  list(a = .fit_m(ifelse(swap, se, sc), ifelse(swap, expo_se, expo_sc), share_r[[1]], method),
+       b = .fit_m(ifelse(swap, sc, se), ifelse(swap, expo_sc, expo_se), share_r[[2]], method))
+}
+
 ## null_cis_axes: one draw of the cis null for hybrid cells with allele counts sc, se and the offsets
 ## expo_sc, expo_se of the two alleles (equal in the pipeline, S_H / 2). swap (logical per cell) exchanges the two alleles
 ## within a cell, count and offset together, which keeps the allele pairing; share_r holds the
@@ -3392,8 +3426,16 @@ fit_ratio_axes <- function(fa, fb, raw = FALSE) {
 ## contrast is the swapped Sc allele against the swapped Se allele (fit_ratio_axes(); raw adds the raw difference, method picks the estimator). Shared by
 ## permute_contrasts_one() and the power grid (which passes one exposure for both alleles).
 null_cis_axes <- function(sc, se, expo_sc, expo_se, swap, share_r = c(0, 0), raw = FALSE, method = "NB") {
-  fit_ratio_axes(.fit_m(ifelse(swap, se, sc), ifelse(swap, expo_se, expo_sc), share_r[[1]], method),
-                 .fit_m(ifelse(swap, sc, se), ifelse(swap, expo_sc, expo_se), share_r[[2]], method), raw)
+  f <- null_cis_fits(sc, se, expo_sc, expo_se, swap, share_r, method)
+  fit_ratio_axes(f$a, f$b, raw)
+}
+
+## null_trans_fits: the four fits behind one draw of the trans null: the parent-sized (a) and hybrid-sized (b) relabeled group of each allele,
+## list(sc_a, se_a, sc_b, se_b); arguments as in null_trans_axes(), which contrasts them.
+null_trans_fits <- function(par_sc, par_se, hyb_sc, hyb_se, expo_par_sc, expo_par_se, expo_hyb_sc, expo_hyb_se, perm_sc, perm_se, method = "NB") {
+  sSC <- .fit_split(c(par_sc, hyb_sc), c(expo_par_sc, expo_hyb_sc), perm_sc, length(par_sc), method)
+  sSE <- .fit_split(c(par_se, hyb_se), c(expo_par_se, expo_hyb_se), perm_se, length(par_se), method)
+  list(sc_a = sSC$a, se_a = sSE$a, sc_b = sSC$b, se_b = sSE$b)
 }
 
 ## null_trans_axes: one draw of the trans null. For each allele the parent cells and the hybrid cells of the
@@ -3402,9 +3444,8 @@ null_cis_axes <- function(sc, se, expo_sc, expo_se, swap, share_r = c(0, 0), raw
 ## parental ratio minus the hybrid allele ratio of the relabeled groups. Shared by permute_contrasts_one()
 ## and the power grid; raw and method as in null_cis_axes().
 null_trans_axes <- function(par_sc, par_se, hyb_sc, hyb_se, expo_par_sc, expo_par_se, expo_hyb_sc, expo_hyb_se, perm_sc, perm_se, raw = FALSE, method = "NB") {
-  sSC <- .fit_split(c(par_sc, hyb_sc), c(expo_par_sc, expo_hyb_sc), perm_sc, length(par_sc), method)
-  sSE <- .fit_split(c(par_se, hyb_se), c(expo_par_se, expo_hyb_se), perm_se, length(par_se), method)
-  fit_ratio_axes(sSC$a, sSE$a, raw) - fit_ratio_axes(sSC$b, sSE$b, raw)
+  f <- null_trans_fits(par_sc, par_se, hyb_sc, hyb_se, expo_par_sc, expo_par_se, expo_hyb_sc, expo_hyb_se, perm_sc, perm_se, method)
+  fit_ratio_axes(f$sc_a, f$se_a, raw) - fit_ratio_axes(f$sc_b, f$se_b, raw)
 }
 
 ## eiv_mode_ci_row: errors-in-variables correlation for one mode m with a gene-resampling bootstrap CI
@@ -3669,6 +3710,8 @@ boot_contrasts_one <- function(g, expos, fits, mats, draws, share_r = NULL, ploi
   mcol <- paste0("m.", modes); scol <- paste0("s.", modes); ccol <- paste0("c.", modes); rcol <- paste0("r.", modes)
   M <- matrix(NA_real_, B, 4 * length(modes), dimnames = list(NULL, c(mcol, scol, ccol, rcol)))
   W <- matrix(NA_real_, B, 2 * length(modes), dimnames = list(NULL, c(paste0("ws.", modes), paste0("wr.", modes))))
+  ## raw burst size and kinetic balance draws for the reporting modes: NB (rb., rk.) and weighted (wrb., wrk.)
+  BQ <- matrix(NA_real_, B, 4 * length(.OUT_MODES), dimnames = list(NULL, c(paste0("rb.", .OUT_MODES), paste0("rk.", .OUT_MODES), paste0("wrb.", .OUT_MODES), paste0("wrk.", .OUT_MODES))))
   for (b in seq_len(B)) {
     d <- draws[[b]]
     ## Each dataset is refit on the resample of its draw key (.DRAW.KEY) with its own offsets and, for a hybrid allele, its
@@ -3688,6 +3731,14 @@ boot_contrasts_one <- function(g, expos, fits, mats, draws, share_r = NULL, ploi
     gv.mu <- lapply(mu_all, unname)
     gv.bf <- lapply(disp_all, unname)
     gv.cv <- Map(.cv2_of, mu_all, disp_all)
+    for (md in .OUT_MODES) {
+      BQ[b, paste0("rb.", md)] <- .contrast_burst_raw(md, gv.mu, gv.bf, "bsize", shift)
+      BQ[b, paste0("rk.", md)] <- .contrast_burst_raw(md, gv.mu, gv.bf, "kbal", shift)
+      if (do_w) {
+        BQ[b, paste0("wrb.", md)] <- .contrast_burst_raw(md, gv.mu, gv.w, "bsize", shift)
+        BQ[b, paste0("wrk.", md)] <- .contrast_burst_raw(md, gv.mu, gv.w, "kbal", shift)
+      }
+    }
     for (k in seq_along(modes)) {
       grp <- .MODES[[modes[k]]]
       bf <- unlist(gv.bf[grp]); cv <- unlist(gv.cv[grp])
@@ -3713,9 +3764,20 @@ boot_contrasts_one <- function(g, expos, fits, mats, draws, share_r = NULL, ploi
     pw <- vapply(modes, .disp_contrasts, numeric(2), fw, shift)
     sw <- apply(W, 2, sd, na.rm = TRUE)
   }
+  sq <- apply(BQ, 2, sd, na.rm = TRUE)
   out <- list(gene = g)
   for (md in .OUT_MODES) {
     smd <- .DISP_SOURCE[[md]]
+    ## raw burst size (rbsize) and kinetic balance (rkbal) of the NB estimator, and of the weighted one (wrbsize, wrkbal)
+    for (kd in c("bsize", "kbal")) {
+      tag <- if (kd == "bsize") "b" else "k"
+      out[[paste0("r", kd, "_", md, "_est")]] <- .contrast_burst_raw(md, fv$mu, fv$disp, kd, shift)
+      out[[paste0("r", kd, "_", md, "_se")]]  <- unname(sq[paste0("r", tag, ".", md)])
+      if (do_w) {
+        out[[paste0("wr", kd, "_", md, "_est")]] <- .contrast_burst_raw(md, fv$mu, fw, kd, shift)
+        out[[paste0("wr", kd, "_", md, "_se")]]  <- unname(sq[paste0("wr", tag, ".", md)])
+      }
+    }
     if (do_w) {
       out[[paste0("wdisp_", md, "_est")]]   <- unname(pw["log", smd])
       out[[paste0("wdisp_", md, "_se")]]    <- unname(sw[paste0("ws.", smd)])
@@ -3770,6 +3832,8 @@ permute_contrasts_one <- function(g, expos, fits, mats, perms, ploidy_shift, see
   Ns <- matrix(NA_real_, B, length(modes), dimnames = list(NULL, modes))
   Nc <- matrix(NA_real_, B, length(modes), dimnames = list(NULL, modes))
   Nr <- Ns; Nws <- Ns; Nwr <- Ns          # nulls of the raw (NB), log2 (weighted) and raw (weighted) dispersion contrasts
+  ## nulls of the raw burst size and kinetic balance, NB (NRb, NRk) and weighted (NWb, NWk), one column per reporting mode
+  NRb <- matrix(NA_real_, B, length(.OUT_MODES), dimnames = list(NULL, .OUT_MODES)); NRk <- NRb; NWb <- NRb; NWk <- NRb
   do_w <- "weighted" %in% methods
   fv   <- fit_group_values(fits, g)
   gvmu <- fv$mu; gvbf <- fv$disp; gvcv <- fv$cv2
@@ -3797,6 +3861,8 @@ permute_contrasts_one <- function(g, expos, fits, mats, perms, ploidy_shift, see
     obs.ws <- oc_w["log", ]; obs.wr <- oc_w["raw", ]
     mp.sw <- 0.5 * (l2(gvw[["MIX.SC"]]) + l2(gvw[["MIX.SE"]]))
   }
+  ## an observed raw burst contrast with the summed hybrid's phi scaled by 2^shift in the dpar modes (shift 0 leaves it as fitted)
+  obs_burst <- function(md, gv_phi, kind, shift = 0) .contrast_burst_raw(md, gvmu, gv_phi, kind, shift)
   ## dom surrogate: every UMI of a parent cell is kept with probability rho and that cell's offset is scaled by rho,
   ## which leaves the NB dispersion unchanged (a thinned NB is an NB) and gives the two parents equal offset totals.
   ## The surrogate's mean rate is then the unweighted midparent. The thinning draws come from a stream seeded by
@@ -3818,21 +3884,34 @@ permute_contrasts_one <- function(g, expos, fits, mats, perms, ploidy_shift, see
     es    <- rho.sc * e.sc[p$dom_i] + rho.se * e.se[p$dom_j]
     for (mt in methods) {
       st <- if (mt == "NB") store else storew
+      stb <- function(md, kind, v) { if (mt == "NB") { if (kind == "bsize") NRb[b, md] <<- v else NRk[b, md] <<- v } else { if (kind == "bsize") NWb[b, md] <<- v else NWk[b, md] <<- v } }
+      gv_phi <- if (mt == "NB") gvbf else gvw
+      ## raw burst quantity of a group whose rate comes from the mean-split fit fm and dispersion from the noise-split fit fn
+      qq <- function(fm, fn, kind) .burst_q(fm[["mu"]], fn[["disp"]], kind)
       sp <- .fit_split(c(cMIXsc, cMIXse), c(expos$MIX.SC, expos$MIX.SE), p$total, nSC, mt)
       st(b, "total", fit_ratio_axes(sp$a, sp$b, raw = TRUE))
+      for (kd in c("bsize", "kbal")) stb("total", kd, qq(sp$a, sp$a, kd) - qq(sp$b, sp$b, kd))
 
       ## cis swap: a swapped allele carries its own offset, so every count keeps its offset
-      st(b, "cis", null_cis_axes(cHYCsc, cHYCse, expos$HYC.SC, expos$HYC.SE, p$cis, share_r[c("HYC.SC", "HYC.SE")], raw = TRUE, method = mt))
+      cm <- null_cis_fits(cHYCsc, cHYCse, expos$HYC.SC, expos$HYC.SE, p$cis, share_r[c("HYC.SC", "HYC.SE")], mt)
+      st(b, "cis", fit_ratio_axes(cm$a, cm$b, raw = TRUE))
       ## Noise-split (f_disp) version of the cis null, used only for
       ## the disp_cis/cv2_cis output columns, mirroring cis_n in .MODES
-      st(b, "cis_n", null_cis_axes(cHYCsc.N, cHYCse.N, expos$HYC.SC.N, expos$HYC.SE.N, p$cis_n, share_r[c("HYC.SC.N", "HYC.SE.N")], raw = TRUE, method = mt))
+      cn <- null_cis_fits(cHYCsc.N, cHYCse.N, expos$HYC.SC.N, expos$HYC.SE.N, p$cis_n, share_r[c("HYC.SC.N", "HYC.SE.N")], mt)
+      st(b, "cis_n", fit_ratio_axes(cn$a, cn$b, raw = TRUE))
+      for (kd in c("bsize", "kbal")) stb("cis", kd, qq(cm$a, cn$a, kd) - qq(cm$b, cn$b, kd))
 
-      st(b, "trans", null_trans_axes(cMIXsc, cMIXse, cHYTsc, cHYTse, expos$MIX.SC, expos$MIX.SE, expos$HYT.SC, expos$HYT.SE, p$transSC, p$transSE, raw = TRUE, method = mt))
+      tm <- null_trans_fits(cMIXsc, cMIXse, cHYTsc, cHYTse, expos$MIX.SC, expos$MIX.SE, expos$HYT.SC, expos$HYT.SE, p$transSC, p$transSE, mt)
+      st(b, "trans", fit_ratio_axes(tm$sc_a, tm$se_a, raw = TRUE) - fit_ratio_axes(tm$sc_b, tm$se_b, raw = TRUE))
       ## Noise-split version of the trans null, used only for the
       ## disp_trans/cv2_trans output columns, mirroring trans_n in .MODES
-      st(b, "trans_n", null_trans_axes(cMIXsc, cMIXse, cHYTsc.N, cHYTse.N, expos$MIX.SC, expos$MIX.SE, expos$HYT.SC.N, expos$HYT.SE.N, p$transSC_n, p$transSE_n, raw = TRUE, method = mt))
+      tn <- null_trans_fits(cMIXsc, cMIXse, cHYTsc.N, cHYTse.N, expos$MIX.SC, expos$MIX.SE, expos$HYT.SC.N, expos$HYT.SE.N, p$transSC_n, p$transSE_n, mt)
+      st(b, "trans_n", fit_ratio_axes(tn$sc_a, tn$se_a, raw = TRUE) - fit_ratio_axes(tn$sc_b, tn$se_b, raw = TRUE))
+      for (kd in c("bsize", "kbal")) stb("trans", kd, (qq(tm$sc_a, tn$sc_a, kd) - qq(tm$se_a, tn$se_a, kd)) - (qq(tm$sc_b, tn$sc_b, kd) - qq(tm$se_b, tn$se_b, kd)))
 
       fs <- .fit_m(synth, es, 0, mt)
+      par_q <- function(kind) 0.5 * (.burst_q(gvmu[["MIX.SC"]], gv_phi[["MIX.SC"]], kind) + .burst_q(gvmu[["MIX.SE"]], gv_phi[["MIX.SE"]], kind))
+      for (kd in c("bsize", "kbal")) stb("dom", kd, qq(fs, fs, kd) - par_q(kd))
       if (mt == "NB") {
         if (is.finite(fs["mu"])   && fs["mu"]   > 0) Nm[b,"dom"] <- l2(fs["mu"])   - mp.m
         if (is.finite(fs["disp"]) && fs["disp"] > 0) Ns[b,"dom"] <- l2(fs["disp"]) - mp.s
@@ -3845,10 +3924,12 @@ permute_contrasts_one <- function(g, expos, fits, mats, perms, ploidy_shift, see
       }
       d1 <- .fit_split(c(cHYBc, cMIXsc), c(expos$HYB.COMB, expos$MIX.SC), p$dparSC, nHYB, mt)
       st(b, "dpar_sc", fit_ratio_axes(d1$a, d1$b, raw = TRUE))
+      for (kd in c("bsize", "kbal")) stb("dpar_sc", kd, qq(d1$a, d1$a, kd) - qq(d1$b, d1$b, kd))
       d2 <- .fit_split(c(cHYBc, cMIXse), c(expos$HYB.COMB, expos$MIX.SE), p$dparSE, nHYB, mt)
       st(b, "dpar_se", fit_ratio_axes(d2$a, d2$b, raw = TRUE))
+      for (kd in c("bsize", "kbal")) stb("dpar_se", kd, qq(d2$a, d2$a, kd) - qq(d2$b, d2$b, kd))
     }
-  })
+    })
   out <- list(gene = g)
   for (md in .OUT_MODES) {
     smd <- .DISP_SOURCE[[md]]
@@ -3869,6 +3950,19 @@ permute_contrasts_one <- function(g, expos, fits, mats, perms, ploidy_shift, see
       out[[paste0("wbsize_", md, "_obs")]] <- obs.wbs; out[[paste0("wbsize_", md, "_p")]] <- perm_pval(obs.wbs, wbs_null)
       wkbal_null <- -(wbs_null + Nws[, smd]); obs.wkbal <- -(obs.wbs + unname(obs.ws[smd]))
       out[[paste0("wkbal_", md, "_obs")]] <- obs.wkbal; out[[paste0("wkbal_", md, "_p")]] <- perm_pval(obs.wkbal, wkbal_null)
+    }
+
+    ## raw burst size (rbsize) and kinetic balance (rkbal) and their weighted versions (wrbsize, wrkbal); the observed value is read against the
+    ## null of the same permutation draws. dpar adds the ploidy-adjusted p-values below.
+    for (kd in c("bsize", "kbal")) {
+      nr <- if (kd == "bsize") NRb[, md] else NRk[, md]
+      out[[paste0("r", kd, "_", md, "_obs")]] <- obs_burst(md, gvbf, kd)
+      out[[paste0("r", kd, "_", md, "_p")]]   <- perm_pval(out[[paste0("r", kd, "_", md, "_obs")]], nr)
+      if (do_w) {
+        nw <- if (kd == "bsize") NWb[, md] else NWk[, md]
+        out[[paste0("wr", kd, "_", md, "_obs")]] <- obs_burst(md, gvw, kd)
+        out[[paste0("wr", kd, "_", md, "_p")]]   <- perm_pval(out[[paste0("wr", kd, "_", md, "_obs")]], nw)
+      }
     }
 
     ## bsize null: mean null plus disp null, permutation by permutation. Where md == smd the two
@@ -3909,6 +4003,10 @@ permute_contrasts_one <- function(g, expos, fits, mats, perms, ploidy_shift, see
         ## raw contrasts: the summed hybrid's phi times 2^s sits on the parents' per-genome scale, which adds (2^s - 1) phi_H to the raw difference;
         ## the log2 weighted contrast adds s as the NB one does
         out[[paste0("rdisp_", md, "_p_", tag)]] <- perm_pval(obs.r[smd] + (2^s - 1) * ph, Nr[, smd])
+        for (kd in c("bsize", "kbal")) {
+          out[[paste0("r", kd, "_", md, "_p_", tag)]] <- perm_pval(obs_burst(md, gvbf, kd, s), if (kd == "bsize") NRb[, md] else NRk[, md])
+          if (do_w) out[[paste0("wr", kd, "_", md, "_p_", tag)]] <- perm_pval(obs_burst(md, gvw, kd, s), if (kd == "bsize") NWb[, md] else NWk[, md])
+        }
         if (do_w) {
           out[[paste0("wdisp_", md, "_p_", tag)]]  <- perm_pval(obs.ws[smd] + s, Nws[, smd])
           out[[paste0("wbsize_", md, "_p_", tag)]] <- perm_pval(obs.wbs + s, wbs_null)
@@ -3931,6 +4029,7 @@ permute_contrasts_one <- function(g, expos, fits, mats, perms, ploidy_shift, see
     do_w <- "weighted" %in% methods
     R <- length(resamples)
     Dm <- Ds <- Dc <- Dr <- Dws <- Dwr <- rep(NA_real_, R)
+    Dq <- matrix(NA_real_, R, 4, dimnames = list(NULL, c("rb", "rk", "wrb", "wrk")))
     for (b in seq_len(R)) {
       d <- resamples[[b]]
       fb <- lapply(setNames(grp, grp), function(k) { ix <- d[[.DRAW.KEY[[k]]]]
@@ -3938,28 +4037,34 @@ permute_contrasts_one <- function(g, expos, fits, mats, perms, ploidy_shift, see
       mu_b <- lapply(fb, `[[`, "mu"); ds_b <- lapply(fb, `[[`, "disp")
       mm <- .contrast_value("trans", mu_b, "MU"); if (is.finite(mm)) Dm[b] <- mm
       dc <- .disp_contrasts("trans_n", ds_b); Ds[b] <- dc[["log"]]; Dr[b] <- dc[["raw"]]
+      Dq[b, "rb"] <- .contrast_burst_raw("trans", mu_b, ds_b, "bsize"); Dq[b, "rk"] <- .contrast_burst_raw("trans", mu_b, ds_b, "kbal")
       cv_b <- Map(.cv2_of, mu_b, ds_b)
       if (all(is.finite(unlist(cv_b[.MODES$trans_n])))) Dc[b] <- .contrast_value("trans_n", cv_b, "CV2")
       if (do_w) {
         dw <- lapply(setNames(grp, grp), function(k) { ix <- d[[.DRAW.KEY[[k]]]]
           unname(fit_dispersion(mats[[k]][g, ix], expos[[k]][ix], share_r[[k]], "weighted")[["disp"]]) })
         wc <- .disp_contrasts("trans_n", dw); Dws[b] <- wc[["log"]]; Dwr[b] <- wc[["raw"]]
+        Dq[b, "wrb"] <- .contrast_burst_raw("trans", mu_b, dw, "bsize"); Dq[b, "wrk"] <- .contrast_burst_raw("trans", mu_b, dw, "kbal")
       }
     }
     shift_p <- function(est, draws_) perm_pval(est, draws_ - est)
     est_m <- unname(obs.m["trans"]); est_s <- unname(obs.s["trans_n"]); est_bs <- est_m + est_s
-    for (q in c("disp", "bsize", "kbal", "cv2", "rdisp", if (do_w) c("wdisp", "wrdisp", "wbsize", "wkbal"))) out[[paste0(q, "_trans_p_pooled")]] <- out[[paste0(q, "_trans_p")]]
+    for (q in c("disp", "bsize", "kbal", "cv2", "rdisp", "rbsize", "rkbal", if (do_w) c("wdisp", "wrdisp", "wbsize", "wkbal", "wrbsize", "wrkbal"))) out[[paste0(q, "_trans_p_pooled")]] <- out[[paste0(q, "_trans_p")]]
     out$disp_trans_p  <- shift_p(est_s, Ds)
     out$bsize_trans_p <- shift_p(est_bs, Dm + Ds)
     out$kbal_trans_p  <- shift_p(-(est_bs + est_s), -(Dm + 2 * Ds))
     out$cv2_trans_p   <- shift_p(unname(obs.c["trans_n"]), Dc)
     out$rdisp_trans_p <- shift_p(.disp_contrasts("trans_n", gvbf)[["raw"]], Dr)
+    out$rbsize_trans_p <- shift_p(obs_burst("trans", gvbf, "bsize"), Dq[, "rb"])
+    out$rkbal_trans_p  <- shift_p(obs_burst("trans", gvbf, "kbal"),  Dq[, "rk"])
     if (do_w) {
       fw <- lapply(setNames(grp, grp), function(k) unname(fit_dispersion(mats[[k]][g, ], expos[[k]], share_r[[k]], "weighted")[["disp"]]))
       wo <- .disp_contrasts("trans_n", fw)
       out$wdisp_trans_p  <- shift_p(wo[["log"]], Dws)
       out$wrdisp_trans_p <- shift_p(wo[["raw"]], Dwr)
       est_wbs <- est_m + wo[["log"]]
+      out$wrbsize_trans_p <- shift_p(obs_burst("trans", gvw, "bsize"), Dq[, "wrb"])
+      out$wrkbal_trans_p  <- shift_p(obs_burst("trans", gvw, "kbal"),  Dq[, "wrk"])
       out$wbsize_trans_p <- shift_p(est_wbs, Dm + Dws)
       out$wkbal_trans_p  <- shift_p(-(est_wbs + wo[["log"]]), -(Dm + 2 * Dws))
     }
