@@ -3729,24 +3729,6 @@ boot_contrasts_one <- function(g, expos, fits, mats, draws, share_r = NULL, ploi
     ## give finite values for both.
     x <- M[, paste0("m.", md)]; y <- M[, paste0("s.", smd)]; ok <- is.finite(x) & is.finite(y)
     out[[paste0("cor_", md)]] <- if (sum(ok) > 2) cor(x[ok], y[ok]) else NA_real_
-    ## Trans test: the bootstrap-shift null. The null is the resample distribution of the contrast recentered on its own estimate
-    ## (draw - estimate), so each group keeps its own mean, exposures and dispersion, the two hybrid alleles share their cell
-    ## resample, and the hypothesis tested is that the trans contrast itself is zero on the scale in question (log2 or raw), not that
-    ## the groups are exchangeable. The p-value is two-sided (perm_pval()); draws without a defined contrast are dropped, which for
-    ## the log2 scale are the resamples with phi = 0 in some group. bsize and kbal use the draw-wise sums of the mean and noise draws.
-    if (md == "trans") {
-      boot_p <- function(est, draws_) perm_pval(est, draws_ - est)
-      m_d <- M[, "m.trans"]; s_d <- M[, "s.trans_n"]; est_d <- out[["disp_trans_est"]]; est_bs <- out[["mean_trans_est"]] + est_d
-      out$disp_trans_p_boot  <- boot_p(est_d, s_d)
-      out$bsize_trans_p_boot <- boot_p(est_bs, m_d + s_d)
-      out$kbal_trans_p_boot  <- boot_p(-(est_bs + est_d), -(m_d + 2 * s_d))
-      out$cv2_trans_p_boot   <- boot_p(out[["cv2_trans_est"]], M[, "c.trans_n"])
-      out$rdisp_trans_p_boot <- boot_p(out[["rdisp_trans_est"]], M[, "r.trans_n"])
-      if (do_w) {
-        out$wdisp_trans_p_boot  <- boot_p(out[["wdisp_trans_est"]],  W[, "ws.trans_n"])
-        out$wrdisp_trans_p_boot <- boot_p(out[["wrdisp_trans_est"]], W[, "wr.trans_n"])
-      }
-    }
   }
   .r2 <- function(c1, c2) {
 	x <- M[, c1]; y <- M[, c2]; ok <- is.finite(x) & is.finite(y)
@@ -3760,9 +3742,11 @@ boot_contrasts_one <- function(g, expos, fits, mats, draws, share_r = NULL, ploi
 ## permute_contrasts_one: one gene's permutation null: refits the relabeled groups for every mode and permutation, compares the observed
 ## contrasts (mean, disp, CV2, bsize, kbal) with the null by a two-sided permutation p, and adds ploidy-adjusted p-values for the dpar
 ## contrasts. bsize and kbal nulls recombine the mean and disp null draws of the same permutation.
+## resamples (a make_draws() list, NULL for none) and methods add the resampling null of the trans test, described where it is computed.
 ## The cis nulls apply the allele-share correction of each position (share_r); the trans, dom and dpar nulls pool parent and hybrid cells
 ## into relabeled groups, where no group is one allele, and fit them without it (the correction is at most r (1 + phi), about 1e-4).
-permute_contrasts_one <- function(g, expos, fits, mats, perms, ploidy_shift, seed = 1, share_r = NULL) {
+permute_contrasts_one <- function(g, expos, fits, mats, perms, ploidy_shift, seed = 1, share_r = NULL, resamples = NULL, methods = "NB") {
+  stopifnot(all(methods %in% c("NB", "weighted")), "NB" %in% methods)
   if (is.null(share_r)) share_r <- setNames(numeric(length(.DRAW.KEY)), names(.DRAW.KEY))
   if (!is.numeric(seed) || length(seed) != 1 || !is.finite(seed)) stop("permute_contrasts_one(): seed must be one finite number")
   l2 <- log2; B <- length(perms); modes <- names(.MODES)
@@ -3869,6 +3853,49 @@ permute_contrasts_one <- function(g, expos, fits, mats, perms, ploidy_shift, see
         ob <- list(disp = unname(obs.s[smd]) + s, bsize = obs.bs + s, kbal = obs.kbal - 2 * s, cv2 = cv2)
         for (q in names(nulls)) out[[paste0(q, "_", md, "_p_", tag)]] <- perm_pval(ob[[q]], nulls[[q]])
       }
+    }
+  }
+  ## Trans test: the resampling null. Each resample (make_draws(), drawn once for every gene) refits the trans datasets on cells resampled
+  ## within their own group, with the two hybrid alleles sharing one cell resample, and the null is the resample distribution of the trans
+  ## contrast recentered on its observed value (draw - observed). Every group keeps its own mean, exposures and dispersion, so the hypothesis
+  ## tested is that the trans contrast itself is zero on its own scale (log2 or raw), not that the groups are exchangeable. The p-value
+  ## is two-sided (perm_pval()); draws without a defined contrast are dropped (on the log2 scale, those with phi = 0 in some group). It
+  ## replaces the pooled-relabeling p-value of disp, bsize, kbal and cv2 (kept as <q>_trans_p_pooled) and adds the raw (rdisp) and, with
+  ## methods = c("NB", "weighted"), the weighted-moment (wdisp, wrdisp) p-values. bsize and kbal use the draw-wise sums of the mean and
+  ## noise draws. The mean-axis trans p-value stays the pooled permutation.
+  if (!is.null(resamples)) {
+    grp <- c("MIX.SC", "MIX.SE", "HYT.SC", "HYT.SE", "HYT.SC.N", "HYT.SE.N")
+    do_w <- "weighted" %in% methods
+    R <- length(resamples)
+    Dm <- Ds <- Dc <- Dr <- Dws <- Dwr <- rep(NA_real_, R)
+    for (b in seq_len(R)) {
+      d <- resamples[[b]]
+      fb <- lapply(setNames(grp, grp), function(k) { ix <- d[[.DRAW.KEY[[k]]]]
+        .fit_one(mats[[k]][g, ix], expos[[k]][ix], share_r[[k]]) })
+      mu_b <- lapply(fb, `[[`, "mu"); ds_b <- lapply(fb, `[[`, "disp")
+      mm <- .contrast_value("trans", mu_b, "MU"); if (is.finite(mm)) Dm[b] <- mm
+      dc <- .disp_contrasts("trans_n", ds_b); Ds[b] <- dc[["log"]]; Dr[b] <- dc[["raw"]]
+      cv_b <- Map(.cv2_of, mu_b, ds_b)
+      if (all(is.finite(unlist(cv_b[.MODES$trans_n])))) Dc[b] <- .contrast_value("trans_n", cv_b, "CV2")
+      if (do_w) {
+        dw <- lapply(setNames(grp, grp), function(k) { ix <- d[[.DRAW.KEY[[k]]]]
+          unname(fit_dispersion(mats[[k]][g, ix], expos[[k]][ix], share_r[[k]], "weighted")[["disp"]]) })
+        wc <- .disp_contrasts("trans_n", dw); Dws[b] <- wc[["log"]]; Dwr[b] <- wc[["raw"]]
+      }
+    }
+    shift_p <- function(est, draws_) perm_pval(est, draws_ - est)
+    est_m <- unname(obs.m["trans"]); est_s <- unname(obs.s["trans_n"]); est_bs <- est_m + est_s
+    for (q in c("disp", "bsize", "kbal", "cv2")) out[[paste0(q, "_trans_p_pooled")]] <- out[[paste0(q, "_trans_p")]]
+    out$disp_trans_p  <- shift_p(est_s, Ds)
+    out$bsize_trans_p <- shift_p(est_bs, Dm + Ds)
+    out$kbal_trans_p  <- shift_p(-(est_bs + est_s), -(Dm + 2 * Ds))
+    out$cv2_trans_p   <- shift_p(unname(obs.c["trans_n"]), Dc)
+    out$rdisp_trans_p <- shift_p(.disp_contrasts("trans_n", gvbf)[["raw"]], Dr)
+    if (do_w) {
+      fw <- lapply(setNames(grp, grp), function(k) unname(fit_dispersion(mats[[k]][g, ], expos[[k]], share_r[[k]], "weighted")[["disp"]]))
+      wo <- .disp_contrasts("trans_n", fw)
+      out$wdisp_trans_p  <- shift_p(wo[["log"]], Dws)
+      out$wrdisp_trans_p <- shift_p(wo[["raw"]], Dwr)
     }
   }
   out$ploidy_shift <- unname(ploidy_shift[g])

@@ -323,6 +323,7 @@ dev.off()
 N.BOOT <- 1000; SEED.BOOT <- 1            # bootstrap resamples
 N.BOOT.REP <- 2                           # bootstrap replicates at seeds SEED.BOOT, SEED.BOOT + 1, ...; replicate 1 is reported, the rest check seed adequacy
 N.PERM <- 10000; SEED.PERM <- 1          # permutation shuffles
+N.NULL <- 1000                           # resamples of the trans resampling null (gene_perm)
 N.COEXPR <- 5000; SEED.COEXPR <- 1        # Coexpression
 
 ## 2.1 Internal split fraction
@@ -583,6 +584,11 @@ PERMS <- local({
          nHYB = ncells[["HYB.COMB"]], nSC = ncells[["MIX.SC"]], nSE = ncells[["MIX.SE"]]))
 })
 
+## Resamples of the trans resampling null, drawn once from their own seed (not the bootstrap's) so every gene is tested against the same
+## cell resamples. The hybrid cells are resampled within the four strata of the mean-split by noise-split overlap, as in the bootstrap, and the
+## two hybrid alleles share one resample (make_draws()). gene_perm.R uses them for the trans p-values.
+NULL.DRAWS <- make_draws(NCELLS, N.NULL, SEED.PERM + 500, hyc = SPLIT.IDX.MEAN$c, hyc_n = SPLIT.IDX.DISP$c)
+
 ## ---- Cluster round trip: Rscript gene_boot.R (job array, one task per replicate) / gene_perm.R ----
 ## gene_boot.R reads gene_boot_inputs.rda and writes gene_boot_output_<k>of<K>.rda (BOOT.CONTRASTS) for replicate k.
 ## Each replicate resamples with its own pre-drawn indices (DRAWS.REPS[[k]], seed SEED.BOOT + k - 1). The hybrid
@@ -591,7 +597,7 @@ PERMS <- local({
 ## gene_perm.R reads gene_perm_inputs.rda and writes gene_perm_output.rda (PERM.RESULTS).
 DRAWS.REPS <- lapply(SEED.BOOT + seq_len(N.BOOT.REP) - 1, function(seed) make_draws(NCELLS, N.BOOT, seed, hyc = SPLIT.IDX.MEAN$c, hyc_n = SPLIT.IDX.DISP$c))
 save(CONTRAST.MATS, CONTRAST.EXPOS, CONTRAST.FITS, GENES, DRAWS.REPS, N.BOOT, SHARE.R, PLOIDY.SHIFT, file = file.path(INPUT.DIR, "gene_boot_inputs.rda"))
-save(CONTRAST.MATS, CONTRAST.EXPOS, CONTRAST.FITS, GENES, PERMS, N.PERM, SEED.PERM, PLOIDY.SHIFT, SHARE.R, file = file.path(INPUT.DIR, "gene_perm_inputs.rda"))
+save(CONTRAST.MATS, CONTRAST.EXPOS, CONTRAST.FITS, GENES, PERMS, N.PERM, SEED.PERM, PLOIDY.SHIFT, SHARE.R, NULL.DRAWS, file = file.path(INPUT.DIR, "gene_perm_inputs.rda"))
 BOOT.CONTRASTS.REPS <- load_replicates("gene_boot", "BOOT.CONTRASTS", N.BOOT.REP, expected = length(GENES))
 BOOT.CONTRASTS <- BOOT.CONTRASTS.REPS[[1]]
 load(file.path(OUTPUT.DIR, "gene_perm_output.rda"))            # PERM.RESULTS
@@ -643,21 +649,6 @@ BURST.CONTRASTS <- local({
   df
 })
 PR <- PERM.RESULTS[match(BURST.CONTRASTS$gene, PERM.RESULTS$gene), ]   
-# Trans test. The trans p-values of the noise quantities come from the bootstrap-shift null computed in the bootstrap job
-# (boot_contrasts_one(): the resample distribution of the contrast recentered on its estimate), which tests that the trans contrast
-# itself is zero on its own scale. The pooled-relabeling p-values (gene_perm), which also require the groups to share one distribution,
-# stay beside them as <quantity>_trans_p_pooled. The raw (rdisp) and weighted-moment (wdisp, wrdisp) trans contrasts have bootstrap-shift
-# p-values only. The mean-axis trans p-value remains the permutation one.
-PR <- local({
-  df <- PR
-  bp <- BOOT.CONTRASTS[match(df$gene, BOOT.CONTRASTS$gene), ]
-  for (q in c("disp", "bsize", "kbal", "cv2")) {
-    df[[paste0(q, "_trans_p_pooled")]] <- df[[paste0(q, "_trans_p")]]
-    df[[paste0(q, "_trans_p")]]        <- bp[[paste0(q, "_trans_p_boot")]]
-  }
-  for (q in c("rdisp", "wdisp", "wrdisp")) df[[paste0(q, "_trans_p")]] <- bp[[paste0(q, "_trans_p_boot")]]
-  df
-})
 # Benjamini-Hochberg FDR across genes, one family per contrast and quantity.
 # Adds a _q column beside every _p column.
 PR <- local({
