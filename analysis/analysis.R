@@ -474,7 +474,7 @@ dev.off()
 N.BOOT <- 1000; SEED.BOOT <- 1            # bootstrap resamples
 N.BOOT.REP <- 2                           # bootstrap replicates at seeds SEED.BOOT, SEED.BOOT + 1, ...; replicate 1 is reported, the rest check seed adequacy
 N.PERM <- 10000; SEED.PERM <- 1          # permutation shuffles
-N.NULL <- 1000                           # resamples of the trans resampling null (gene_perm)
+N.NULL <- 10000                          # resamples of the trans resampling null (gene_perm); the smallest p-value is 1 / (N.NULL + 1)
 N.COEXPR <- 5000; SEED.COEXPR <- 1        # Coexpression
 
 ## 2.1 Internal split fraction

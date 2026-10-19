@@ -4134,7 +4134,7 @@ permute_contrasts_one <- function(g, expos, fits, mats, perms, ploidy_shift, see
   ## is two-sided (perm_pval()); draws without a defined contrast are dropped (on the log2 scale, those with phi = 0 in some group). It
   ## replaces the pooled-relabeling p-value of disp, bsize, kbal and cv2 (kept as <q>_trans_p_pooled) and adds the raw (rdisp) and, with
   ## methods = c("NB", "weighted"), the weighted-moment (wdisp, wrdisp) p-values. bsize and kbal use the draw-wise sums of the mean and
-  ## noise draws. The mean-axis trans p-value stays the pooled permutation.
+  ## noise draws. The mean-axis trans p-value uses the same resampling null (the draws of the mean contrast of the mean-split trans group).
   if (!is.null(resamples)) {
     grp <- c("MIX.SC", "MIX.SE", "HYT.SC", "HYT.SE", "HYT.SC.N", "HYT.SE.N")
     do_w <- "weighted" %in% methods
@@ -4160,7 +4160,8 @@ permute_contrasts_one <- function(g, expos, fits, mats, perms, ploidy_shift, see
     }
     shift_p <- function(est, draws_) perm_pval(est, draws_ - est)
     est_m <- unname(obs.m["trans"]); est_s <- unname(obs.s["trans_n"]); est_bs <- est_m + est_s
-    for (q in c("disp", "bsize", "kbal", "cv2", "rdisp", "rbsize", "rkbal", if (do_w) c("wdisp", "wrdisp", "wbsize", "wkbal", "wrbsize", "wrkbal"))) out[[paste0(q, "_trans_p_pooled")]] <- out[[paste0(q, "_trans_p")]]
+    for (q in c("mean", "disp", "bsize", "kbal", "cv2", "rdisp", "rbsize", "rkbal", if (do_w) c("wdisp", "wrdisp", "wbsize", "wkbal", "wrbsize", "wrkbal"))) out[[paste0(q, "_trans_p_pooled")]] <- out[[paste0(q, "_trans_p")]]
+    out$mean_trans_p  <- shift_p(est_m, Dm)
     out$disp_trans_p  <- shift_p(est_s, Ds)
     out$bsize_trans_p <- shift_p(est_bs, Dm + Ds)
     out$kbal_trans_p  <- shift_p(-(est_bs + est_s), -(Dm + 2 * Ds))
