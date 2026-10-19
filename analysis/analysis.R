@@ -852,19 +852,21 @@ ANALYSIS.COUNTS <- ANALYSIS.COUNTS[order(match(ANALYSIS.COUNTS$quantity, ANALYSI
 print(ANALYSIS.COUNTS, row.names = FALSE)
 write.csv(ANALYSIS.COUNTS, file.path(TABLE.DIR, "analysis_status_counts.csv"), row.names = FALSE)
 
-## Downstream analyses work on the log-valid genes (GENES: phi > 0 in all 13 datasets), as before the inference set was widened. The objects below
-## carry the plain names every later section reads and are the *.INFER objects restricted to GENES. The BH q-values in PR come from the full inference
-## set: the mean-axis family now also contains the genes with a Poisson-boundary dispersion in some dataset, and a quantity undefined for a gene
-## (a log2 contrast at phi = 0) has no p-value and does not count as a test.
+## Which genes the later sections use. The effect tables (BURST.CONTRASTS, PR and the bootstrap and permutation tables) hold the whole inference set,
+## and every classification is made per comparison: a gene is classified for a quantity only when the contrasts it needs have a p-value (classify_reg()
+## needs cis and trans, classify_dom() both parent contrasts), and its class is NA otherwise. A quantity a gene's datasets cannot support is NA
+## in the tables, and the plots and counts below drop such genes quantity by quantity. The objects that are indexed by position against GENES
+## (the fits, the count matrices, the ploidy shifts) stay on GENES, the genes informative with phi > 0 in all 13 datasets, which the sections that
+## need every dataset (co-expression, intrinsic and extrinsic noise) use. The BH q-values come from the full inference set.
 CONTRAST.MATS  <- lapply(CONTRAST.MATS.INFER, function(m) m[GENES, , drop = FALSE])
 CONTRAST.FITS  <- lapply(CONTRAST.FITS.INFER, function(f) f[GENES, , drop = FALSE])
 PLOIDY.SHIFT   <- PLOIDY.SHIFT.INFER[GENES]
-BOOT.CONTRASTS.REPS <- lapply(BOOT.CONTRASTS.REPS.INFER, function(d) { d <- d[match(GENES, d$gene), ]; rownames(d) <- NULL; d })
+BOOT.CONTRASTS.REPS <- lapply(BOOT.CONTRASTS.REPS.INFER, function(d) { d <- d[match(GENES.INFER, d$gene), ]; rownames(d) <- NULL; d })
 BOOT.CONTRASTS <- BOOT.CONTRASTS.REPS[[1]]
-PERM.RESULTS   <- PERM.RESULTS.INFER[match(GENES, PERM.RESULTS.INFER$gene), ]; rownames(PERM.RESULTS) <- NULL
-BURST.CONTRASTS <- BURST.CONTRASTS.INFER[match(GENES, BURST.CONTRASTS.INFER$gene), ]; rownames(BURST.CONTRASTS) <- NULL
-PR             <- PR.INFER[match(GENES, PR.INFER$gene), ]; rownames(PR) <- NULL
-stopifnot(identical(BURST.CONTRASTS$gene, GENES), identical(PR$gene, GENES))
+PERM.RESULTS   <- PERM.RESULTS.INFER[match(GENES.INFER, PERM.RESULTS.INFER$gene), ]; rownames(PERM.RESULTS) <- NULL
+BURST.CONTRASTS <- BURST.CONTRASTS.INFER[match(GENES.INFER, BURST.CONTRASTS.INFER$gene), ]; rownames(BURST.CONTRASTS) <- NULL
+PR             <- PR.INFER[match(GENES.INFER, PR.INFER$gene), ]; rownames(PR) <- NULL
+stopifnot(identical(BURST.CONTRASTS$gene, GENES.INFER), identical(PR$gene, GENES.INFER), all(GENES %in% GENES.INFER))
 local({
   modes <- c("cis", "trans", "total")
   B <- 2000
@@ -941,7 +943,7 @@ dev.off()
 
 # Checkpoint: the fitted NB models, per-gene contrasts, and every Section 2
 # object that later sections read.
-save(GENES, GENES.INFER, GENE.TABLE, SPLIT.FITS.W, BURST.CONTRASTS.INFER, PR.INFER, CONTRAST.FITS.INFER, PLOIDY.SHIFT.INFER, ANALYSIS.STATUS, ANALYSIS.COUNTS, ELIGIBLE.COUNTS, FIT.STATUS.COUNTS, FILTER.COUNTS, FILTER.SUMMARY, HYB.COMB, CONTRAST.FITS, CONTRAST.MATS, CONTRAST.EXPOS, SPLIT.FITS,
+save(GENES, GENES.INFER, GENE.TABLE, SPLIT.FITS.W, CONTRAST.FITS.INFER, PLOIDY.SHIFT.INFER, ANALYSIS.STATUS, ANALYSIS.COUNTS, ELIGIBLE.COUNTS, FIT.STATUS.COUNTS, FILTER.COUNTS, FILTER.SUMMARY, HYB.COMB, CONTRAST.FITS, CONTRAST.MATS, CONTRAST.EXPOS, SPLIT.FITS,
      BOOT.CONTRASTS, BURST.CONTRASTS, PERM.RESULTS, PR, PLOIDY.SHIFT, N.PERM,
      HYB.SC, HYB.SE, EXPO.MIX.SC, EXPO.MIX.SE, EXPO.HYB.SC, EXPO.HYB.SE, EXPO.HYB, C.HAT, C.BAR, VAR.C, R.C, R.E, SHARE.R, SHARE.TABLE,
      WEIGHT.CHECK, ALLELE.DISP,
@@ -1004,6 +1006,13 @@ dev.off()
 # alleles averages their intrinsic noise, so disp falls in the hybrid and cv2
 # falls. The BURST.CONTRASTS block removes that shift from the dpar estimates
 DOM.VEC <- lapply(setNames(QUANTITIES, QUANTITIES), function(q) dom_class_vec(BURST.CONTRASTS, PR, q))
+# Genes classified for each quantity. A class is NA when the contrasts it needs have no p-value, so the counts below show how many genes each
+# classification covers; they differ by quantity because eligibility does (the log2 and kappa quantities need phi > 0 where the mean does not).
+CLASSIFIED.COUNTS <- data.frame(quantity = QUANTITIES,
+                                reg_classified = vapply(REG.VEC, function(v) sum(!is.na(v)), integer(1)), reg_unclassified = vapply(REG.VEC, function(v) sum(is.na(v)), integer(1)),
+                                dom_classified = vapply(DOM.VEC, function(v) sum(!is.na(v)), integer(1)), dom_unclassified = vapply(DOM.VEC, function(v) sum(is.na(v)), integer(1)), row.names = NULL)
+cat("Genes classified per quantity (regulatory and dominance):\n"); print(CLASSIFIED.COUNTS, row.names = FALSE)
+write.csv(CLASSIFIED.COUNTS, file.path(TABLE.DIR, "classified_gene_counts.csv"), row.names = FALSE)
 CLASS.VEC <- list(REG = REG.VEC, DOM = DOM.VEC)
 
 # Sensitivity to the size of the shift. The _q_ind calls use s = 1 for every
@@ -1923,7 +1932,7 @@ EXTFRAC.BY.CLASS.CLEAN
 # Ambiguous classifications can arise where a significant permutation
 # p-value pairs with an unresolved bootstrap sign, on any of the three
 # quantities. Exclude these from the ANOVA/Tukey tests and GO analysis.
-AMBIG.GENES <- BURST.CONTRASTS$gene[Reduce(`|`, lapply(c(REG.VEC[c("mean", "disp", "bsize")], DOM.VEC[c("mean", "disp", "bsize")]), function(v) v == "Ambiguous"))]
+AMBIG.GENES <- BURST.CONTRASTS$gene[Reduce(`|`, lapply(c(REG.VEC[c("mean", "disp", "bsize")], DOM.VEC[c("mean", "disp", "bsize")]), function(v) !is.na(v) & v == "Ambiguous"))]   # an unclassified gene (NA) is not ambiguous
 
 NOISE.DECOMP.NOAMBIG       <- NOISE.DECOMP[!(NOISE.DECOMP$gene %in% AMBIG.GENES), ]
 NOISE.DECOMP.CLEAN.NOAMBIG <- NOISE.DECOMP.CLEAN[!(NOISE.DECOMP.CLEAN$gene %in% AMBIG.GENES), ]
@@ -2643,22 +2652,25 @@ GO.FDR <- 0.2   # Benjamini-Hochberg cutoff on each enrichment test's adjusted p
 # Baseline sets per quantity: any gene with a significant parent-vs-
 # parent difference, split by direction
 MEAN.LFC       <- setNames(BURST.CONTRASTS$mean_total_est, BURST.CONTRASTS$gene)
+MEAN.LFC       <- MEAN.LFC[is.finite(MEAN.LFC)]      # only genes with a defined parental contrast are ranked
 MEAN.ORD       <- sort(MEAN.LFC, decreasing = TRUE)
 SIG.MEAN.TOTAL <- setNames(PR$mean_total_q, BURST.CONTRASTS$gene)[names(MEAN.ORD)]
-MEAN.SC.UP     <- names(MEAN.ORD)[SIG.MEAN.TOTAL < GO.SIG & MEAN.ORD > 0]
-MEAN.SE.UP     <- names(MEAN.ORD)[SIG.MEAN.TOTAL < GO.SIG & MEAN.ORD < 0]
+MEAN.SC.UP     <- names(MEAN.ORD)[which(SIG.MEAN.TOTAL < GO.SIG & MEAN.ORD > 0)]
+MEAN.SE.UP     <- names(MEAN.ORD)[which(SIG.MEAN.TOTAL < GO.SIG & MEAN.ORD < 0)]
 
 DISP.LFC       <- setNames(BURST.CONTRASTS$disp_total_est, BURST.CONTRASTS$gene)
+DISP.LFC       <- DISP.LFC[is.finite(DISP.LFC)]      # only genes with a defined parental contrast are ranked
 DISP.ORD       <- sort(DISP.LFC, decreasing = TRUE)
 SIG.DISP.TOTAL <- setNames(PR$disp_total_q, BURST.CONTRASTS$gene)[names(DISP.ORD)]
-DISP.SC.UP     <- names(DISP.ORD)[SIG.DISP.TOTAL < GO.SIG & DISP.ORD > 0]
-DISP.SE.UP     <- names(DISP.ORD)[SIG.DISP.TOTAL < GO.SIG & DISP.ORD < 0]
+DISP.SC.UP     <- names(DISP.ORD)[which(SIG.DISP.TOTAL < GO.SIG & DISP.ORD > 0)]
+DISP.SE.UP     <- names(DISP.ORD)[which(SIG.DISP.TOTAL < GO.SIG & DISP.ORD < 0)]
 
 BSIZE.LFC       <- setNames(BURST.CONTRASTS$bsize_total_est, BURST.CONTRASTS$gene)
+BSIZE.LFC       <- BSIZE.LFC[is.finite(BSIZE.LFC)]
 BSIZE.ORD       <- sort(BSIZE.LFC, decreasing = TRUE)
 SIG.BSIZE.TOTAL <- setNames(PR$bsize_total_q, BURST.CONTRASTS$gene)[names(BSIZE.ORD)]
-BSIZE.SC.UP     <- names(BSIZE.ORD)[SIG.BSIZE.TOTAL < GO.SIG & BSIZE.ORD > 0]
-BSIZE.SE.UP     <- names(BSIZE.ORD)[SIG.BSIZE.TOTAL < GO.SIG & BSIZE.ORD < 0]
+BSIZE.SC.UP     <- names(BSIZE.ORD)[which(SIG.BSIZE.TOTAL < GO.SIG & BSIZE.ORD > 0)]
+BSIZE.SE.UP     <- names(BSIZE.ORD)[which(SIG.BSIZE.TOTAL < GO.SIG & BSIZE.ORD < 0)]
 
 GO.SETS <- list(Mean_Total_Sc  = MEAN.SC.UP,  Mean_Total_Se  = MEAN.SE.UP,
                 Disp_Total_Sc = DISP.SC.UP, Disp_Total_Se = DISP.SE.UP,

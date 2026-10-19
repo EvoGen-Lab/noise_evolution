@@ -1359,6 +1359,9 @@ classify_reg <- function(p_cis, p_trans, est_cis, est_trans, sig = 0.05, colors 
   ## A significant p-value with an NA point estimate leaves the sign undefined, so
   ## the gene matches none of the five rules and is labelled Ambiguous.
   cls[cls == ""] <- "Ambiguous"
+  ## A gene whose cis or trans contrast has no p-value (a dataset it needs is uninformative, or the contrast is undefined) cannot be classified;
+  ## its class is NA, which is different from Ambiguous.
+  cls[is.na(p_cis) | is.na(p_trans)] <- NA_character_
   data.frame(class = cls,
              color = colors[match(cls, REG.CLASS)],
              stringsAsFactors = FALSE)
@@ -1389,6 +1392,8 @@ classify_dom <- function(p_dpar_sc, p_dpar_se, est_dpar_sc, est_dpar_se, sig = 0
   ## A significant p-value with an NA bootstrap estimate leaves tsg undefined, so the
   ## gene matches none of the rules above and is labelled Ambiguous.
   cls[cls == ""] <- "Ambiguous"
+  ## A gene with no p-value against either parent cannot be classified; its class is NA, which is different from Ambiguous.
+  cls[is.na(p_dpar_sc) | is.na(p_dpar_se)] <- NA_character_
   data.frame(class = cls,
              color = colors[match(cls, DOM.CLASS)],
              stringsAsFactors = FALSE)
