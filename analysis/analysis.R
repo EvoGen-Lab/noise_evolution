@@ -393,8 +393,80 @@ QC.SUMMARY <- data.frame(
 cat("Cell and gene QC summary\n"); print(round(QC.SUMMARY, 3))
 cat(sprintf("Genes retained: %d, minimum detected cells: %d\n", length(GENE.SET), GENE.QC$n_min))
 
+## 1.2 Transcriptome share and its effect on dispersion
+# C_i = L_Hc / (L_Hc + L_He) is the observed fraction of a hybrid cell's UMIs assigned to the Sc genome (L is a cell's library size), and its mean
+# c-bar is the genome-wide balance of the two species. Section 2 offsets both hybrid alleles by half the cell's hybrid depth, so the share is not
+# an offset: each allele's mean keeps its genome's share of the library, and the cis mean contrast of a gene without an allele effect is
+# log2[c-bar / (1 - c-bar)]. OFFSET.CBAR is that value; .contrast_value() subtracts it from the cis mean contrast and trans inherits it.
+# The true share c_i also varies from cell to cell around c-bar. It multiplies every hybrid-allele count of a cell by the factor c_i / c-bar (Hc)
+# or (1 - c_i) / (1 - c-bar) (He), which has mean 1 and variance r_c = var(c) / c-bar^2 or r_e = var(c) / (1 - c-bar)^2, so an allele's apparent
+# dispersion is phi + (1 + phi) r. Given the cell's depth the observed share is a binomial draw around c_i, so var(c) is the observed variance
+# minus the binomial sampling variance (the cell's own share estimates it, with L - 1 as the finite-sample denominator).
+# The dispersion fits leave the share term in place, which is sound while r (1 + phi) stays a negligible fraction of phi. The check below sizes it
+# against the allele dispersions of a random sample of genes informative in both hybrid alleles, fitted with the Section 2 estimator and
+# offsets. SHARE.TOL is the largest acceptable share term as a fraction of the median allele dispersion; above it the term would need to be
+# modelled and a warning is issued.
+LIB.HYB   <- colSums(HYB.SC) + colSums(HYB.SE)
+C.HAT     <- colSums(HYB.SC) / LIB.HYB
+C.BAR     <- mean(C.HAT)
+VAR.CHAT  <- var(C.HAT)
+VAR.BINOM <- mean(C.HAT * (1 - C.HAT) / (LIB.HYB - 1))
+VAR.C     <- VAR.CHAT - VAR.BINOM
+if (VAR.C < 0) { warning("observed share variance is below the binomial sampling variance; the share variance is set to 0"); VAR.C <- 0 }
+R.C <- VAR.C / C.BAR^2
+R.E <- VAR.C / (1 - C.BAR)^2
+OFFSET.CBAR <- log2(C.BAR / (1 - C.BAR))
+N.SHARE.BOOT <- 2000; SEED.SHARE <- 1
+SHARE.BOOT <- with_local_seed(SEED.SHARE, colMeans(matrix(C.HAT[matrix(sample.int(length(C.HAT), length(C.HAT) * N.SHARE.BOOT, replace = TRUE), length(C.HAT), N.SHARE.BOOT)], length(C.HAT), N.SHARE.BOOT)))   # all resamples drawn at once
+SHARE.TABLE <- data.frame(
+  quantity = c("n hybrid cells", "c-bar, mean Sc share", "95% CI of c-bar, low", "95% CI of c-bar, high", "SD of the observed share across cells",
+               "SD expected from UMI sampling alone", "variance of the observed share", "binomial sampling variance",
+               "variance of the true share, var(c)", "SD of the true share", "r_c = var(c) / c-bar^2", "r_e = var(c) / (1 - c-bar)^2",
+               "log2[c-bar / (1 - c-bar)], the mean-contrast offset (OFFSET.CBAR)", "95% CI of the offset, low", "95% CI of the offset, high"),
+  value = c(length(C.HAT), C.BAR, quantile(SHARE.BOOT, 0.025), quantile(SHARE.BOOT, 0.975), sd(C.HAT),
+            sqrt(VAR.BINOM), VAR.CHAT, VAR.BINOM, VAR.C, sqrt(VAR.C), R.C, R.E, OFFSET.CBAR,
+            quantile(log2(SHARE.BOOT / (1 - SHARE.BOOT)), 0.025), quantile(log2(SHARE.BOOT / (1 - SHARE.BOOT)), 0.975)))
+cat("Transcriptome share of the hybrid cells\n"); print(SHARE.TABLE, digits = 4, row.names = FALSE)
+write.csv(SHARE.TABLE, file.path(TABLE.DIR, "transcriptome_share.csv"), row.names = FALSE)
+fig_pdf("extra/S_transcriptome_share.pdf", 10, 4.5)
+par(mfrow = c(1, 2))
+hist(C.HAT, breaks = 60, col = COLOR.GREY[["light"]], border = "white", main = "", xlab = "observed Sc share, L_Hc / (L_Hc + L_He)", ylab = "# of hybrid cells")
+abline(v = C.BAR, col = COLOR.ACCENT, lwd = 2); abline(v = quantile(SHARE.BOOT, c(0.025, 0.975)), col = COLOR.ACCENT, lty = 2)
+plot(log10(LIB.HYB), C.HAT, pch = 19, cex = 0.3, col = "grey40", xlab = "log10 hybrid library size", ylab = "observed Sc share")
+abline(h = C.BAR, col = COLOR.ACCENT, lwd = 2)
+dev.off()
+
+# Size of the share term in the allele dispersions. For each hybrid allele the table gives the median fitted phi, the share term r (1 + phi) at
+# that phi, and the term as a fraction of the median phi (the quantity compared with SHARE.TOL). It also gives the per-gene fraction r (1 + phi) / phi
+# (median, and the share of genes above SHARE.TOL), which is larger for the low-dispersion genes, and the share of genes at the Poisson limit
+# (phi = 0), where the term cannot be identified.
+SHARE.TOL <- 0.01; N.SHARE.GENES <- 1000
+SHARE.DISP <- local({
+  informative <- rownames(GENE.QC$pass)[GENE.QC$pass[, "HYB.SC"] & GENE.QC$pass[, "HYB.SE"]]
+  genes <- sort(with_local_seed(SEED.SHARE, sample(informative, min(N.SHARE.GENES, length(informative)))))
+  expo <- LIB.HYB / median(c(colSums(MIX.SC), colSums(MIX.SE))) / 2           # the Section 2 allele offset, S_H / 2
+  mats <- list(HYB.SC = HYB.SC, HYB.SE = HYB.SE); r <- c(HYB.SC = R.C, HYB.SE = R.E)
+  rows <- vector("list", length(mats)); names(rows) <- names(mats)
+  for (ds in names(mats)) {
+    phi <- fit_counts_dispersion(mats[[ds]][genes, , drop = FALSE], expo, "NB")[, "disp"]
+    pos <- phi[is.finite(phi) & phi > 0]
+    rows[[ds]] <- data.frame(dataset = ds, n_genes = length(genes), share_at_poisson_limit = mean(phi[is.finite(phi)] == 0), r = r[[ds]],
+                             median_phi = median(pos), share_term_at_median_phi = r[[ds]] * (1 + median(pos)),
+                             term_over_median_phi = r[[ds]] * (1 + median(pos)) / median(pos),
+                             median_gene_fraction = median(r[[ds]] * (1 + pos) / pos),
+                             share_genes_above_tol = mean(r[[ds]] * (1 + pos) / pos > SHARE.TOL), row.names = NULL)
+  }
+  do.call(rbind, rows)
+})
+cat(sprintf("Share term r (1 + phi) in the hybrid allele dispersions (%d sampled genes; tolerance %g of the median phi)\n", N.SHARE.GENES, SHARE.TOL))
+print(SHARE.DISP, digits = 3, row.names = FALSE)
+write.csv(SHARE.DISP, file.path(TABLE.DIR, "transcriptome_share_dispersion_check.csv"), row.names = FALSE)
+if (any(SHARE.DISP$term_over_median_phi > SHARE.TOL))
+  warning(sprintf("the share term is %.2g of the median allele dispersion, above SHARE.TOL = %g; the allele dispersions need the share correction", max(SHARE.DISP$term_over_median_phi), SHARE.TOL))
+
 # Checkpoint
-save(MIX.SC, MIX.SE, HYB.SC, HYB.SE, QC.SUMMARY, MULTIPLET.SUMMARY, MULTIPLET.CALIBRATION, MULTIPLET.K.SWEEP, GENE.QC.PATTERN, HYB.SHARE.SWEEP.N, MITO.SUMMARY, file = ckpt_path(1))
+save(MIX.SC, MIX.SE, HYB.SC, HYB.SE, QC.SUMMARY, MULTIPLET.SUMMARY, MULTIPLET.CALIBRATION, MULTIPLET.K.SWEEP, GENE.QC.PATTERN, HYB.SHARE.SWEEP.N, MITO.SUMMARY,
+     C.HAT, C.BAR, VAR.C, R.C, R.E, OFFSET.CBAR, SHARE.BOOT, SHARE.TABLE, SHARE.DISP, file = ckpt_path(1))
 
 console_start(2)
 set.seed(SEED.SECTION + 2)
@@ -417,7 +489,8 @@ HYB.COMB <- HYB.SC + HYB.SE
 # S_H / 2 and the summed hybrid HYB.COMB by S_H. The same offset on both alleles keeps their abundance ratio; the half
 # puts the allele means on a haploid-genome-equivalent scale next to the parents; and the summed fit's mean rate is
 # exactly the average of the two allele rates. An allele's own library does not enter its offset, so the genome-wide
-# Sc:Se balance of the hybrid stays in the data, and the cell-to-cell variation of that balance is handled in 2.0.
+# Sc:Se balance of the hybrid stays in the data: OFFSET.CBAR (Section 1.2) removes it from the cis and trans mean contrasts, and the
+# cell-to-cell variation of that balance is sized against the allele dispersions in Section 1.2.
 DEPTH.REF   <- median(c(colSums(MIX.SC), colSums(MIX.SE)))
 LIB.HYB     <- colSums(HYB.SC) + colSums(HYB.SE)
 EXPO.MIX.SC <- colSums(MIX.SC) / DEPTH.REF
@@ -428,47 +501,10 @@ EXPO.HYB.SE <- EXPO.HYB / 2
 stopifnot(all(c(EXPO.MIX.SC, EXPO.MIX.SE, EXPO.HYB) > 0))
 
 ## 2.0 Transcriptome share of the hybrid cells
-# C_i = L_Hc / (L_Hc + L_He) is the observed fraction of a cell's hybrid UMIs assigned to the Sc genome, and its mean
-# c-bar is the genome-wide balance of the two species. The share is not an offset: both alleles use S_H / 2. The true
-# share c_i varies from cell to cell around c-bar, which multiplies every hybrid-allele count of a cell by the factor
-# c_i / c-bar (Hc) or (1 - c_i) / (1 - c-bar) (He) and adds variance to the allele's apparent dispersion. Given the
-# cell's depth, the observed share is a binomial draw around c_i, so the variance of the true share is the observed
-# variance minus the binomial sampling variance (the cell's own share estimates it, with L - 1 as the finite-sample
-# denominator). Its size relative to the squared mean gives the correction r_c = var(c) / c-bar^2 and
-# r_e = var(c) / (1 - c-bar)^2, which .fit_one() removes from the Hc and He dispersions.
-C.HAT <- colSums(HYB.SC) / LIB.HYB
-C.BAR <- mean(C.HAT)
-VAR.CHAT  <- var(C.HAT)
-VAR.BINOM <- mean(C.HAT * (1 - C.HAT) / (LIB.HYB - 1))
-VAR.C     <- VAR.CHAT - VAR.BINOM
-if (VAR.C < 0) { warning("observed share variance is below the binomial sampling variance; the share variance is set to 0"); VAR.C <- 0 }
-R.C <- VAR.C / C.BAR^2
-R.E <- VAR.C / (1 - C.BAR)^2
-# SHARE.R is the correction of every dataset's fits (.fit_one(share_r)): r_c for the Sc-allele datasets, r_e for the Se-allele
-# datasets, and 0 for the parents and the summed hybrid (its share term, at most max(r_c, r_e) (1 + phi), is not corrected).
-SHARE.R <- setNames(numeric(length(.DRAW.KEY)), names(.DRAW.KEY))
-SHARE.R[c("HYB.SC", "HYC.SC", "HYT.SC", "HYC.SC.N", "HYT.SC.N")] <- R.C
-SHARE.R[c("HYB.SE", "HYC.SE", "HYT.SE", "HYC.SE.N", "HYT.SE.N")] <- R.E
-N.SHARE.BOOT <- 2000; SEED.SHARE <- 1
-set.seed(SEED.SHARE)
-SHARE.IDX  <- matrix(sample.int(length(C.HAT), length(C.HAT) * N.SHARE.BOOT, replace = TRUE), length(C.HAT), N.SHARE.BOOT)   # all resamples drawn at once
-SHARE.BOOT <- colMeans(matrix(C.HAT[SHARE.IDX], length(C.HAT), N.SHARE.BOOT))
-SHARE.TABLE <- data.frame(
-  quantity = c("n hybrid cells", "c-bar, mean Sc share", "95% CI of c-bar, low", "95% CI of c-bar, high", "SD of the observed share across cells",
-               "SD expected from UMI sampling alone", "variance of the observed share", "binomial sampling variance",
-               "variance of the true share, var(c)", "SD of the true share", "r_c = var(c) / c-bar^2", "r_e = var(c) / (1 - c-bar)^2",
-               "log2[c-bar / (1 - c-bar)], genome-wide Sc:Se balance"),
-  value = c(length(C.HAT), C.BAR, quantile(SHARE.BOOT, 0.025), quantile(SHARE.BOOT, 0.975), sd(C.HAT),
-            sqrt(VAR.BINOM), VAR.CHAT, VAR.BINOM, VAR.C, sqrt(VAR.C), R.C, R.E, log2(C.BAR / (1 - C.BAR))))
-cat("Transcriptome share of the hybrid cells\n"); print(SHARE.TABLE, digits = 4, row.names = FALSE)
-write.csv(SHARE.TABLE, file.path(TABLE.DIR, "transcriptome_share.csv"), row.names = FALSE)
-fig_pdf("extra/S_transcriptome_share.pdf", 10, 4.5)
-par(mfrow = c(1, 2))
-hist(C.HAT, breaks = 60, col = COLOR.GREY[["light"]], border = "white", main = "", xlab = "observed Sc share, L_Hc / (L_Hc + L_He)", ylab = "# of hybrid cells")
-abline(v = C.BAR, col = COLOR.ACCENT, lwd = 2); abline(v = quantile(SHARE.BOOT, c(0.025, 0.975)), col = COLOR.ACCENT, lty = 2)
-plot(log10(LIB.HYB), C.HAT, pch = 19, cex = 0.3, col = "grey40", xlab = "log10 hybrid library size", ylab = "observed Sc share")
-abline(h = C.BAR, col = COLOR.ACCENT, lwd = 2)
-dev.off()
+# The share C.HAT, its mean C.BAR, the mean-contrast offset OFFSET.CBAR and the size of the share term in the allele dispersions are
+# estimated and checked in Section 1.2. The hybrid cells are reordered above, so the per-cell share follows the same order.
+C.HAT <- C.HAT[HYB.ORD]
+stopifnot(isTRUE(all.equal(C.HAT, colSums(HYB.SC) / LIB.HYB)))
 
 # Seeds and resample counts for bootstrap, permutation, and coexpression steps
 N.BOOT <- 1000; SEED.BOOT <- 1            # bootstrap resamples
@@ -558,13 +594,21 @@ HYC.SE   <- HYB.SE[, SPLIT.IDX.MEAN$c]; HYT.SE   <- HYB.SE[, SPLIT.IDX.MEAN$t]
 EXPO.HYC.SC <- EXPO.HYB.SC[SPLIT.IDX.MEAN$c]; EXPO.HYT.SC <- EXPO.HYB.SC[SPLIT.IDX.MEAN$t]
 EXPO.HYC.SE <- EXPO.HYB.SE[SPLIT.IDX.MEAN$c]; EXPO.HYT.SE <- EXPO.HYB.SE[SPLIT.IDX.MEAN$t]
 
+# The mean-axis contrasts subtract the single offset OFFSET.CBAR from every cis and trans allele ratio. Each subset of cells has its own mean
+# share, so the table gives the offset log2[c-bar / (1 - c-bar)] of every subset next to the all-cell value; the depth-matched splits keep them close.
+SPLIT.OFFSET <- data.frame(
+  subset = c("all hybrid cells", "HYC", "HYT", "HYC.N", "HYT.N"),
+  offset_log2 = sapply(list(seq_along(C.HAT), SPLIT.IDX.MEAN$c, SPLIT.IDX.MEAN$t, SPLIT.IDX.DISP$c, SPLIT.IDX.DISP$t), function(ix) log2(mean(C.HAT[ix]) / (1 - mean(C.HAT[ix])))))
+SPLIT.OFFSET$difference_from_all <- SPLIT.OFFSET$offset_log2 - OFFSET.CBAR
+cat("Share offset of each hybrid cell subset (log2 units)\n"); print(SPLIT.OFFSET, digits = 4, row.names = FALSE)
+
 HYC.SC.N <- HYB.SC[, SPLIT.IDX.DISP$c]; HYT.SC.N <- HYB.SC[, SPLIT.IDX.DISP$t]
 HYC.SE.N <- HYB.SE[, SPLIT.IDX.DISP$c]; HYT.SE.N <- HYB.SE[, SPLIT.IDX.DISP$t]
 EXPO.HYC.SC.N <- EXPO.HYB.SC[SPLIT.IDX.DISP$c]; EXPO.HYT.SC.N <- EXPO.HYB.SC[SPLIT.IDX.DISP$t]
 EXPO.HYC.SE.N <- EXPO.HYB.SE[SPLIT.IDX.DISP$c]; EXPO.HYT.SE.N <- EXPO.HYB.SE[SPLIT.IDX.DISP$t]
 
 # SPLIT.FIT.MATS/SPLIT.FIT.EXPOS hold 13 datasets, each with its own offsets (a hybrid allele S_H / 2,
-# HYB.COMB the summed S_H); SHARE.R gives each dataset its allele-share correction:
+# HYB.COMB the summed S_H):
 # 5 split-independent (MIX.SC, MIX.SE, HYB.SC, HYB.SE, HYB.COMB)
 # 4 at f_mean (HYC/HYT x SC/SE)
 # 4 at f_disp (HYC.N/HYT.N x SC/SE)
@@ -588,7 +632,7 @@ names(SPLIT.FIT.RESULTS) <- names(SPLIT.FIT.MATS)
 for (nm in names(SPLIT.FIT.MATS)) {
 cat(sprintf("[%s] fitting %-10s %d genes, %d cells\n", format(Sys.time(), "%H:%M:%S"), nm, nrow(SPLIT.FIT.MATS[[nm]]), ncol(SPLIT.FIT.MATS[[nm]])))
   flush.console()
-  SPLIT.FIT.RESULTS[[nm]] <- fit_counts_offset(SPLIT.FIT.MATS[[nm]], SPLIT.FIT.EXPOS[[nm]], cl = cl, share_r = SHARE.R[[nm]])
+  SPLIT.FIT.RESULTS[[nm]] <- fit_counts_offset(SPLIT.FIT.MATS[[nm]], SPLIT.FIT.EXPOS[[nm]], cl = cl)
 }
 cat(sprintf("split fits done: %d datasets in %.1f min\n", length(SPLIT.FIT.RESULTS), as.numeric(difftime(Sys.time(), t0, units = "mins"))))
 stopCluster(cl)
@@ -658,7 +702,7 @@ write.csv(FILTER.SUMMARY, file.path(TABLE.DIR, "gene_filter_summary.csv"),      
 ## Weighted method-of-moments fits of every gene in the 13 datasets, in the layout of SPLIT.FITS (MU, DISP; MEAN_CT and N_EXPR are shared), local
 ## and serial (a few seconds per dataset per thousand genes).
 SPLIT.FITS.W <- lapply(setNames(FILTER.GROUPS, FILTER.GROUPS), function(g) {
-  f <- fit_counts_dispersion(SPLIT.FIT.MATS[[g]], SPLIT.FIT.EXPOS[[g]], SHARE.R[[g]], "weighted")
+  f <- fit_counts_dispersion(SPLIT.FIT.MATS[[g]], SPLIT.FIT.EXPOS[[g]], "weighted")
   data.frame(MU = f[, "mu"], DISP = f[, "disp"], BOUNDARY = f[, "boundary"], CONVERGED = f[, "converged"],
              MEAN_CT = SPLIT.FITS[[g]]$MEAN_CT, N_EXPR = SPLIT.FITS[[g]]$N_EXPR, row.names = rownames(f))
 })
@@ -689,7 +733,7 @@ GENE.TABLE <- local({
   tab$inference_set <- rowSums(tab[, grep("^(raw|mean)_.*_valid$", names(tab))]) > 0
   tab$log_set <- rowSums(positive) == ncol(positive)
   ## The same fit statuses and eligibility flags for the weighted method of moments (SPLIT.FITS.W, one fit per gene and dataset on the
-  ## same exposures and share corrections); the mean and the information floors are shared with NB, so only the dispersion differs.
+  ## same exposures); the mean and the information floors are shared with NB, so only the dispersion differs.
   wstatus <- sapply(FILTER.GROUPS, gene_fit_status, fits = SPLIT.FITS.W)
   rownames(wstatus) <- genes
   for (g in FILTER.GROUPS) { tab[[paste0(g, ".w_disp")]] <- SPLIT.FITS.W[[g]]$DISP; tab[[paste0(g, ".w_status")]] <- wstatus[, g] }
@@ -771,10 +815,10 @@ DRAWS.REPS <- lapply(SEED.BOOT + seq_len(N.BOOT.REP) - 1, function(seed) make_dr
 ## The cluster scripts read the objects under their plain names, with GENES the genes to run, so the inputs are saved from an environment that
 ## holds the inference-set objects under those names.
 JOB.INPUTS <- list2env(list(CONTRAST.MATS = CONTRAST.MATS.INFER, CONTRAST.EXPOS = CONTRAST.EXPOS, CONTRAST.FITS = CONTRAST.FITS.INFER, GENES = GENES.INFER,
-                            DRAWS.REPS = DRAWS.REPS, N.BOOT = N.BOOT, SHARE.R = SHARE.R, PLOIDY.SHIFT = PLOIDY.SHIFT.INFER, PERMS = PERMS, N.PERM = N.PERM,
+                            DRAWS.REPS = DRAWS.REPS, N.BOOT = N.BOOT, OFFSET.CBAR = OFFSET.CBAR, PLOIDY.SHIFT = PLOIDY.SHIFT.INFER, PERMS = PERMS, N.PERM = N.PERM,
                             SEED.PERM = SEED.PERM, NULL.DRAWS = NULL.DRAWS))
-save(list = c("CONTRAST.MATS", "CONTRAST.EXPOS", "CONTRAST.FITS", "GENES", "DRAWS.REPS", "N.BOOT", "SHARE.R", "PLOIDY.SHIFT"), envir = JOB.INPUTS, file = file.path(INPUT.DIR, "gene_boot_inputs.rda"))
-save(list = c("CONTRAST.MATS", "CONTRAST.EXPOS", "CONTRAST.FITS", "GENES", "PERMS", "N.PERM", "SEED.PERM", "PLOIDY.SHIFT", "SHARE.R", "NULL.DRAWS"), envir = JOB.INPUTS, file = file.path(INPUT.DIR, "gene_perm_inputs.rda"))
+save(list = c("CONTRAST.MATS", "CONTRAST.EXPOS", "CONTRAST.FITS", "GENES", "DRAWS.REPS", "N.BOOT", "OFFSET.CBAR", "PLOIDY.SHIFT"), envir = JOB.INPUTS, file = file.path(INPUT.DIR, "gene_boot_inputs.rda"))
+save(list = c("CONTRAST.MATS", "CONTRAST.EXPOS", "CONTRAST.FITS", "GENES", "PERMS", "N.PERM", "SEED.PERM", "PLOIDY.SHIFT", "OFFSET.CBAR", "NULL.DRAWS"), envir = JOB.INPUTS, file = file.path(INPUT.DIR, "gene_perm_inputs.rda"))
 BOOT.CONTRASTS.REPS.INFER <- load_replicates("gene_boot", "BOOT.CONTRASTS", N.BOOT.REP, expected = length(GENES.INFER))
 BOOT.CONTRASTS.INFER <- BOOT.CONTRASTS.REPS.INFER[[1]]
 load(file.path(OUTPUT.DIR, "gene_perm_output.rda"))            # PERM.RESULTS
@@ -903,11 +947,11 @@ do.call(rbind, lapply(names(SEED.CHECK), seed_check_rows, checks = SEED.CHECK, c
 # Both hybrid alleles are offset by S_H / 2 and the summed hybrid by S_H, so the mean rate of the summed fit equals the
 # average of the two allele rates exactly. The dom and dpar mean contrasts read that average. The table gives the largest
 # |log2 difference| between the summed fit and the average over the analysed genes, which is zero to rounding, with the
-# transcriptome share and the share variance the allele dispersions are corrected for.
+# transcriptome share, its variance and the cis mean offset (Section 1.2).
 WEIGHT.CHECK <- data.frame(
   max_abs_diff_log2 = max(abs(log2(CONTRAST.FITS$HYB.COMB[GENES, "MU"]) -
                               log2((CONTRAST.FITS$HYB.SC[GENES, "MU"] + CONTRAST.FITS$HYB.SE[GENES, "MU"]) / 2)), na.rm = TRUE),
-  c_bar = C.BAR, c_bar_ci_low = unname(quantile(SHARE.BOOT, 0.025)), c_bar_ci_high = unname(quantile(SHARE.BOOT, 0.975)),
+  c_bar = C.BAR, offset_log2 = OFFSET.CBAR, c_bar_ci_low = unname(quantile(SHARE.BOOT, 0.025)), c_bar_ci_high = unname(quantile(SHARE.BOOT, 0.975)),
   c_sd = sd(C.HAT), var_c = VAR.C, r_c = R.C, r_e = R.E)
 cat("Summed hybrid mean against the average of the allele means, with the transcriptome share\n")
 print(WEIGHT.CHECK, digits = 3, row.names = FALSE)
@@ -945,7 +989,7 @@ dev.off()
 # object that later sections read.
 save(GENES, GENES.INFER, GENE.TABLE, SPLIT.FITS.W, CONTRAST.FITS.INFER, PLOIDY.SHIFT.INFER, ANALYSIS.STATUS, ANALYSIS.COUNTS, ELIGIBLE.COUNTS, FIT.STATUS.COUNTS, FILTER.COUNTS, FILTER.SUMMARY, HYB.COMB, CONTRAST.FITS, CONTRAST.MATS, CONTRAST.EXPOS, SPLIT.FITS,
      BOOT.CONTRASTS, BURST.CONTRASTS, PERM.RESULTS, PR, PLOIDY.SHIFT, N.PERM,
-     HYB.SC, HYB.SE, EXPO.MIX.SC, EXPO.MIX.SE, EXPO.HYB.SC, EXPO.HYB.SE, EXPO.HYB, C.HAT, C.BAR, VAR.C, R.C, R.E, SHARE.R, SHARE.TABLE,
+     HYB.SC, HYB.SE, EXPO.MIX.SC, EXPO.MIX.SE, EXPO.HYB.SC, EXPO.HYB.SE, EXPO.HYB, C.HAT, C.BAR, VAR.C, R.C, R.E, OFFSET.CBAR, SHARE.BOOT, SHARE.TABLE, SHARE.DISP, SPLIT.OFFSET,
      WEIGHT.CHECK, ALLELE.DISP,
      N.COEXPR, SEED.COEXPR,
      SPLIT.IDX.MEAN, SPLIT.IDX.DISP, SPLIT.FRAC,

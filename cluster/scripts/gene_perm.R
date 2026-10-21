@@ -5,7 +5,7 @@
 ### Mirrors gene_boot.R.
 ###
 ### Inputs  : gene_perm_inputs.rda  (CONTRAST.MATS, CONTRAST.EXPOS, CONTRAST.FITS, GENES, PERMS, PLOIDY.SHIFT,
-###           SHARE.R: the allele-share correction applied to the cis nulls, ...)
+###           OFFSET.CBAR: the share offset log2[c-bar / (1 - c-bar)] subtracted from the observed cis and trans mean contrasts, ...)
 ### Output  : gene_perm_output.rda
 ###           PERM.RESULTS, one row per gene: mean_<mode>_obs / _p,
 ###           disp_<mode>_obs / _p (the NB dispersion phi), bsize_<mode>_obs / _p
@@ -31,7 +31,7 @@ library('MASS')
 source("functions.R")
 write_pkg_versions("gene_perm")   # R and package versions of this job, compared with renv.lock by check_pkg_versions()
 
-load("gene_perm_inputs.rda")     # GENES is the inference set (every gene with a fitted phi in all 13 datasets, zero included), not only the genes with phi > 0. CONTRAST.MATS, CONTRAST.EXPOS, CONTRAST.FITS, GENES, PERMS, N.PERM, SEED.PERM, PLOIDY.SHIFT (when present), SHARE.R, NULL.DRAWS
+load("gene_perm_inputs.rda")     # GENES is the inference set (every gene with a fitted phi in all 13 datasets, zero included), not only the genes with phi > 0. CONTRAST.MATS, CONTRAST.EXPOS, CONTRAST.FITS, GENES, PERMS, N.PERM, SEED.PERM, PLOIDY.SHIFT (when present), OFFSET.CBAR, NULL.DRAWS
 
 NUM.CORES <- max(1L, as.integer(Sys.getenv("SLURM_CPUS_PER_TASK", unset = detectCores() - 1L)))
 ## The dpar contrasts are read against the ploidy-expected value, so PLOIDY.SHIFT must come with the
@@ -58,7 +58,7 @@ for (k in seq_along(chunks)) {
   ## adds ploidy-adjusted p-values for the dpar contrasts. bsize and kbal nulls recombine the mean and
   ## disp null draws of the same permutation; for cis and trans those draws come from relabelings of the
   ## same cells (perm_label_draw()).
-  results[[k]] <- mclapply(chunks[[k]], permute_contrasts_one, mc.cores = NUM.CORES, mc.preschedule = FALSE, expos = CONTRAST.EXPOS, fits = CONTRAST.FITS, mats = CONTRAST.MATS, perms = PERMS, ploidy_shift = PLOIDY.SHIFT, seed = SEED.PERM, share_r = SHARE.R, resamples = NULL.DRAWS, methods = c("NB", "weighted"))
+  results[[k]] <- mclapply(chunks[[k]], permute_contrasts_one, mc.cores = NUM.CORES, mc.preschedule = FALSE, expos = CONTRAST.EXPOS, fits = CONTRAST.FITS, mats = CONTRAST.MATS, perms = PERMS, ploidy_shift = PLOIDY.SHIFT, mean_offset = OFFSET.CBAR, seed = SEED.PERM, resamples = NULL.DRAWS, methods = c("NB", "weighted"))
   bad <- vapply(results[[k]], function(x) inherits(x, "try-error") || is.null(x), logical(1))
   if (any(bad)) stop(sprintf("%d gene(s) failed in chunk %d, first: %s", sum(bad), k, chunks[[k]][which(bad)[1]]))
   done <- done + length(chunks[[k]])

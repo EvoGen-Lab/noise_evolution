@@ -24,9 +24,9 @@
 ###     pkg_versions() / write_pkg_versions() / check_pkg_versions() - Record the R and package versions of a cluster job and compare them with renv.lock.
 ###   1. OFFSET NEGATIVE-BINOMIAL FIT
 ###     neg_binom_fit_offset() - Offset NB fit for one gene: rate (mu), dispersion phi (disp) and NB size theta = 1/phi from .fit_one(), with glm.nb asymptotic log-scale SEs; disp = 0 (theta = Inf) when a Poisson-vs-NB pre-check finds no overdispersion.
-###     fit_counts_offset() - Matrix version: one neg_binom_fit_offset() fit per gene (row) against its exposure vector, with the dataset's allele-share correction; optionally splits genes across a PSOCK cluster, shipping the functions the fit needs.
-###     .fit_one() - The pipeline's single NB estimator (mu = sum(y)/sum(exposure), theta by 1-D likelihood given mu, disp = 1/theta, corrected for allele-share variation in a hybrid allele): observed fits, every bootstrap and permutation replicate, and the power grid.
-###     fit_dispersion() - The shared dispersion-fitting interface: NB likelihood or weighted method of moments (method), both with the allele-share correction; returns mu, corrected and apparent phi, the signed phi, boundary and convergence flags.
+###     fit_counts_offset() - Matrix version: one neg_binom_fit_offset() fit per gene (row) against its exposure vector, ; optionally splits genes across a PSOCK cluster, shipping the functions the fit needs.
+###     .fit_one() - The pipeline's single NB estimator (mu = sum(y)/sum(exposure), theta by 1-D likelihood given mu, disp = 1/theta): observed fits, every bootstrap and permutation replicate, and the power grid.
+###     fit_dispersion() - The shared dispersion-fitting interface: NB likelihood or weighted method of moments (method); returns mu, phi, the phi before the floor at zero (signed for the weighted fit), boundary and convergence flags.
 ###     .fit_split() - Splits a pooled sample by a pre-drawn permutation and fits each half with .fit_one(); the gene-level null and the power grid share it.
 ###   1b. INTERNAL-PILOT SPLIT FRACTION (f*)
 ###     split_indices_by_depth() - Depth-matched split of depth-ordered hybrid cells at an arbitrary fraction.
@@ -309,9 +309,8 @@ console_stop <- function() {
 # Every bootstrap, permutation and power-grid replicate fits with this same estimator, so an observed
 # value and the distribution it is compared against are measured identically. glm.nb supplies only
 # the asymptotic log-scale SEs; the log-scale SE of theta is the log-scale SE of phi.
-# share_r is the allele-share correction of a hybrid allele (see .fit_one()); 0 for every other group.
 # Returns c(disp, mu, disp_logse, mu_logse, theta).
-neg_binom_fit_offset <- function(y, exposure, share_r = 0) {
+neg_binom_fit_offset <- function(y, exposure) {
   if (!is.null(dim(y)))
     stop("neg_binom_fit_offset() takes one gene's counts; use fit_counts_offset() for a matrix")
   na_out <- c(disp = NA_real_, mu = NA_real_, disp_logse = NA_real_, mu_logse = NA_real_, theta = NA_real_)
@@ -320,7 +319,7 @@ neg_binom_fit_offset <- function(y, exposure, share_r = 0) {
   y <- y[keep]; exposure <- exposure[keep]
   if (length(y) < 2) return(na_out)
 
-  core <- .fit_one(y, exposure, share_r)
+  core <- .fit_one(y, exposure)
   out  <- c(disp = unname(core["disp"]), mu = unname(core["mu"]), disp_logse = NA_real_, mu_logse = NA_real_, theta = unname(core["theta"]))
   if (!is.finite(out[["theta"]])) return(out)
 
@@ -349,15 +348,11 @@ LOG.THETA.RANGE <- c(-4, 15)
 # gene_perm.R for every resample, and power_grid.R for the simulated observed contrast and its
 # null. Returns c(mu, disp, theta); base R only and RNG-free, so fork-safe.
 #
-# share_r removes the variance that cell-to-cell variation in the allele share adds to the dispersion of a hybrid
-# allele. A hybrid allele is offset by half the cell's hybrid depth, so its count carries the relative share factor
-# u = c / c-bar (Hc) or (1 - c) / (1 - c-bar) (He), with mean 1 and variance r = var(c) / c-bar^2 (or / (1 - c-bar)^2).
-# The factor multiplies the gene's expression factor a (mean 1, variance phi), so the apparent dispersion is
-# phi_app = phi + (1 + phi) r and the fitted value is corrected to phi = (phi_app - r) / (1 + r). A corrected value
-# below PHI.FLOOR is reported as phi = 0, the Poisson limit, like any fit without detectable excess dispersion.
-# share_r = 0 (every parent, and the summed hybrid) leaves the estimate unchanged. The two shares cancel in the summed hybrid's
-# mean but not exactly in its dispersion, which keeps a share term of at most max(r_c, r_e) (1 + phi) that is not corrected.
-.fit_one <- function(counts, expo, share_r = 0) fit_dispersion(counts, expo, share_r, "NB")[c("mu", "disp", "theta")]
+# Every dataset, hybrid alleles included, is fitted with this one estimator. Cell-to-cell variation of the Sc share multiplies a hybrid
+# allele's counts by the relative share factor u = c / c-bar (Hc) or (1 - c) / (1 - c-bar) (He), with mean 1 and variance
+# r = var(c) / c-bar^2 (or / (1 - c-bar)^2), so the apparent dispersion is phi + (1 + phi) r. At the observed share variance r is of the
+# order 1e-4, a fraction of a percent of a typical allele dispersion, and analysis.R Section 1.2 reports that fraction.
+.fit_one <- function(counts, expo) fit_dispersion(counts, expo, "NB")[c("mu", "disp", "theta")]
 
 # fit_dispersion: the shared dispersion-fitting interface. Both methods take the same exposure-weighted mean,
 # mu = sum(y) / sum(exposure), then estimate the dispersion phi of Var(y_i) = M_i + phi M_i^2 with M_i = mu * exposure_i.
@@ -369,16 +364,14 @@ LOG.THETA.RANGE <- c(-4, 15)
 #     to the factor 2 M_i^2) enter through the root of the weighted moment equation sum(w(phi) (r_i^2 - A_i - phi B_i)) = 0 on
 #     [0, exp(-LOG.THETA.RANGE[1])], found with uniroot(), because the plain iteration phi <- f(w(phi)) can cycle between two
 #     values on sparse counts. No positive root gives phi = 0 and disp_raw keeps the signed unit-weight moment estimate.
-# The allele-share correction (share_r, see above) is applied after either fit. Returns a named numeric vector:
-#   mu, disp (the corrected phi, 0 at the boundary), theta = 1 / disp (Inf at 0),
-#   disp_app (the apparent phi before the share correction, NA for an NB fit stopped by the Poisson pre-check),
-#   disp_raw (the corrected phi before the floor at zero, signed for the weighted fit, NA when no apparent value exists),
+# Returns a named numeric vector:
+#   mu, disp (phi, 0 at the boundary), theta = 1 / disp (Inf at 0),
+#   disp_raw (phi before the floor at PHI.FLOOR, signed for the weighted fit, NA for an NB fit stopped by the Poisson pre-check),
 #   boundary (1 when disp = 0, a valid Poisson-limit estimate), converged (1 unless the fit failed) and iter (weighted only).
 # NA mu and disp mean too few cells; mu = 0 and NA disp mean no counts; mu with NA disp is a failed fit.
-fit_dispersion <- function(counts, expo, share_r = 0, method = c("NB", "weighted")) {
+fit_dispersion <- function(counts, expo, method = c("NB", "weighted")) {
   method <- match.arg(method)
-  stopifnot(is.numeric(share_r), length(share_r) == 1, is.finite(share_r), share_r >= 0)
-  out <- c(mu = NA_real_, disp = NA_real_, theta = NA_real_, disp_app = NA_real_, disp_raw = NA_real_,
+  out <- c(mu = NA_real_, disp = NA_real_, theta = NA_real_, disp_raw = NA_real_,
            boundary = NA_real_, converged = NA_real_, iter = NA_real_)
   keep <- is.finite(counts) & is.finite(expo) & expo > 0
   y <- counts[keep]; e <- expo[keep]
@@ -426,20 +419,18 @@ fit_dispersion <- function(counts, expo, share_r = 0, method = c("NB", "weighted
       rt <- uniroot(g, c(0, upper), tol = 1e-10 * (1 + upper))
       phi_app <- rt$root; est <- rt$root; out[["iter"]] <- rt$iter
     }
-    out[["disp_raw"]] <- (est - share_r) / (1 + share_r)
+    out[["disp_raw"]] <- est
   }
-  out[["disp_app"]] <- phi_app
-  corrected <- (phi_app - share_r) / (1 + share_r)
-  if (method == "NB") out[["disp_raw"]] <- corrected
-  if (corrected < PHI.FLOOR) out[c("disp", "theta", "boundary")] <- c(0, Inf, 1)
-  else out[c("disp", "theta", "boundary")] <- c(corrected, 1 / corrected, 0)
+  if (method == "NB") out[["disp_raw"]] <- phi_app
+  if (phi_app < PHI.FLOOR) out[c("disp", "theta", "boundary")] <- c(0, Inf, 1)
+  else out[c("disp", "theta", "boundary")] <- c(phi_app, 1 / phi_app, 0)
   out
 }
 
 # .fit_m: one fit by the chosen dispersion method, as c(mu, disp, theta): "NB" is .fit_one(), "weighted" the weighted method of moments of
 # fit_dispersion(). The null helpers below take the method so a permutation null can be run with either estimator on the same relabelings.
-.fit_m <- function(counts, expo, share_r = 0, method = "NB") {
-  if (method == "NB") .fit_one(counts, expo, share_r) else fit_dispersion(counts, expo, share_r, method)[c("mu", "disp", "theta")]
+.fit_m <- function(counts, expo, method = "NB") {
+  if (method == "NB") .fit_one(counts, expo) else fit_dispersion(counts, expo, method)[c("mu", "disp", "theta")]
 }
 
 # Splits a pooled sample at position n1 of a pre-drawn index permutation and fits each
@@ -449,20 +440,19 @@ fit_dispersion <- function(counts, expo, share_r = 0, method = c("NB", "weighted
 .fit_split <- function(counts, expo, perm, n1, method = "NB") {
   stopifnot(n1 >= 1, n1 <= length(perm))
   g1 <- perm[seq_len(n1)]; g0 <- perm[seq_along(perm) > n1]   # empty second group when n1 == length(perm)
-  list(a = .fit_m(counts[g1], expo[g1], 0, method), b = .fit_m(counts[g0], expo[g0], 0, method))
+  list(a = .fit_m(counts[g1], expo[g1], method), b = .fit_m(counts[g0], expo[g0], method))
 }
 
 ## Fits every gene (row) of a genes x cells matrix against one shared exposure vector
 ## with neg_binom_fit_offset() and returns a per-gene table: DISP (dispersion phi = 1/theta), MU, their log
-## SEs, MEAN_CT, N_EXPR, and derived VAR, FANO, CV and BSIZE (MU * DISP). share_r is the allele-share correction of
-## the dataset (0 for a parent and the summed hybrid; r_c or r_e for a hybrid allele, see .fit_one()).
+## SEs, MEAN_CT, N_EXPR, and derived VAR, FANO, CV and BSIZE (MU * DISP).
 ## cl is optional: NULL fits on one core; a PSOCK cluster from parallel::makeCluster() splits
 ## the genes into one chunk per worker, each chunk carrying all cells for its genes. A PSOCK
 ## worker starts with an empty workspace, so the functions the fit needs are sent to it here:
 ## fit_counts_offset() and everything it reaches are found from the code itself
 ## (codetools::findGlobals), so a new dependency of the fit reaches the workers without
 ## editing a list. Genes are fit independently, so chunks need no communication.
-fit_counts_offset <- function(mat, exposure, cl = NULL, share_r = 0) {
+fit_counts_offset <- function(mat, exposure, cl = NULL) {
   stopifnot(ncol(mat) == length(exposure))
   if (is.null(cl))
     return(do.call(rbind, lapply(seq_len(nrow(mat)), function(i) {
@@ -470,7 +460,7 @@ fit_counts_offset <- function(mat, exposure, cl = NULL, share_r = 0) {
       ## burst frequency. BSIZE = MU * DISP (mean count per burst) is a separate derived quantity. Every noise
       ## contrast in the pipeline is a contrast of DISP, so a log2 DISP contrast is the negative of the log2 theta contrast.
       y <- mat[i, ]
-      f <- neg_binom_fit_offset(y, exposure, share_r)
+      f <- neg_binom_fit_offset(y, exposure)
       disp <- f[["disp"]]; mu <- f[["mu"]]
       data.frame(
         DISP = disp, MU = mu, DISP_LOGSE = f[["disp_logse"]], MU_LOGSE = f[["mu_logse"]],
@@ -491,7 +481,7 @@ fit_counts_offset <- function(mat, exposure, cl = NULL, share_r = 0) {
   mat_chunks <- split.data.frame(mat, chunk_id)
   parallel::clusterEvalQ(cl, suppressPackageStartupMessages(library(MASS)))
   parallel::clusterExport(cl, needed, envir = globalenv())
-  fit_chunks <- parallel::parLapply(cl, mat_chunks, fit_counts_offset, exposure = exposure, share_r = share_r)
+  fit_chunks <- parallel::parLapply(cl, mat_chunks, fit_counts_offset, exposure = exposure)
   ## unname() before rbind() keeps the gene row names unprefixed by the chunk labels.
   do.call(rbind, unname(fit_chunks))
 }
@@ -620,13 +610,17 @@ make_draws <- function(ncells, B, seed = 1, hyc, hyc_n) {
 ## hybrid HYB.COMB at S_H. A fitted MU is then the mean count of a cell at depth D, and the allele means sit on a
 ## haploid-genome-equivalent scale next to the parents. Each allele's mean keeps its genome's share of the hybrid library:
 ## with no regulatory divergence mu_Hc = 2 c-bar x the parental rate and mu_He = 2 (1 - c-bar) x the parental rate (equal to it
-## only at c-bar = 0.5), so the cis mean contrast of such a gene is log2[c-bar / (1 - c-bar)] rather than 0. HYB.SC and HYB.SE
-## keep the alleles apart, and the summed fit's MU equals the average of the two allele MUs exactly. Cell-to-cell variation of
-## the Sc share adds variance to each allele's dispersion, which .fit_one(share_r) removes.
+## only at c-bar = 0.5), so the cis mean contrast of such a gene is log2[c-bar / (1 - c-bar)] rather than 0. .contrast_value() subtracts
+## that offset (mean_offset, OFFSET.CBAR in analysis.R) from the cis mean contrast, and trans inherits it through its cis term. HYB.SC and
+## HYB.SE keep the alleles apart, and the summed fit's MU equals the average of the two allele MUs exactly. Cell-to-cell variation of
+## the Sc share adds about r (1 + phi) to each allele's apparent dispersion (r = var(c) / c-bar^2); the fits leave that term in place
+## and analysis.R Section 1.2 checks that it stays a negligible fraction of the allele dispersion.
 ## Mean axis
-##   total, cis  Ratios inside one ploidy state, so a shared factor cancels.
-##   trans       (parent ratio) - (hybrid allele ratio). The factor cancels inside each ratio, so only a
-##               species-specific ploidy effect survives the subtraction.
+##   total       A ratio inside one ploidy state, so a shared factor cancels.
+##   cis         The allele ratio inside the hybrid less the share offset log2[c-bar / (1 - c-bar)], which puts the two alleles on a
+##               per-genome scale (a gene without an allele effect sits at 0).
+##   trans       (parent ratio) - (hybrid allele ratio less the same offset), so total = cis + trans holds. The factor cancels inside
+##               each ratio, so only a species-specific ploidy effect survives the subtraction.
 ##   dpar, dom   The hybrid mean rate is the average of the two allele fits, (mu_Hc + mu_He) / 2, on the haploid-equivalent
 ##               scale of the parents (both alleles are offset by S_H / 2, so it equals the mean of the summed fit
 ##               HYB.COMB). dpar compares it with one parent and dom with the arithmetic midparent
@@ -703,17 +697,20 @@ make_draws <- function(ncells, B, seed = 1, hyc, hyc_n) {
 ## total and cis are ratios within one ploidy state; trans is the parental ratio minus the hybrid allele
 ## ratio. On the mean axis dom and dpar use the average of the two allele rates as the hybrid mean (equal to the mean of
 ## the summed fit, both alleles being offset by S_H / 2; against the arithmetic midparent for dom); on the noise axes
-## they use the summed fit HYB.COMB.
-.contrast_value <- function(mode, gv, q) {
+## they use the summed fit HYB.COMB. mean_offset is log2[c-bar / (1 - c-bar)], the log2 ratio of the two alleles' shares of the hybrid library;
+## both alleles share one offset (S_H / 2), so each fitted allele mean keeps its genome's share, and subtracting mean_offset from the cis
+## allele ratio of the mean axis (q == "MU") puts cis on a per-genome scale. The other axes and the other modes take no offset.
+.contrast_value <- function(mode, gv, q, mean_offset = 0) {
   l2 <- log2
+  off <- if (q == "MU") mean_offset else 0
   switch(mode,
     total   = l2(gv[["MIX.SC"]]) - l2(gv[["MIX.SE"]]),
-    cis     = l2(gv[["HYC.SC"]]) - l2(gv[["HYC.SE"]]),
-    cis_n   = l2(gv[["HYC.SC.N"]]) - l2(gv[["HYC.SE.N"]]),
+    cis     = l2(gv[["HYC.SC"]]) - l2(gv[["HYC.SE"]]) - off,
+    cis_n   = l2(gv[["HYC.SC.N"]]) - l2(gv[["HYC.SE.N"]]) - off,
     trans   = (l2(gv[["MIX.SC"]]) - l2(gv[["MIX.SE"]])) -
-              (l2(gv[["HYT.SC"]]) - l2(gv[["HYT.SE"]])),
+              (l2(gv[["HYT.SC"]]) - l2(gv[["HYT.SE"]]) - off),
     trans_n = (l2(gv[["MIX.SC"]]) - l2(gv[["MIX.SE"]])) -
-              (l2(gv[["HYT.SC.N"]]) - l2(gv[["HYT.SE.N"]])),
+              (l2(gv[["HYT.SC.N"]]) - l2(gv[["HYT.SE.N"]]) - off),
     dom     = if (q == "MU") l2((gv[["HYB.SC"]] + gv[["HYB.SE"]]) / 2) - l2((gv[["MIX.SC"]] + gv[["MIX.SE"]]) / 2)
               else           l2(gv[["HYB.COMB"]]) - 0.5 * (l2(gv[["MIX.SC"]]) + l2(gv[["MIX.SE"]])),
     dpar_sc = (if (q == "MU") l2((gv[["HYB.SC"]] + gv[["HYB.SE"]]) / 2) else l2(gv[["HYB.COMB"]])) - l2(gv[["MIX.SC"]]),
@@ -3410,9 +3407,9 @@ gene_fit_status <- function(g, fits) {
 }
 
 ## fit_counts_dispersion: fit_dispersion() on every gene (row) of a genes x cells matrix against one exposure vector, returned as a genes x
-## (mu, disp, boundary, converged) matrix. share_r is the dataset's allele-share correction and method the estimator ("NB" or "weighted").
-fit_counts_dispersion <- function(mat, expo, share_r = 0, method = "weighted") {
-  out <- t(vapply(seq_len(nrow(mat)), function(i) fit_dispersion(mat[i, ], expo, share_r, method)[c("mu", "disp", "boundary", "converged")], numeric(4)))
+## (mu, disp, boundary, converged) matrix; method is the estimator ("NB" or "weighted").
+fit_counts_dispersion <- function(mat, expo, method = "weighted") {
+  out <- t(vapply(seq_len(nrow(mat)), function(i) fit_dispersion(mat[i, ], expo, method)[c("mu", "disp", "boundary", "converged")], numeric(4)))
   rownames(out) <- rownames(mat)
   out
 }
@@ -3530,19 +3527,18 @@ fit_ratio_axes <- function(fa, fb, raw = FALSE) {
 
 ## null_cis_fits: the two fits behind one draw of the cis null, list(a = the swapped Sc position, b = the swapped Se position); arguments as in
 ## null_cis_axes(), which contrasts them.
-null_cis_fits <- function(sc, se, expo_sc, expo_se, swap, share_r = c(0, 0), method = "NB") {
-  list(a = .fit_m(ifelse(swap, se, sc), ifelse(swap, expo_se, expo_sc), share_r[[1]], method),
-       b = .fit_m(ifelse(swap, sc, se), ifelse(swap, expo_sc, expo_se), share_r[[2]], method))
+null_cis_fits <- function(sc, se, expo_sc, expo_se, swap, method = "NB") {
+  list(a = .fit_m(ifelse(swap, se, sc), ifelse(swap, expo_se, expo_sc), method),
+       b = .fit_m(ifelse(swap, sc, se), ifelse(swap, expo_sc, expo_se), method))
 }
 
 ## null_cis_axes: one draw of the cis null for hybrid cells with allele counts sc, se and the offsets
 ## expo_sc, expo_se of the two alleles (equal in the pipeline, S_H / 2). swap (logical per cell) exchanges the two alleles
-## within a cell, count and offset together, which keeps the allele pairing; share_r holds the
-## allele-share corrections of the first and second fit (the Sc and Se allele positions, .fit_one()); the
+## within a cell, count and offset together, which keeps the allele pairing; the
 ## contrast is the swapped Sc allele against the swapped Se allele (fit_ratio_axes(); raw adds the raw difference, method picks the estimator). Shared by
 ## permute_contrasts_one() and the power grid (which passes one exposure for both alleles).
-null_cis_axes <- function(sc, se, expo_sc, expo_se, swap, share_r = c(0, 0), raw = FALSE, method = "NB") {
-  f <- null_cis_fits(sc, se, expo_sc, expo_se, swap, share_r, method)
+null_cis_axes <- function(sc, se, expo_sc, expo_se, swap, raw = FALSE, method = "NB") {
+  f <- null_cis_fits(sc, se, expo_sc, expo_se, swap, method)
   fit_ratio_axes(f$a, f$b, raw)
 }
 
@@ -3808,20 +3804,18 @@ fit_group_values <- function(fits, g) {
 }
 
 ## boot_contrasts_one: one gene's bootstrap contrasts across all modes (the unit of work a cluster worker does). draws holds every resample
-## index set, drawn before any fit so replicates are independent. share_r is the named vector of allele-share corrections
-## (SHARE.R, one per dataset) applied to the hybrid-allele refits; NULL means no correction. ploidy_shift is the named
+## index set, drawn before any fit so replicates are independent. mean_offset is the share offset log2[c-bar / (1 - c-bar)]
+## (OFFSET.CBAR) that .contrast_value() subtracts from the cis mean contrast. ploidy_shift is the named
 ## per-gene shift (PLOIDY.SHIFT) that puts the raw dpar contrasts on the parents' per-genome scale; NULL means none.
 ## Each draw yields the log2 contrasts of phi (rows need phi > 0 in every group) and the raw differences of phi (rows need a
 ## fitted phi >= 0 in every group, so a zero-boundary refit still contributes). Both come from the same refits.
 ## methods lists the dispersion estimators: "NB" is the pipeline estimator (the fits table and .fit_one() refits); adding "weighted"
 ## refits every resample with fit_dispersion(method = "weighted") on the same cells and adds the wdisp_* (log2) and wrdisp_* (raw)
 ## columns, so the two estimators are compared on identical resamples. The mean axis stays with NB.
-boot_contrasts_one <- function(g, expos, fits, mats, draws, share_r = NULL, ploidy_shift = NULL, methods = "NB") {
-  stopifnot(all(methods %in% c("NB", "weighted")), "NB" %in% methods)
+boot_contrasts_one <- function(g, expos, fits, mats, draws, mean_offset, ploidy_shift = NULL, methods = "NB") {
+  stopifnot(all(methods %in% c("NB", "weighted")), "NB" %in% methods, is.numeric(mean_offset), length(mean_offset) == 1, is.finite(mean_offset))
   do_w <- "weighted" %in% methods
   shift <- if (is.null(ploidy_shift)) 0 else unname(ploidy_shift[g])
-  if (is.null(share_r)) share_r <- setNames(numeric(length(.DRAW.KEY)), names(.DRAW.KEY))
-  stopifnot(all(names(.DRAW.KEY) %in% names(share_r)), all(is.finite(share_r)), all(share_r >= 0))
   B <- length(draws); modes <- names(.MODES)
   mcol <- paste0("m.", modes); scol <- paste0("s.", modes); ccol <- paste0("c.", modes); rcol <- paste0("r.", modes)
   M <- matrix(NA_real_, B, 4 * length(modes), dimnames = list(NULL, c(mcol, scol, ccol, rcol)))
@@ -3830,16 +3824,16 @@ boot_contrasts_one <- function(g, expos, fits, mats, draws, share_r = NULL, ploi
   BQ <- matrix(NA_real_, B, 4 * length(.OUT_MODES), dimnames = list(NULL, c(paste0("rb.", .OUT_MODES), paste0("rk.", .OUT_MODES), paste0("wrb.", .OUT_MODES), paste0("wrk.", .OUT_MODES))))
   for (b in seq_len(B)) {
     d <- draws[[b]]
-    ## Each dataset is refit on the resample of its draw key (.DRAW.KEY) with its own offsets and, for a hybrid allele, its
-    ## allele-share correction (share_r, .fit_one()), so the two alleles of a resampled cell stay paired.
+    ## Each dataset is refit on the resample of its draw key (.DRAW.KEY) with its own offsets, so the two alleles of a resampled
+    ## cell stay paired.
     f <- vector("list", length(.DRAW.KEY)); names(f) <- names(.DRAW.KEY)
     for (grp in names(f)) {
       key <- .DRAW.KEY[[grp]]
-      f[[grp]] <- .fit_one(mats[[grp]][g, d[[key]]], expos[[grp]][d[[key]]], share_r[[grp]])
+      f[[grp]] <- .fit_one(mats[[grp]][g, d[[key]]], expos[[grp]][d[[key]]])
     }
     if (do_w) {
       gv.w <- lapply(names(.DRAW.KEY), function(grp) { key <- .DRAW.KEY[[grp]]
-        unname(fit_dispersion(mats[[grp]][g, d[[key]]], expos[[grp]][d[[key]]], share_r[[grp]], "weighted")[["disp"]]) })
+        unname(fit_dispersion(mats[[grp]][g, d[[key]]], expos[[grp]][d[[key]]], "weighted")[["disp"]]) })
       names(gv.w) <- names(.DRAW.KEY)
       for (k in seq_along(modes)) W[b, c(paste0("ws.", modes[k]), paste0("wr.", modes[k]))] <- .disp_contrasts(modes[k], gv.w, shift)
     }
@@ -3860,7 +3854,7 @@ boot_contrasts_one <- function(g, expos, fits, mats, draws, share_r = NULL, ploi
       bf <- unlist(gv.bf[grp]); cv <- unlist(gv.cv[grp])
       ## The mean contrast is kept when it is finite. For dom and dpar that is the case whenever the average of the two
       ## allele rates and the parental rates are positive, so a gene silent in one allele keeps its replicates.
-      mean_contrast <- .contrast_value(modes[k], gv.mu, "MU")
+      mean_contrast <- .contrast_value(modes[k], gv.mu, "MU", mean_offset)
       if (is.finite(mean_contrast)) M[b, mcol[k]] <- mean_contrast
       if (all(is.finite(bf) & bf > 0)) M[b, scol[k]] <- .contrast_value(modes[k], gv.bf, "DISP")
       if (all(is.finite(cv) & cv > 0)) M[b, ccol[k]] <- .contrast_value(modes[k], gv.cv, "CV2")
@@ -3870,12 +3864,12 @@ boot_contrasts_one <- function(g, expos, fits, mats, draws, share_r = NULL, ploi
   se   <- apply(M, 2, sd, na.rm = TRUE)
   bdry <- setNames(colMeans(is.na(M[, scol, drop = FALSE])), modes)
   fv <- fit_group_values(fits, g)
-  pm <- vapply(modes, .contrast_value, numeric(1), fv$mu,   "MU")
+  pm <- vapply(modes, .contrast_value, numeric(1), fv$mu,   "MU", mean_offset = mean_offset)
   ps <- vapply(modes, .contrast_value, numeric(1), fv$disp, "DISP")
   pc <- vapply(modes, .contrast_value, numeric(1), fv$cv2,  "CV2")
   pr <- vapply(modes, function(m) { bf <- unlist(fv$disp[.MODES[[m]]]); if (all(is.finite(bf) & bf >= 0)) .contrast_raw(m, fv$disp, shift) else NA_real_ }, numeric(1))
   if (do_w) {
-    fw <- lapply(names(.DRAW.KEY), function(grp) unname(fit_dispersion(mats[[grp]][g, ], expos[[grp]], share_r[[grp]], "weighted")[["disp"]]))
+    fw <- lapply(names(.DRAW.KEY), function(grp) unname(fit_dispersion(mats[[grp]][g, ], expos[[grp]], "weighted")[["disp"]]))
     names(fw) <- names(.DRAW.KEY)
     pw <- vapply(modes, .disp_contrasts, numeric(2), fw, shift)
     sw <- apply(W, 2, sd, na.rm = TRUE)
@@ -3937,11 +3931,11 @@ boot_contrasts_one <- function(g, expos, fits, mats, draws, share_r = NULL, ploi
 ## contrasts (mean, disp, CV2, bsize, kbal) with the null by a two-sided permutation p, and adds ploidy-adjusted p-values for the dpar
 ## contrasts. bsize and kbal nulls recombine the mean and disp null draws of the same permutation.
 ## resamples (a make_draws() list, NULL for none) and methods add the resampling null of the trans test, described where it is computed.
-## The cis nulls apply the allele-share correction of each position (share_r); the trans, dom and dpar nulls pool parent and hybrid cells
-## into relabeled groups, where no group is one allele, and fit them without it (the correction is at most r (1 + phi), about 1e-4).
-permute_contrasts_one <- function(g, expos, fits, mats, perms, ploidy_shift, seed = 1, share_r = NULL, resamples = NULL, methods = "NB") {
-  stopifnot(all(methods %in% c("NB", "weighted")), "NB" %in% methods)
-  if (is.null(share_r)) share_r <- setNames(numeric(length(.DRAW.KEY)), names(.DRAW.KEY))
+## mean_offset is the share offset log2[c-bar / (1 - c-bar)] (OFFSET.CBAR) that .contrast_value() subtracts from the observed cis and trans mean
+## contrasts. The cis swap null and the trans pooled null are centred at zero on the mean axis, and the offset puts the observed contrast of a
+## gene without an effect at zero too, so the p-value compares like with like. Observed and null fits use the same estimator.
+permute_contrasts_one <- function(g, expos, fits, mats, perms, ploidy_shift, mean_offset, seed = 1, resamples = NULL, methods = "NB") {
+  stopifnot(all(methods %in% c("NB", "weighted")), "NB" %in% methods, is.numeric(mean_offset), length(mean_offset) == 1, is.finite(mean_offset))
   if (!is.numeric(seed) || length(seed) != 1 || !is.finite(seed)) stop("permute_contrasts_one(): seed must be one finite number")
   l2 <- log2; B <- length(perms); modes <- names(.MODES)
   Nm <- matrix(NA_real_, B, length(modes), dimnames = list(NULL, modes))
@@ -3953,7 +3947,7 @@ permute_contrasts_one <- function(g, expos, fits, mats, perms, ploidy_shift, see
   do_w <- "weighted" %in% methods
   fv   <- fit_group_values(fits, g)
   gvmu <- fv$mu; gvbf <- fv$disp; gvcv <- fv$cv2
-  obs.m <- vapply(modes, .contrast_value, numeric(1), gvmu, "MU")
+  obs.m <- vapply(modes, .contrast_value, numeric(1), gvmu, "MU", mean_offset = mean_offset)
   obs.s <- vapply(modes, .contrast_value, numeric(1), gvbf, "DISP")
   obs.c <- vapply(modes, .contrast_value, numeric(1), gvcv, "CV2")
   cMIXsc <- mats$MIX.SC[g, ]; cMIXse <- mats$MIX.SE[g, ]
@@ -3972,7 +3966,7 @@ permute_contrasts_one <- function(g, expos, fits, mats, perms, ploidy_shift, see
   obs.r <- oc_nb["raw", ]
   gvw <- NULL
   if (do_w) {
-    gvw <- lapply(setNames(names(.DRAW.KEY), names(.DRAW.KEY)), function(k) unname(fit_dispersion(mats[[k]][g, ], expos[[k]], share_r[[k]], "weighted")[["disp"]]))
+    gvw <- lapply(setNames(names(.DRAW.KEY), names(.DRAW.KEY)), function(k) unname(fit_dispersion(mats[[k]][g, ], expos[[k]], "weighted")[["disp"]]))
     oc_w <- vapply(modes, .disp_contrasts, numeric(2), gvw)
     obs.ws <- oc_w["log", ]; obs.wr <- oc_w["raw", ]
     mp.sw <- 0.5 * (l2(gvw[["MIX.SC"]]) + l2(gvw[["MIX.SE"]]))
@@ -4008,12 +4002,12 @@ permute_contrasts_one <- function(g, expos, fits, mats, perms, ploidy_shift, see
       st(b, "total", fit_ratio_axes(sp$a, sp$b, raw = TRUE))
       for (kd in c("bsize", "kbal")) stb("total", kd, qq(sp$a, sp$a, kd) - qq(sp$b, sp$b, kd))
 
-      ## cis swap: a swapped allele carries its own offset, so every count keeps its offset
-      cm <- null_cis_fits(cHYCsc, cHYCse, expos$HYC.SC, expos$HYC.SE, p$cis, share_r[c("HYC.SC", "HYC.SE")], mt)
+      ## cis swap: a swapped allele carries its own library offset, so every count keeps its offset
+      cm <- null_cis_fits(cHYCsc, cHYCse, expos$HYC.SC, expos$HYC.SE, p$cis, mt)
       st(b, "cis", fit_ratio_axes(cm$a, cm$b, raw = TRUE))
       ## Noise-split (f_disp) version of the cis null, used only for
       ## the disp_cis/cv2_cis output columns, mirroring cis_n in .MODES
-      cn <- null_cis_fits(cHYCsc.N, cHYCse.N, expos$HYC.SC.N, expos$HYC.SE.N, p$cis_n, share_r[c("HYC.SC.N", "HYC.SE.N")], mt)
+      cn <- null_cis_fits(cHYCsc.N, cHYCse.N, expos$HYC.SC.N, expos$HYC.SE.N, p$cis_n, mt)
       st(b, "cis_n", fit_ratio_axes(cn$a, cn$b, raw = TRUE))
       for (kd in c("bsize", "kbal")) stb("cis", kd, qq(cm$a, cn$a, kd) - qq(cm$b, cn$b, kd))
 
@@ -4025,7 +4019,7 @@ permute_contrasts_one <- function(g, expos, fits, mats, perms, ploidy_shift, see
       st(b, "trans_n", fit_ratio_axes(tn$sc_a, tn$se_a, raw = TRUE) - fit_ratio_axes(tn$sc_b, tn$se_b, raw = TRUE))
       for (kd in c("bsize", "kbal")) stb("trans", kd, (qq(tm$sc_a, tn$sc_a, kd) - qq(tm$se_a, tn$se_a, kd)) - (qq(tm$sc_b, tn$sc_b, kd) - qq(tm$se_b, tn$se_b, kd)))
 
-      fs <- .fit_m(synth, es, 0, mt)
+      fs <- .fit_m(synth, es, mt)
       par_q <- function(kind) 0.5 * (.burst_q(gvmu[["MIX.SC"]], gv_phi[["MIX.SC"]], kind) + .burst_q(gvmu[["MIX.SE"]], gv_phi[["MIX.SE"]], kind))
       for (kd in c("bsize", "kbal")) stb("dom", kd, qq(fs, fs, kd) - par_q(kd))
       if (mt == "NB") {
@@ -4149,16 +4143,16 @@ permute_contrasts_one <- function(g, expos, fits, mats, perms, ploidy_shift, see
     for (b in seq_len(R)) {
       d <- resamples[[b]]
       fb <- lapply(setNames(grp, grp), function(k) { ix <- d[[.DRAW.KEY[[k]]]]
-        .fit_one(mats[[k]][g, ix], expos[[k]][ix], share_r[[k]]) })
+        .fit_one(mats[[k]][g, ix], expos[[k]][ix]) })
       mu_b <- lapply(fb, `[[`, "mu"); ds_b <- lapply(fb, `[[`, "disp")
-      mm <- .contrast_value("trans", mu_b, "MU"); if (is.finite(mm)) Dm[b] <- mm
+      mm <- .contrast_value("trans", mu_b, "MU", mean_offset); if (is.finite(mm)) Dm[b] <- mm
       dc <- .disp_contrasts("trans_n", ds_b); Ds[b] <- dc[["log"]]; Dr[b] <- dc[["raw"]]
       Dq[b, "rb"] <- .contrast_burst_raw("trans", mu_b, ds_b, "bsize"); Dq[b, "rk"] <- .contrast_burst_raw("trans", mu_b, ds_b, "kbal")
       cv_b <- Map(.cv2_of, mu_b, ds_b)
       if (all(is.finite(unlist(cv_b[.MODES$trans_n])))) Dc[b] <- .contrast_value("trans_n", cv_b, "CV2")
       if (do_w) {
         dw <- lapply(setNames(grp, grp), function(k) { ix <- d[[.DRAW.KEY[[k]]]]
-          unname(fit_dispersion(mats[[k]][g, ix], expos[[k]][ix], share_r[[k]], "weighted")[["disp"]]) })
+          unname(fit_dispersion(mats[[k]][g, ix], expos[[k]][ix], "weighted")[["disp"]]) })
         wc <- .disp_contrasts("trans_n", dw); Dws[b] <- wc[["log"]]; Dwr[b] <- wc[["raw"]]
         Dq[b, "wrb"] <- .contrast_burst_raw("trans", mu_b, dw, "bsize"); Dq[b, "wrk"] <- .contrast_burst_raw("trans", mu_b, dw, "kbal")
       }
@@ -4175,7 +4169,7 @@ permute_contrasts_one <- function(g, expos, fits, mats, perms, ploidy_shift, see
     out$rbsize_trans_p <- shift_p(obs_burst("trans", gvbf, "bsize"), Dq[, "rb"])
     out$rkbal_trans_p  <- shift_p(obs_burst("trans", gvbf, "kbal"),  Dq[, "rk"])
     if (do_w) {
-      fw <- lapply(setNames(grp, grp), function(k) unname(fit_dispersion(mats[[k]][g, ], expos[[k]], share_r[[k]], "weighted")[["disp"]]))
+      fw <- lapply(setNames(grp, grp), function(k) unname(fit_dispersion(mats[[k]][g, ], expos[[k]], "weighted")[["disp"]]))
       wo <- .disp_contrasts("trans_n", fw)
       out$wdisp_trans_p  <- shift_p(wo[["log"]], Dws)
       out$wrdisp_trans_p <- shift_p(wo[["raw"]], Dwr)
