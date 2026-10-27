@@ -11,7 +11,7 @@
 ###           ROWS.PART (the GRID rows this task computed) and POWER.PART
 ###           (those rows x length(SIZE.RATIO) columns). Rows are dealt out
 ###           round-robin, so every task gets a similar mix of cheap and
-###           costly rows, and analysis.R Section 10.2 reassembles GRID order.
+###           costly rows, and power_analysis.R Section 10.2 reassembles GRID order.
 ###
 ### Progress is printed by the master after each chunk of rows,
 ### so it lands in the job log even though the workers are forked.
@@ -20,6 +20,8 @@
 library('parallel')
 
 source("functions.R")
+source("functions_power.R")
+write_pkg_versions("power_grid")   # R and package versions of this job, compared with renv.lock by check_pkg_versions()
 
 load("power_inputs.rda")
 ## GRID, MEAN.READS, N.CELLS, SIZE, SIZE.RATIO, EXPOSURE.CV, CELL.RATIO, ALPHA, NJ, NI, PI1, N.MIX, SEED.BASE
@@ -51,11 +53,31 @@ flush.console()
 results <- vector("list", length(chunks))
 t0 <- Sys.time(); done <- 0
 for (k in seq_along(chunks)) {
-  results[[k]] <- parLapply(cl, chunks[[k]], power_grid_row,
-                            GRID = GRID, MEAN.READS = MEAN.READS, N.CELLS = N.CELLS,
-                            SIZE = SIZE, SIZE.RATIO = SIZE.RATIO,
-                            EXPOSURE.CV = EXPOSURE.CV, CELL.RATIO = CELL.RATIO, ALPHA = ALPHA,
-                            NJ = NJ, NI = NI, SEED.BASE = SEED.BASE, PI1 = PI1, N.MIX = N.MIX)
+  ## power_grid_row: power for one (MEAN.READS, N.CELLS, SIZE) row of GRID
+  ## across every SIZE.RATIO value at once; the unit of work that
+  ## power_grid.R distributes with parLapply, returning one power value per
+  ## SIZE.RATIO.
+  ##
+  ## Design: two independent groups with equal mean reads, a reference (Sc)
+  ## group of N.CELLS.X cells with NB size SIZE and a second group of
+  ## round(N.CELLS.X * CELL.RATIO) cells with size SIZE / SIZE.RATIO.
+  ## Exposures and permutation index sets are seeded from row$n (the cell
+  ## count) alone, so rows sharing a cell count draw identical sequences. The
+  ## reference group's counts and MLE fit are drawn once per replicate and
+  ## reused across the SIZE.RATIO sweep, so the sweep isolates the effect of
+  ## SIZE.RATIO.
+  ##
+  ## Calling power at a Benjamini-Hochberg FDR: every dataset gets a
+  ## permutation p-value (NI shuffles of the pooled count/exposure pairs).
+  ## For each SIZE.RATIO above 1, the p-values of a random subset of
+  ## true-difference datasets (fraction PI1 of the pooled set) are pooled
+  ## with the SIZE.RATIO = 1 datasets, which supply the null. BH is applied
+  ## to the pooled set and power is the fraction of true-difference datasets
+  ## called at q < ALPHA. Averaging over N.MIX random subsets uses every
+  ## simulated dataset without further fitting. The SIZE.RATIO = 1 entry is
+  ## the raw false-positive rate at p < ALPHA, a calibration check of the
+  ## permutation test; SIZE.RATIO therefore includes 1 exactly once.
+  results[[k]] <- parLapply(cl, chunks[[k]], power_grid_row, ALPHA = ALPHA, CELL.RATIO = CELL.RATIO, EXPOSURE.CV = EXPOSURE.CV, GRID = GRID, MEAN.READS = MEAN.READS, N.CELLS = N.CELLS, N.MIX = N.MIX, NI = NI, NJ = NJ, PI1 = PI1, SEED.BASE = SEED.BASE, SIZE = SIZE, SIZE.RATIO = SIZE.RATIO)
   done <- done + length(chunks[[k]])
   el   <- as.numeric(difftime(Sys.time(), t0, units = "mins"))
   eta  <- if (el > 0) (N.POINTS - done) * (el / done) else NA_real_

@@ -1,0 +1,37 @@
+#!/bin/sh -l
+# FILENAME:  cis_direct_sim.sub
+#
+# Direct cis-contrast comparison (cis_direct_sim.R): about 600 grid rows (null and cis scenarios, c-bar 0.5,
+# omega 0, 0.5, 1, cell fractions 1 and 0.25), run on the grid and inputs of estimator_sim. Truth keys are dealt
+# round-robin across the array tasks. Each task requests 1 node, 24 cores and 6 hours.
+#
+# Sizing. Per replicate: one hybrid simulation, the likelihood grid (about 60 ms), and 2 x NBOOT NB fits for the
+# bootstrap, so about 1 core-second per replicate at 3,000 cells and 100 resamples. At 200 replicates that is
+# about 3-4 core-minutes per row, about 36 core-hours over the grid plus about 1 core-hour of truths. Four tasks
+# of 24 cores need about 25 minutes each; the 6-hour limit leaves room for a large error in the cell number
+# or the cluster speed. Change --array and nothing else.
+#
+# Inputs. Copy functions.R, cis_direct_sim.R and estimator_sim_inputs.rda into the working directory.
+#
+# Restarts. A task writes its output file only when it finishes. Resubmitting the array recomputes only the
+# tasks whose cis_direct_output_<k>of<K>.rda is missing; a task stopped at the time limit starts over.
+
+#SBATCH --account=bphm
+#SBATCH --nodes=1
+#SBATCH --ntasks=1
+#SBATCH --partition=cpu
+#SBATCH --cpus-per-task=24
+#SBATCH --qos=normal
+#SBATCH --time=06:00:00
+#SBATCH --job-name cis_direct
+#SBATCH --array=1-4
+#SBATCH --output=cis_direct_%A_%a.out
+
+module load r/4.5.2
+
+export OMP_NUM_THREADS=1
+export MKL_NUM_THREADS=1
+export OPENBLAS_NUM_THREADS=1
+export VECLIB_MAXIMUM_THREADS=1
+
+Rscript cis_direct_sim.R
