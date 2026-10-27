@@ -5,8 +5,8 @@
 ### structure of Permutation_Norm0_V2.R.
 ###
 ### Inputs  : gene_boot_inputs.rda (CONTRAST.MATS, CONTRAST.EXPOS, CONTRAST.FITS, GENES, N.BOOT,
-###           DRAWS.REPS: one set of pre-drawn resamples per bootstrap replicate, and OFFSET.CBAR: the
-###           share offset log2[c-bar / (1 - c-bar)] subtracted from the cis mean contrast)
+###           DRAWS.REPS: one set of pre-drawn resamples per bootstrap replicate, SHARE.R: the transcriptome
+###           share correction of each dataset's refits, and OFFSET.CBAR: the share offset log2[c-bar / (1 - c-bar)] subtracted from the cis mean contrast)
 ### Output  : gene_boot_output_<k>of<K>.rda for array task k of K, holding
 ###           BOOT.CONTRASTS (one row per gene) for replicate k. Task k
 ###           uses DRAWS.REPS[[k]]; replicate 1 is the reported bootstrap
@@ -22,7 +22,7 @@ library('MASS')          # glm.nb ships with base R; set lib= if your cluster ne
 source("functions.R")
 write_pkg_versions("gene_boot")   # R and package versions of this job, compared with renv.lock by check_pkg_versions()
 
-load("gene_boot_inputs.rda")     # GENES is the inference set (every gene with a fitted phi in all 13 datasets, zero included), not only the genes with phi > 0. CONTRAST.MATS, CONTRAST.EXPOS, CONTRAST.FITS, GENES, DRAWS.REPS, N.BOOT, OFFSET.CBAR, PLOIDY.SHIFT
+load("gene_boot_inputs.rda")     # GENES is the inference set (every gene with a fitted phi in all 13 datasets, zero included), not only the genes with phi > 0. CONTRAST.MATS, CONTRAST.EXPOS, CONTRAST.FITS, GENES, DRAWS.REPS, N.BOOT, SHARE.R, OFFSET.CBAR, PLOIDY.SHIFT
 
 ## Job-array position: task k bootstraps replicate k. A finished task leaves its
 ## output file, so resubmitting the array only computes the missing replicates.
@@ -55,7 +55,7 @@ for (k in seq_along(chunks)) {
   ## mean, disp (NB dispersion) and CV2 contrast per replicate, and returns the point estimate, bootstrap SE,
   ## boundary fraction and mean-disp draw correlation for the six reportable modes. Replicates where
   ## any needed fit is non-finite give NA for that contrast and are left out of its SD.
-  results[[k]] <- parLapply(cl, chunks[[k]], boot_contrasts_one, expos = CONTRAST.EXPOS, fits = CONTRAST.FITS, mats = CONTRAST.MATS, draws = DRAWS, mean_offset = OFFSET.CBAR, ploidy_shift = PLOIDY.SHIFT, methods = c("NB", "weighted"))
+  results[[k]] <- parLapply(cl, chunks[[k]], boot_contrasts_one, expos = CONTRAST.EXPOS, fits = CONTRAST.FITS, mats = CONTRAST.MATS, draws = DRAWS, mean_offset = OFFSET.CBAR, share_r = SHARE.R, ploidy_shift = PLOIDY.SHIFT, methods = c("NB", "weighted"))
   done <- done + length(chunks[[k]])
   el   <- as.numeric(difftime(Sys.time(), t0, units = "mins"))
   eta  <- if (el > 0) (length(GENES) - done) * (el / done) else NA_real_

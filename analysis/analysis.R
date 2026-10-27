@@ -402,10 +402,10 @@ cat(sprintf("Genes retained: %d, minimum detected cells: %d\n", length(GENE.SET)
 # or (1 - c_i) / (1 - c-bar) (He), which has mean 1 and variance r_c = var(c) / c-bar^2 or r_e = var(c) / (1 - c-bar)^2, so an allele's apparent
 # dispersion is phi + (1 + phi) r. Given the cell's depth the observed share is a binomial draw around c_i, so var(c) is the observed variance
 # minus the binomial sampling variance (the cell's own share estimates it, with L - 1 as the finite-sample denominator).
-# The dispersion fits leave the share term in place, which is sound while r (1 + phi) stays a negligible fraction of phi. The check below sizes it
-# against the allele dispersions of a random sample of genes informative in both hybrid alleles, fitted with the Section 2 estimator and
-# offsets. SHARE.TOL is the largest acceptable share term as a fraction of the median allele dispersion; above it the term would need to be
-# modelled and a warning is issued.
+# Section 2 removes this term from every hybrid-allele dispersion (.fit_one(share_r)). The check below sizes it against the allele dispersions of a
+# random sample of genes informative in both hybrid alleles, fitted without the correction with the Section 2 estimator and offsets, so the
+# correction is reported next to what it corrects. SHARE.TOL is the fraction of the median allele dispersion above which the correction, and with it
+# the estimate of var(c), starts to matter, and a warning is issued.
 LIB.HYB   <- colSums(HYB.SC) + colSums(HYB.SE)
 C.HAT     <- colSums(HYB.SC) / LIB.HYB
 C.BAR     <- mean(C.HAT)
@@ -448,7 +448,7 @@ SHARE.DISP <- local({
   mats <- list(HYB.SC = HYB.SC, HYB.SE = HYB.SE); r <- c(HYB.SC = R.C, HYB.SE = R.E)
   rows <- vector("list", length(mats)); names(rows) <- names(mats)
   for (ds in names(mats)) {
-    phi <- fit_counts_dispersion(mats[[ds]][genes, , drop = FALSE], expo, "NB")[, "disp"]
+    phi <- fit_counts_dispersion(mats[[ds]][genes, , drop = FALSE], expo, 0, "NB")[, "disp"]
     pos <- phi[is.finite(phi) & phi > 0]
     rows[[ds]] <- data.frame(dataset = ds, n_genes = length(genes), share_at_poisson_limit = mean(phi[is.finite(phi)] == 0), r = r[[ds]],
                              median_phi = median(pos), share_term_at_median_phi = r[[ds]] * (1 + median(pos)),
@@ -458,11 +458,11 @@ SHARE.DISP <- local({
   }
   do.call(rbind, rows)
 })
-cat(sprintf("Share term r (1 + phi) in the hybrid allele dispersions (%d sampled genes; tolerance %g of the median phi)\n", N.SHARE.GENES, SHARE.TOL))
+cat(sprintf("Share correction r (1 + phi) of the hybrid allele dispersions (%d sampled genes; tolerance %g of the median phi)\n", N.SHARE.GENES, SHARE.TOL))
 print(SHARE.DISP, digits = 3, row.names = FALSE)
 write.csv(SHARE.DISP, file.path(TABLE.DIR, "transcriptome_share_dispersion_check.csv"), row.names = FALSE)
 if (any(SHARE.DISP$term_over_median_phi > SHARE.TOL))
-  warning(sprintf("the share term is %.2g of the median allele dispersion, above SHARE.TOL = %g; the allele dispersions need the share correction", max(SHARE.DISP$term_over_median_phi), SHARE.TOL))
+  warning(sprintf("the share correction is %.2g of the median allele dispersion, above SHARE.TOL = %g; the estimate of var(c) now matters for the allele dispersions", max(SHARE.DISP$term_over_median_phi), SHARE.TOL))
 
 # Checkpoint
 save(MIX.SC, MIX.SE, HYB.SC, HYB.SE, QC.SUMMARY, MULTIPLET.SUMMARY, MULTIPLET.CALIBRATION, MULTIPLET.K.SWEEP, GENE.QC.PATTERN, HYB.SHARE.SWEEP.N, MITO.SUMMARY,
@@ -501,10 +501,15 @@ EXPO.HYB.SE <- EXPO.HYB / 2
 stopifnot(all(c(EXPO.MIX.SC, EXPO.MIX.SE, EXPO.HYB) > 0))
 
 ## 2.0 Transcriptome share of the hybrid cells
-# The share C.HAT, its mean C.BAR, the mean-contrast offset OFFSET.CBAR and the size of the share term in the allele dispersions are
+# The share C.HAT, its mean C.BAR, the mean-contrast offset OFFSET.CBAR and the size of the share correction of the allele dispersions are
 # estimated and checked in Section 1.2. The hybrid cells are reordered above, so the per-cell share follows the same order.
 C.HAT <- C.HAT[HYB.ORD]
 stopifnot(isTRUE(all.equal(C.HAT, colSums(HYB.SC) / LIB.HYB)))
+# SHARE.R is the transcriptome share correction of every dataset's fits (.fit_one(share_r)): r_c for the Sc-allele datasets, r_e for the Se-allele
+# datasets, and 0 for the parents and the summed hybrid (whose own additive correction enters through share_sub).
+SHARE.R <- setNames(numeric(length(.DRAW.KEY)), names(.DRAW.KEY))
+SHARE.R[c("HYB.SC", "HYC.SC", "HYT.SC", "HYC.SC.N", "HYT.SC.N")] <- R.C
+SHARE.R[c("HYB.SE", "HYC.SE", "HYT.SE", "HYC.SE.N", "HYT.SE.N")] <- R.E
 
 # Seeds and resample counts for bootstrap, permutation, and coexpression steps
 N.BOOT <- 1000; SEED.BOOT <- 1            # bootstrap resamples
@@ -608,7 +613,7 @@ EXPO.HYC.SC.N <- EXPO.HYB.SC[SPLIT.IDX.DISP$c]; EXPO.HYT.SC.N <- EXPO.HYB.SC[SPL
 EXPO.HYC.SE.N <- EXPO.HYB.SE[SPLIT.IDX.DISP$c]; EXPO.HYT.SE.N <- EXPO.HYB.SE[SPLIT.IDX.DISP$t]
 
 # SPLIT.FIT.MATS/SPLIT.FIT.EXPOS hold 13 datasets, each with its own offsets (a hybrid allele S_H / 2,
-# HYB.COMB the summed S_H):
+# HYB.COMB the summed S_H); SHARE.R gives each dataset its transcriptome share correction:
 # 5 split-independent (MIX.SC, MIX.SE, HYB.SC, HYB.SE, HYB.COMB)
 # 4 at f_mean (HYC/HYT x SC/SE)
 # 4 at f_disp (HYC.N/HYT.N x SC/SE)
@@ -632,7 +637,7 @@ names(SPLIT.FIT.RESULTS) <- names(SPLIT.FIT.MATS)
 for (nm in names(SPLIT.FIT.MATS)) {
 cat(sprintf("[%s] fitting %-10s %d genes, %d cells\n", format(Sys.time(), "%H:%M:%S"), nm, nrow(SPLIT.FIT.MATS[[nm]]), ncol(SPLIT.FIT.MATS[[nm]])))
   flush.console()
-  SPLIT.FIT.RESULTS[[nm]] <- fit_counts_offset(SPLIT.FIT.MATS[[nm]], SPLIT.FIT.EXPOS[[nm]], cl = cl)
+  SPLIT.FIT.RESULTS[[nm]] <- fit_counts_offset(SPLIT.FIT.MATS[[nm]], SPLIT.FIT.EXPOS[[nm]], cl = cl, share_r = SHARE.R[[nm]])
 }
 cat(sprintf("split fits done: %d datasets in %.1f min\n", length(SPLIT.FIT.RESULTS), as.numeric(difftime(Sys.time(), t0, units = "mins"))))
 stopCluster(cl)
@@ -702,7 +707,7 @@ write.csv(FILTER.SUMMARY, file.path(TABLE.DIR, "gene_filter_summary.csv"),      
 ## Weighted method-of-moments fits of every gene in the 13 datasets, in the layout of SPLIT.FITS (MU, DISP; MEAN_CT and N_EXPR are shared), local
 ## and serial (a few seconds per dataset per thousand genes).
 SPLIT.FITS.W <- lapply(setNames(FILTER.GROUPS, FILTER.GROUPS), function(g) {
-  f <- fit_counts_dispersion(SPLIT.FIT.MATS[[g]], SPLIT.FIT.EXPOS[[g]], "weighted")
+  f <- fit_counts_dispersion(SPLIT.FIT.MATS[[g]], SPLIT.FIT.EXPOS[[g]], SHARE.R[[g]], "weighted")
   data.frame(MU = f[, "mu"], DISP = f[, "disp"], BOUNDARY = f[, "boundary"], CONVERGED = f[, "converged"],
              MEAN_CT = SPLIT.FITS[[g]]$MEAN_CT, N_EXPR = SPLIT.FITS[[g]]$N_EXPR, row.names = rownames(f))
 })
@@ -733,7 +738,7 @@ GENE.TABLE <- local({
   tab$inference_set <- rowSums(tab[, grep("^(raw|mean)_.*_valid$", names(tab))]) > 0
   tab$log_set <- rowSums(positive) == ncol(positive)
   ## The same fit statuses and eligibility flags for the weighted method of moments (SPLIT.FITS.W, one fit per gene and dataset on the
-  ## same exposures); the mean and the information floors are shared with NB, so only the dispersion differs.
+  ## same exposures and share corrections); the mean and the information floors are shared with NB, so only the dispersion differs.
   wstatus <- sapply(FILTER.GROUPS, gene_fit_status, fits = SPLIT.FITS.W)
   rownames(wstatus) <- genes
   for (g in FILTER.GROUPS) { tab[[paste0(g, ".w_disp")]] <- SPLIT.FITS.W[[g]]$DISP; tab[[paste0(g, ".w_status")]] <- wstatus[, g] }
@@ -815,10 +820,10 @@ DRAWS.REPS <- lapply(SEED.BOOT + seq_len(N.BOOT.REP) - 1, function(seed) make_dr
 ## The cluster scripts read the objects under their plain names, with GENES the genes to run, so the inputs are saved from an environment that
 ## holds the inference-set objects under those names.
 JOB.INPUTS <- list2env(list(CONTRAST.MATS = CONTRAST.MATS.INFER, CONTRAST.EXPOS = CONTRAST.EXPOS, CONTRAST.FITS = CONTRAST.FITS.INFER, GENES = GENES.INFER,
-                            DRAWS.REPS = DRAWS.REPS, N.BOOT = N.BOOT, OFFSET.CBAR = OFFSET.CBAR, PLOIDY.SHIFT = PLOIDY.SHIFT.INFER, PERMS = PERMS, N.PERM = N.PERM,
+                            DRAWS.REPS = DRAWS.REPS, N.BOOT = N.BOOT, SHARE.R = SHARE.R, OFFSET.CBAR = OFFSET.CBAR, PLOIDY.SHIFT = PLOIDY.SHIFT.INFER, PERMS = PERMS, N.PERM = N.PERM,
                             SEED.PERM = SEED.PERM, NULL.DRAWS = NULL.DRAWS))
-save(list = c("CONTRAST.MATS", "CONTRAST.EXPOS", "CONTRAST.FITS", "GENES", "DRAWS.REPS", "N.BOOT", "OFFSET.CBAR", "PLOIDY.SHIFT"), envir = JOB.INPUTS, file = file.path(INPUT.DIR, "gene_boot_inputs.rda"))
-save(list = c("CONTRAST.MATS", "CONTRAST.EXPOS", "CONTRAST.FITS", "GENES", "PERMS", "N.PERM", "SEED.PERM", "PLOIDY.SHIFT", "OFFSET.CBAR", "NULL.DRAWS"), envir = JOB.INPUTS, file = file.path(INPUT.DIR, "gene_perm_inputs.rda"))
+save(list = c("CONTRAST.MATS", "CONTRAST.EXPOS", "CONTRAST.FITS", "GENES", "DRAWS.REPS", "N.BOOT", "SHARE.R", "OFFSET.CBAR", "PLOIDY.SHIFT"), envir = JOB.INPUTS, file = file.path(INPUT.DIR, "gene_boot_inputs.rda"))
+save(list = c("CONTRAST.MATS", "CONTRAST.EXPOS", "CONTRAST.FITS", "GENES", "PERMS", "N.PERM", "SEED.PERM", "PLOIDY.SHIFT", "SHARE.R", "OFFSET.CBAR", "NULL.DRAWS"), envir = JOB.INPUTS, file = file.path(INPUT.DIR, "gene_perm_inputs.rda"))
 BOOT.CONTRASTS.REPS.INFER <- load_replicates("gene_boot", "BOOT.CONTRASTS", N.BOOT.REP, expected = length(GENES.INFER))
 BOOT.CONTRASTS.INFER <- BOOT.CONTRASTS.REPS.INFER[[1]]
 load(file.path(OUTPUT.DIR, "gene_perm_output.rda"))            # PERM.RESULTS
@@ -989,7 +994,7 @@ dev.off()
 # object that later sections read.
 save(GENES, GENES.INFER, GENE.TABLE, SPLIT.FITS.W, CONTRAST.FITS.INFER, PLOIDY.SHIFT.INFER, ANALYSIS.STATUS, ANALYSIS.COUNTS, ELIGIBLE.COUNTS, FIT.STATUS.COUNTS, FILTER.COUNTS, FILTER.SUMMARY, HYB.COMB, CONTRAST.FITS, CONTRAST.MATS, CONTRAST.EXPOS, SPLIT.FITS,
      BOOT.CONTRASTS, BURST.CONTRASTS, PERM.RESULTS, PR, PLOIDY.SHIFT, N.PERM,
-     HYB.SC, HYB.SE, EXPO.MIX.SC, EXPO.MIX.SE, EXPO.HYB.SC, EXPO.HYB.SE, EXPO.HYB, C.HAT, C.BAR, VAR.C, R.C, R.E, OFFSET.CBAR, SHARE.BOOT, SHARE.TABLE, SHARE.DISP, SPLIT.OFFSET,
+     HYB.SC, HYB.SE, EXPO.MIX.SC, EXPO.MIX.SE, EXPO.HYB.SC, EXPO.HYB.SE, EXPO.HYB, C.HAT, C.BAR, VAR.C, R.C, R.E, SHARE.R, OFFSET.CBAR, SHARE.BOOT, SHARE.TABLE, SHARE.DISP, SPLIT.OFFSET,
      WEIGHT.CHECK, ALLELE.DISP,
      N.COEXPR, SEED.COEXPR,
      SPLIT.IDX.MEAN, SPLIT.IDX.DISP, SPLIT.FRAC,

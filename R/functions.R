@@ -301,26 +301,30 @@ console_stop <- function() {
 ## ============================================================
 ## 1. OFFSET NEGATIVE-BINOMIAL FIT
 ## ============================================================
-# Offset NB fit for one gene. Counts follow y ~ NB(mean = exposure * mu, size = theta),
-# so mu is a per-unit-exposure rate, disp is the dispersion phi = 1/theta (the noise; larger = noisier) and
-# theta is the NB size, the quantity that behaves as burst frequency. The point estimates come from
-# .fit_one(): mu = sum(y)/sum(exposure), and theta is the NB likelihood maximizer given that mu
-# (disp = 0, theta = Inf when Pearson chi-square / df <= 1, i.e. no detectable overdispersion).
-# Every bootstrap, permutation and power-grid replicate fits with this same estimator, so an observed
-# value and the distribution it is compared against are measured identically. glm.nb supplies only
-# the asymptotic log-scale SEs; the log-scale SE of theta is the log-scale SE of phi.
-# Returns c(disp, mu, disp_logse, mu_logse, theta).
-neg_binom_fit_offset <- function(y, exposure) {
+# Offset NB fit for one gene. Counts follow y ~ NB(mean = exposure * mu, size = theta), so mu is a per-unit-exposure rate, disp is the dispersion
+# phi = 1/theta (the noise; larger = noisier) and theta is the NB size, the quantity that behaves as burst frequency. The point estimates come from
+# .fit_one(): mu = sum(y)/sum(exposure) is the ratio estimate, free of phi, and phi maximizes the Cox-Reid adjusted profile likelihood with every cell mean
+# held at its fitted value (disp = 0, theta = Inf when the adjusted slope at zero is not positive, i.e. no detectable overdispersion). Every bootstrap,
+# permutation and power-grid replicate fits with this same estimator, so an observed value and the distribution it is compared against are measured
+# identically. glm.nb supplies only the asymptotic log-scale SEs; the log-scale SE of theta is the log-scale SE of phi.
+# share_r and share_sub are the transcriptome share corrections of the group (see fit_dispersion()), 0 for a group that needs none. The informativeness
+# of the dispersion estimate (dispersion_class_stats()) is computed here for the observed fit; resamples carry the observed classes.
+# Returns c(disp, mu, disp_logse, mu_logse, theta, disp_app, hit_range, lrt, disp_upper, mbar, class, class_uncorrected).
+neg_binom_fit_offset <- function(y, exposure, share_r = 0, share_sub = 0) {
   if (!is.null(dim(y)))
     stop("neg_binom_fit_offset() takes one gene's counts; use fit_counts_offset() for a matrix")
-  na_out <- c(disp = NA_real_, mu = NA_real_, disp_logse = NA_real_, mu_logse = NA_real_, theta = NA_real_)
+  stat_names <- c("lrt", "disp_upper", "mbar", "class", "class_uncorrected")
+  na_out <- c(disp = NA_real_, mu = NA_real_, disp_logse = NA_real_, mu_logse = NA_real_, theta = NA_real_, disp_app = NA_real_, hit_range = NA_real_,
+              setNames(rep(NA_real_, length(stat_names)), stat_names))
   if (length(y) < 2 || length(exposure) != length(y)) return(na_out)
   keep <- is.finite(y) & is.finite(exposure) & exposure > 0
   y <- y[keep]; exposure <- exposure[keep]
   if (length(y) < 2) return(na_out)
 
-  core <- .fit_one(y, exposure)
-  out  <- c(disp = unname(core["disp"]), mu = unname(core["mu"]), disp_logse = NA_real_, mu_logse = NA_real_, theta = unname(core["theta"]))
+  core <- fit_dispersion(y, exposure, share_r, "NB", share_sub)
+  out  <- na_out
+  out[c("disp", "mu", "theta", "disp_app", "hit_range")] <- core[c("disp", "mu", "theta", "disp_app", "hit_range")]
+  out[stat_names] <- dispersion_class_stats(y, exposure, share_r, share_sub, fit = core)[stat_names]
   if (!is.finite(out[["theta"]])) return(out)
 
   logexp <- log(exposure)
@@ -334,29 +338,43 @@ neg_binom_fit_offset <- function(y, exposure) {
   out
 }
 
-# Bounds of the NB fit. The 1-D likelihood search runs over log(theta) in LOG.THETA.RANGE. A fitted
-# dispersion phi = 1/theta below PHI.FLOOR is indistinguishable from Poisson at any count the data can
-# resolve, so it is reported as phi = 0 (theta = Inf, the Poisson limit), and gene filters treat phi = 0
-# as not identifiable.
-PHI.FLOOR       <- 1e-6
+# Bounds of the dispersion search and the informativeness thresholds. The Cox-Reid fit maximizes over log(phi) in -rev(LOG.THETA.RANGE), phi from about
+# 3e-7 to 55; a maximum within 1e-3 of either end is recorded (hit_range). A dispersion class (dispersion_class_stats()) is resolved above zero when the
+# boundary likelihood-ratio test rejects Poisson at level CLASS.ALPHA, and resolved near zero when the upper 95% bound on phi times the mean fitted count
+# is below CLASS.EPS (the extra-Poisson variance as a fraction of the Poisson variance). Both thresholds are provisional, so sensitivity runs set them here.
 LOG.THETA.RANGE <- c(-4, 15)
+CLASS.ALPHA     <- 0.05
+CLASS.EPS       <- 0.1
 
-# The pipeline's single NB estimator: mu = sum(y)/sum(exposure), and theta = the NB size
-# from a 1-D likelihood maximization over log(theta) given that mu, after a Poisson-vs-NB
-# pre-check (Pearson chi-square / df <= 1 gives phi = 0, theta = Inf). The dispersion is
-# disp = phi = 1/theta. neg_binom_fit_offset() uses it for the observed fits, gene_boot.R and
-# gene_perm.R for every resample, and power_grid.R for the simulated observed contrast and its
-# null. Returns c(mu, disp, theta); base R only and RNG-free, so fork-safe.
+# .cr_loglik: the Cox-Reid adjusted profile log-likelihood of the dispersion for one gene in one group, as a function of phi. The mean is fixed at the ratio
+# estimate, so m_i = O_i mu-hat enters as data: ell(phi) = sum_i log NB(y_i; m_i, phi) - 0.5 log sum_i m_i / (1 + phi m_i). The second term is half the log
+# Fisher information for the mean and removes the first-order bias that the degree of freedom spent on the mean puts into phi. phi = 0 is the Poisson limit.
+.cr_loglik <- function(y, m) {
+  sm <- sum(m); lfy <- lgamma(y + 1)
+  function(phi) {
+    if (phi == 0) return(sum(y * log(m) - m - lfy) - 0.5 * log(sm))
+    k <- 1 / phi
+    sum(lgamma(y + k) - lgamma(k) - lfy + k * log(k / (k + m)) + y * log(m / (k + m))) - 0.5 * log(sum(m / (1 + phi * m)))
+  }
+}
+
+# The pipeline's single NB estimator: mu = sum(y)/sum(exposure), and phi = the maximizer of the Cox-Reid adjusted profile likelihood (.cr_loglik()) over
+# log(phi), with theta = 1 / phi. The maximum sits at the boundary phi = 0 (theta = Inf) when the adjusted slope at zero is not positive,
+# sum((y - m)^2) <= sum(m) - sum(m^2) / sum(m); with equal offsets this is the familiar sum((y - m)^2) <= (N - 1) m. neg_binom_fit_offset() uses it for the
+# observed fits, gene_boot.R and gene_perm.R for every resample, and power_grid.R for the simulated observed contrast and its null. Returns c(mu, disp, theta);
+# base R only and RNG-free, so fork-safe.
 #
-# Every dataset, hybrid alleles included, is fitted with this one estimator. Cell-to-cell variation of the Sc share multiplies a hybrid
-# allele's counts by the relative share factor u = c / c-bar (Hc) or (1 - c) / (1 - c-bar) (He), with mean 1 and variance
-# r = var(c) / c-bar^2 (or / (1 - c-bar)^2), so the apparent dispersion is phi + (1 + phi) r. At the observed share variance r is of the
-# order 1e-4, a fraction of a percent of a typical allele dispersion, and analysis.R Section 1.2 reports that fraction.
-.fit_one <- function(counts, expo) fit_dispersion(counts, expo, "NB")[c("mu", "disp", "theta")]
+# share_r and share_sub remove the variance that cell-to-cell variation in the transcriptome share adds to the dispersion. A hybrid allele is offset by half the
+# cell's hybrid depth, so its count carries the relative share factor u = c / c-bar (Hc) or (1 - c) / (1 - c-bar) (He), with mean 1 and variance
+# r = var(c) / c-bar^2 (or / (1 - c-bar)^2). The factor multiplies the gene's expression factor a (mean 1, variance phi), so the fitted value is
+# phi + (1 + phi) r and the corrected value is phi = (phi_fit - r) / (1 + r). The summed hybrid carries a different additive term (analysis.R Section 2.0),
+# passed as share_sub and subtracted after that ratio. Truncation at zero comes after the correction, so a corrected value at or below zero is reported
+# as phi = 0, the Poisson limit. share_r = share_sub = 0 (every parent) leaves the estimate unchanged.
+.fit_one <- function(counts, expo, share_r = 0, share_sub = 0) fit_dispersion(counts, expo, share_r, "NB", share_sub)[c("mu", "disp", "theta")]
 
 # fit_dispersion: the shared dispersion-fitting interface. Both methods take the same exposure-weighted mean,
 # mu = sum(y) / sum(exposure), then estimate the dispersion phi of Var(y_i) = M_i + phi M_i^2 with M_i = mu * exposure_i.
-#   "NB": the likelihood maximizer of the NB size given mu, after the Poisson pre-check (Pearson chi-square / df <= 1 is phi = 0).
+#   "NB": the maximizer of the Cox-Reid adjusted profile likelihood of phi (.fit_one()), with the boundary rule above.
 #   "weighted": a weighted method of moments that treats the NB only as a working model for the weights. With p_i = O_i / sum(O),
 #     r_i = y_i - M_i, A_i = M_i (1 - p_i) and B_i = M_i^2 (1 - 2 p_i) + p_i^2 sum(M^2), E[r_i^2] = A_i + phi B_i when mu is estimated
 #     from the same counts, so phi-hat = sum(w_i (r_i^2 - A_i)) / sum(w_i B_i). The working-NB weights
@@ -364,15 +382,19 @@ LOG.THETA.RANGE <- c(-4, 15)
 #     to the factor 2 M_i^2) enter through the root of the weighted moment equation sum(w(phi) (r_i^2 - A_i - phi B_i)) = 0 on
 #     [0, exp(-LOG.THETA.RANGE[1])], found with uniroot(), because the plain iteration phi <- f(w(phi)) can cycle between two
 #     values on sparse counts. No positive root gives phi = 0 and disp_raw keeps the signed unit-weight moment estimate.
-# Returns a named numeric vector:
-#   mu, disp (phi, 0 at the boundary), theta = 1 / disp (Inf at 0),
-#   disp_raw (phi before the floor at PHI.FLOOR, signed for the weighted fit, NA for an NB fit stopped by the Poisson pre-check),
-#   boundary (1 when disp = 0, a valid Poisson-limit estimate), converged (1 unless the fit failed) and iter (weighted only).
+# The transcriptome share correction (share_r, share_sub, see above) is applied after either fit. Returns a named numeric vector:
+#   mu, disp (the corrected phi, 0 at the boundary), theta = 1 / disp (Inf at 0),
+#   disp_app (the fitted phi before the share correction, 0 when the fit sits on the boundary),
+#   disp_raw (the corrected phi before the truncation at zero, signed),
+#   boundary (1 when disp = 0, a valid Poisson-limit estimate), converged (1 unless the fit failed), iter (weighted only) and
+#   hit_range (1 when the NB maximum lies within 1e-3 of either end of the search range, NB only).
 # NA mu and disp mean too few cells; mu = 0 and NA disp mean no counts; mu with NA disp is a failed fit.
-fit_dispersion <- function(counts, expo, method = c("NB", "weighted")) {
+fit_dispersion <- function(counts, expo, share_r = 0, method = c("NB", "weighted"), share_sub = 0) {
   method <- match.arg(method)
-  out <- c(mu = NA_real_, disp = NA_real_, theta = NA_real_, disp_raw = NA_real_,
-           boundary = NA_real_, converged = NA_real_, iter = NA_real_)
+  stopifnot(is.numeric(share_r), length(share_r) == 1, is.finite(share_r), share_r >= 0,
+            is.numeric(share_sub), length(share_sub) == 1, is.finite(share_sub), share_sub >= 0)
+  out <- c(mu = NA_real_, disp = NA_real_, theta = NA_real_, disp_app = NA_real_, disp_raw = NA_real_,
+           boundary = NA_real_, converged = NA_real_, iter = NA_real_, hit_range = NA_real_)
   keep <- is.finite(counts) & is.finite(expo) & expo > 0
   y <- counts[keep]; e <- expo[keep]
   if (length(y) < 2) return(out)
@@ -384,17 +406,19 @@ fit_dispersion <- function(counts, expo, method = c("NB", "weighted")) {
   mu_i <- mu_hat * e
   phi_app <- NA_real_
   if (method == "NB") {
-    pearson <- sum((y - mu_i)^2 / mu_i) / (length(y) - 1)
-    if (pearson <= 1) { out[c("disp", "theta", "boundary", "converged")] <- c(0, Inf, 1, 1); return(out) }
-
-    # NB log-likelihood in log(theta), with the means fixed at mu_i
-    opt <- tryCatch(optimize(function(ltheta) {
-      th <- exp(ltheta)
-      sum(lgamma(y + th) - lgamma(th) + th*log(th) - (th + y)*log(th + mu_i) + y*log(mu_i))
-    }, LOG.THETA.RANGE, maximum = TRUE), error = function(e) NULL)
-    if (is.null(opt)) { out[["converged"]] <- 0; return(out) }
-    phi_app <- exp(-opt$maximum)
+    slope0 <- sum((y - mu_i)^2) - sum(mu_i) + sum(mu_i^2) / sum(mu_i)       # twice the adjusted slope at phi = 0
     out[["converged"]] <- 1
+    if (slope0 <= 0) {
+      phi_app <- 0; out[["hit_range"]] <- 0                                 # the maximum sits on the boundary
+    } else {
+      lrange <- -rev(LOG.THETA.RANGE)
+      ll <- .cr_loglik(y, mu_i)
+      opt <- tryCatch(optimize(function(lp) ll(exp(lp)), lrange, maximum = TRUE), error = function(e) NULL)
+      if (is.null(opt)) { out[["converged"]] <- 0; return(out) }
+      phi_app <- exp(opt$maximum)
+      out[["hit_range"]] <- as.numeric(any(abs(opt$maximum - lrange) < 1e-3))
+    }
+    est <- phi_app
   } else {
     p  <- e / sum(e)
     A  <- mu_i * (1 - p)
@@ -419,18 +443,56 @@ fit_dispersion <- function(counts, expo, method = c("NB", "weighted")) {
       rt <- uniroot(g, c(0, upper), tol = 1e-10 * (1 + upper))
       phi_app <- rt$root; est <- rt$root; out[["iter"]] <- rt$iter
     }
-    out[["disp_raw"]] <- est
   }
-  if (method == "NB") out[["disp_raw"]] <- phi_app
-  if (phi_app < PHI.FLOOR) out[c("disp", "theta", "boundary")] <- c(0, Inf, 1)
-  else out[c("disp", "theta", "boundary")] <- c(phi_app, 1 / phi_app, 0)
+  out[["disp_app"]] <- phi_app
+  corrected <- (est - share_r) / (1 + share_r) - share_sub
+  out[["disp_raw"]] <- corrected
+  if (corrected <= 0) out[c("disp", "theta", "boundary")] <- c(0, Inf, 1)
+  else out[c("disp", "theta", "boundary")] <- c(corrected, 1 / corrected, 0)
   out
+}
+
+# dispersion_class_stats: the informativeness of one dispersion estimate (NB fit of one gene in one group). Three numbers describe the estimate: lrt, the
+# boundary likelihood-ratio statistic 2 [ell_CR(phi-hat) - ell_CR(0)], which under the Poisson null is an equal mixture of a point mass at zero and a
+# chi-square with one degree of freedom, so its critical value is qchisq(1 - 2 alpha, 1) (2.71 at alpha = 0.05); disp_upper, the largest phi at or above
+# phi-hat whose adjusted likelihood ratio with phi-hat stays within that critical value (found by uniroot on the log scale, from phi-hat or from the lower end
+# of the search range when phi-hat = 0); and mbar, the mean fitted count per cell. The class is 1 (resolved above zero) when lrt exceeds the critical value
+# and the corrected phi is positive, 2 (resolved near zero) when it is not class 1 and disp_upper * mbar < eps, and 3 (uninformative) otherwise. The share
+# correction is applied to phi-hat and to the bound before the class is assigned; the statistic comes from the fitted likelihood. class_uncorrected is the
+# class without the correction, so the genes the correction moves can be counted. A gene with no counts is class 3, too few cells give NA. fit is the
+# fit_dispersion() result for these counts when the caller already has it.
+dispersion_class_stats <- function(y, expo, share_r = 0, share_sub = 0, alpha = CLASS.ALPHA, eps = CLASS.EPS, fit = NULL) {
+  out <- c(lrt = NA_real_, disp_upper = NA_real_, mbar = NA_real_, class = NA_real_, class_uncorrected = NA_real_)
+  keep <- is.finite(y) & is.finite(expo) & expo > 0
+  y <- y[keep]; e <- expo[keep]
+  if (length(y) < 2) return(out)
+  if (sum(y) == 0) { out[c("mbar", "class", "class_uncorrected")] <- c(0, 3, 3); return(out) }
+  if (is.null(fit)) fit <- fit_dispersion(y, e, share_r, "NB", share_sub)
+  phi_app <- fit[["disp_app"]]
+  if (!is.finite(phi_app)) return(out)
+  crit <- qchisq(1 - 2 * alpha, 1)
+  m <- fit[["mu"]] * e
+  ll <- .cr_loglik(y, m); ll_hat <- ll(phi_app)
+  lrt <- if (phi_app > 0) 2 * (ll_hat - ll(0)) else 0
+  f <- function(lp) 2 * (ll_hat - ll(exp(lp))) - crit
+  lo <- max(log(phi_app), -LOG.THETA.RANGE[[2]]); hi <- -LOG.THETA.RANGE[[1]]
+  upper <- exp(hi)                                                          # the bound is capped at the top of the search range
+  if (lo < hi) {
+    grid <- unique(c(seq(lo, hi, by = 0.5), hi))
+    for (j in seq_along(grid)[-1])
+      if (f(grid[j]) > 0) { upper <- exp(uniroot(f, grid[c(j - 1, j)], tol = 1e-4)$root); break }
+  }
+  mbar <- mean(m)
+  correct <- function(p) max((p - share_r) / (1 + share_r) - share_sub, 0)
+  assign_class <- function(phi_x, up_x) if (lrt > crit && phi_x > 0) 1 else if (up_x * mbar < eps) 2 else 3
+  c(lrt = lrt, disp_upper = correct(upper), mbar = mbar,
+    class = assign_class(correct(phi_app), correct(upper)), class_uncorrected = assign_class(phi_app, upper))
 }
 
 # .fit_m: one fit by the chosen dispersion method, as c(mu, disp, theta): "NB" is .fit_one(), "weighted" the weighted method of moments of
 # fit_dispersion(). The null helpers below take the method so a permutation null can be run with either estimator on the same relabelings.
-.fit_m <- function(counts, expo, method = "NB") {
-  if (method == "NB") .fit_one(counts, expo) else fit_dispersion(counts, expo, method)[c("mu", "disp", "theta")]
+.fit_m <- function(counts, expo, share_r = 0, method = "NB", share_sub = 0) {
+  if (method == "NB") .fit_one(counts, expo, share_r, share_sub) else fit_dispersion(counts, expo, share_r, method, share_sub)[c("mu", "disp", "theta")]
 }
 
 # Splits a pooled sample at position n1 of a pre-drawn index permutation and fits each
@@ -440,33 +502,39 @@ fit_dispersion <- function(counts, expo, method = c("NB", "weighted")) {
 .fit_split <- function(counts, expo, perm, n1, method = "NB") {
   stopifnot(n1 >= 1, n1 <= length(perm))
   g1 <- perm[seq_len(n1)]; g0 <- perm[seq_along(perm) > n1]   # empty second group when n1 == length(perm)
-  list(a = .fit_m(counts[g1], expo[g1], method), b = .fit_m(counts[g0], expo[g0], method))
+  list(a = .fit_m(counts[g1], expo[g1], 0, method), b = .fit_m(counts[g0], expo[g0], 0, method))
 }
 
 ## Fits every gene (row) of a genes x cells matrix against one shared exposure vector
 ## with neg_binom_fit_offset() and returns a per-gene table: DISP (dispersion phi = 1/theta), MU, their log
-## SEs, MEAN_CT, N_EXPR, and derived VAR, FANO, CV and BSIZE (MU * DISP).
+## SEs, MEAN_CT, N_EXPR, and derived VAR, FANO, CV and BSIZE (MU * DISP), with the fit's DISP_APP (phi before the share correction), HIT_RANGE
+## and the informativeness columns LRT, DISP_UPPER, MBAR, CLASS and CLASS_UNCORRECTED (dispersion_class_stats()). share_r is the transcriptome share
+## correction of the dataset (0 for a parent; r_c or r_e for a hybrid allele) and share_sub the additive correction of the summed hybrid, one value or one
+## per gene (see .fit_one()).
 ## cl is optional: NULL fits on one core; a PSOCK cluster from parallel::makeCluster() splits
 ## the genes into one chunk per worker, each chunk carrying all cells for its genes. A PSOCK
 ## worker starts with an empty workspace, so the functions the fit needs are sent to it here:
 ## fit_counts_offset() and everything it reaches are found from the code itself
 ## (codetools::findGlobals), so a new dependency of the fit reaches the workers without
 ## editing a list. Genes are fit independently, so chunks need no communication.
-fit_counts_offset <- function(mat, exposure, cl = NULL) {
-  stopifnot(ncol(mat) == length(exposure))
+fit_counts_offset <- function(mat, exposure, cl = NULL, share_r = 0, share_sub = 0) {
+  stopifnot(ncol(mat) == length(exposure), length(share_sub) %in% c(1, nrow(mat)))
+  if (length(share_sub) == 1) share_sub <- rep(share_sub, nrow(mat))
   if (is.null(cl))
     return(do.call(rbind, lapply(seq_len(nrow(mat)), function(i) {
       ## One NB fit per gene. DISP is the dispersion phi (the noise); theta = 1 / phi, the NB size, behaves as
       ## burst frequency. BSIZE = MU * DISP (mean count per burst) is a separate derived quantity. Every noise
       ## contrast in the pipeline is a contrast of DISP, so a log2 DISP contrast is the negative of the log2 theta contrast.
       y <- mat[i, ]
-      f <- neg_binom_fit_offset(y, exposure)
+      f <- neg_binom_fit_offset(y, exposure, share_r, share_sub[[i]])
       disp <- f[["disp"]]; mu <- f[["mu"]]
       data.frame(
         DISP = disp, MU = mu, DISP_LOGSE = f[["disp_logse"]], MU_LOGSE = f[["mu_logse"]],
         MEAN_CT = sum(y) / length(y), N_EXPR = sum(y > 0),
         VAR = mu + mu^2 * disp, FANO = 1 + mu * disp, CV = sqrt(disp + 1 / mu),
         BSIZE = mu * disp,
+        DISP_APP = f[["disp_app"]], HIT_RANGE = f[["hit_range"]], LRT = f[["lrt"]], DISP_UPPER = f[["disp_upper"]], MBAR = f[["mbar"]],
+        CLASS = f[["class"]], CLASS_UNCORRECTED = f[["class_uncorrected"]],
         row.names = rownames(mat)[i])
     })))
 
@@ -481,7 +549,8 @@ fit_counts_offset <- function(mat, exposure, cl = NULL) {
   mat_chunks <- split.data.frame(mat, chunk_id)
   parallel::clusterEvalQ(cl, suppressPackageStartupMessages(library(MASS)))
   parallel::clusterExport(cl, needed, envir = globalenv())
-  fit_chunks <- parallel::parLapply(cl, mat_chunks, fit_counts_offset, exposure = exposure)
+  sub_chunks <- split(share_sub, chunk_id)
+  fit_chunks <- parallel::clusterMap(cl, fit_counts_offset, mat = mat_chunks, share_sub = sub_chunks, MoreArgs = list(exposure = exposure, share_r = share_r), SIMPLIFY = FALSE, USE.NAMES = FALSE)
   ## unname() before rbind() keeps the gene row names unprefixed by the chunk labels.
   do.call(rbind, unname(fit_chunks))
 }
@@ -3407,9 +3476,9 @@ gene_fit_status <- function(g, fits) {
 }
 
 ## fit_counts_dispersion: fit_dispersion() on every gene (row) of a genes x cells matrix against one exposure vector, returned as a genes x
-## (mu, disp, boundary, converged) matrix; method is the estimator ("NB" or "weighted").
-fit_counts_dispersion <- function(mat, expo, method = "weighted") {
-  out <- t(vapply(seq_len(nrow(mat)), function(i) fit_dispersion(mat[i, ], expo, method)[c("mu", "disp", "boundary", "converged")], numeric(4)))
+## (mu, disp, boundary, converged) matrix. share_r is the dataset's transcriptome share correction and method the estimator ("NB" or "weighted").
+fit_counts_dispersion <- function(mat, expo, share_r = 0, method = "weighted") {
+  out <- t(vapply(seq_len(nrow(mat)), function(i) fit_dispersion(mat[i, ], expo, share_r, method)[c("mu", "disp", "boundary", "converged")], numeric(4)))
   rownames(out) <- rownames(mat)
   out
 }
@@ -3527,18 +3596,19 @@ fit_ratio_axes <- function(fa, fb, raw = FALSE) {
 
 ## null_cis_fits: the two fits behind one draw of the cis null, list(a = the swapped Sc position, b = the swapped Se position); arguments as in
 ## null_cis_axes(), which contrasts them.
-null_cis_fits <- function(sc, se, expo_sc, expo_se, swap, method = "NB") {
-  list(a = .fit_m(ifelse(swap, se, sc), ifelse(swap, expo_se, expo_sc), method),
-       b = .fit_m(ifelse(swap, sc, se), ifelse(swap, expo_sc, expo_se), method))
+null_cis_fits <- function(sc, se, expo_sc, expo_se, swap, share_r = c(0, 0), method = "NB") {
+  list(a = .fit_m(ifelse(swap, se, sc), ifelse(swap, expo_se, expo_sc), share_r[[1]], method),
+       b = .fit_m(ifelse(swap, sc, se), ifelse(swap, expo_sc, expo_se), share_r[[2]], method))
 }
 
 ## null_cis_axes: one draw of the cis null for hybrid cells with allele counts sc, se and the offsets
 ## expo_sc, expo_se of the two alleles (equal in the pipeline, S_H / 2). swap (logical per cell) exchanges the two alleles
-## within a cell, count and offset together, which keeps the allele pairing; the
+## within a cell, count and offset together, which keeps the allele pairing; share_r holds the
+## transcriptome share corrections of the first and second fit (the Sc and Se allele positions, .fit_one()); the
 ## contrast is the swapped Sc allele against the swapped Se allele (fit_ratio_axes(); raw adds the raw difference, method picks the estimator). Shared by
 ## permute_contrasts_one() and the power grid (which passes one exposure for both alleles).
-null_cis_axes <- function(sc, se, expo_sc, expo_se, swap, raw = FALSE, method = "NB") {
-  f <- null_cis_fits(sc, se, expo_sc, expo_se, swap, method)
+null_cis_axes <- function(sc, se, expo_sc, expo_se, swap, share_r = c(0, 0), raw = FALSE, method = "NB") {
+  f <- null_cis_fits(sc, se, expo_sc, expo_se, swap, share_r, method)
   fit_ratio_axes(f$a, f$b, raw)
 }
 
@@ -3804,7 +3874,8 @@ fit_group_values <- function(fits, g) {
 }
 
 ## boot_contrasts_one: one gene's bootstrap contrasts across all modes (the unit of work a cluster worker does). draws holds every resample
-## index set, drawn before any fit so replicates are independent. mean_offset is the share offset log2[c-bar / (1 - c-bar)]
+## index set, drawn before any fit so replicates are independent. share_r is the named vector of transcriptome share corrections
+## (SHARE.R, one per dataset) applied to the hybrid-allele refits; NULL means no correction. mean_offset is the share offset log2[c-bar / (1 - c-bar)]
 ## (OFFSET.CBAR) that .contrast_value() subtracts from the cis mean contrast. ploidy_shift is the named
 ## per-gene shift (PLOIDY.SHIFT) that puts the raw dpar contrasts on the parents' per-genome scale; NULL means none.
 ## Each draw yields the log2 contrasts of phi (rows need phi > 0 in every group) and the raw differences of phi (rows need a
@@ -3812,10 +3883,12 @@ fit_group_values <- function(fits, g) {
 ## methods lists the dispersion estimators: "NB" is the pipeline estimator (the fits table and .fit_one() refits); adding "weighted"
 ## refits every resample with fit_dispersion(method = "weighted") on the same cells and adds the wdisp_* (log2) and wrdisp_* (raw)
 ## columns, so the two estimators are compared on identical resamples. The mean axis stays with NB.
-boot_contrasts_one <- function(g, expos, fits, mats, draws, mean_offset, ploidy_shift = NULL, methods = "NB") {
+boot_contrasts_one <- function(g, expos, fits, mats, draws, mean_offset, share_r = NULL, ploidy_shift = NULL, methods = "NB") {
   stopifnot(all(methods %in% c("NB", "weighted")), "NB" %in% methods, is.numeric(mean_offset), length(mean_offset) == 1, is.finite(mean_offset))
   do_w <- "weighted" %in% methods
   shift <- if (is.null(ploidy_shift)) 0 else unname(ploidy_shift[g])
+  if (is.null(share_r)) share_r <- setNames(numeric(length(.DRAW.KEY)), names(.DRAW.KEY))
+  stopifnot(all(names(.DRAW.KEY) %in% names(share_r)), all(is.finite(share_r)), all(share_r >= 0))
   B <- length(draws); modes <- names(.MODES)
   mcol <- paste0("m.", modes); scol <- paste0("s.", modes); ccol <- paste0("c.", modes); rcol <- paste0("r.", modes)
   M <- matrix(NA_real_, B, 4 * length(modes), dimnames = list(NULL, c(mcol, scol, ccol, rcol)))
@@ -3824,16 +3897,16 @@ boot_contrasts_one <- function(g, expos, fits, mats, draws, mean_offset, ploidy_
   BQ <- matrix(NA_real_, B, 4 * length(.OUT_MODES), dimnames = list(NULL, c(paste0("rb.", .OUT_MODES), paste0("rk.", .OUT_MODES), paste0("wrb.", .OUT_MODES), paste0("wrk.", .OUT_MODES))))
   for (b in seq_len(B)) {
     d <- draws[[b]]
-    ## Each dataset is refit on the resample of its draw key (.DRAW.KEY) with its own offsets, so the two alleles of a resampled
-    ## cell stay paired.
+    ## Each dataset is refit on the resample of its draw key (.DRAW.KEY) with its own offsets and, for a hybrid allele, its
+    ## transcriptome share correction (share_r, .fit_one()), so the two alleles of a resampled cell stay paired.
     f <- vector("list", length(.DRAW.KEY)); names(f) <- names(.DRAW.KEY)
     for (grp in names(f)) {
       key <- .DRAW.KEY[[grp]]
-      f[[grp]] <- .fit_one(mats[[grp]][g, d[[key]]], expos[[grp]][d[[key]]])
+      f[[grp]] <- .fit_one(mats[[grp]][g, d[[key]]], expos[[grp]][d[[key]]], share_r[[grp]])
     }
     if (do_w) {
       gv.w <- lapply(names(.DRAW.KEY), function(grp) { key <- .DRAW.KEY[[grp]]
-        unname(fit_dispersion(mats[[grp]][g, d[[key]]], expos[[grp]][d[[key]]], "weighted")[["disp"]]) })
+        unname(fit_dispersion(mats[[grp]][g, d[[key]]], expos[[grp]][d[[key]]], share_r[[grp]], "weighted")[["disp"]]) })
       names(gv.w) <- names(.DRAW.KEY)
       for (k in seq_along(modes)) W[b, c(paste0("ws.", modes[k]), paste0("wr.", modes[k]))] <- .disp_contrasts(modes[k], gv.w, shift)
     }
@@ -3869,7 +3942,7 @@ boot_contrasts_one <- function(g, expos, fits, mats, draws, mean_offset, ploidy_
   pc <- vapply(modes, .contrast_value, numeric(1), fv$cv2,  "CV2")
   pr <- vapply(modes, function(m) { bf <- unlist(fv$disp[.MODES[[m]]]); if (all(is.finite(bf) & bf >= 0)) .contrast_raw(m, fv$disp, shift) else NA_real_ }, numeric(1))
   if (do_w) {
-    fw <- lapply(names(.DRAW.KEY), function(grp) unname(fit_dispersion(mats[[grp]][g, ], expos[[grp]], "weighted")[["disp"]]))
+    fw <- lapply(names(.DRAW.KEY), function(grp) unname(fit_dispersion(mats[[grp]][g, ], expos[[grp]], share_r[[grp]], "weighted")[["disp"]]))
     names(fw) <- names(.DRAW.KEY)
     pw <- vapply(modes, .disp_contrasts, numeric(2), fw, shift)
     sw <- apply(W, 2, sd, na.rm = TRUE)
@@ -3931,11 +4004,14 @@ boot_contrasts_one <- function(g, expos, fits, mats, draws, mean_offset, ploidy_
 ## contrasts (mean, disp, CV2, bsize, kbal) with the null by a two-sided permutation p, and adds ploidy-adjusted p-values for the dpar
 ## contrasts. bsize and kbal nulls recombine the mean and disp null draws of the same permutation.
 ## resamples (a make_draws() list, NULL for none) and methods add the resampling null of the trans test, described where it is computed.
+## The cis nulls apply the transcriptome share correction of each position (share_r); the trans, dom and dpar nulls pool parent and hybrid cells
+## into relabeled groups, where no group is one allele, and fit them without it (the correction is at most r (1 + phi), about 1e-4).
 ## mean_offset is the share offset log2[c-bar / (1 - c-bar)] (OFFSET.CBAR) that .contrast_value() subtracts from the observed cis and trans mean
 ## contrasts. The cis swap null and the trans pooled null are centred at zero on the mean axis, and the offset puts the observed contrast of a
 ## gene without an effect at zero too, so the p-value compares like with like. Observed and null fits use the same estimator.
-permute_contrasts_one <- function(g, expos, fits, mats, perms, ploidy_shift, mean_offset, seed = 1, resamples = NULL, methods = "NB") {
+permute_contrasts_one <- function(g, expos, fits, mats, perms, ploidy_shift, mean_offset, seed = 1, share_r = NULL, resamples = NULL, methods = "NB") {
   stopifnot(all(methods %in% c("NB", "weighted")), "NB" %in% methods, is.numeric(mean_offset), length(mean_offset) == 1, is.finite(mean_offset))
+  if (is.null(share_r)) share_r <- setNames(numeric(length(.DRAW.KEY)), names(.DRAW.KEY))
   if (!is.numeric(seed) || length(seed) != 1 || !is.finite(seed)) stop("permute_contrasts_one(): seed must be one finite number")
   l2 <- log2; B <- length(perms); modes <- names(.MODES)
   Nm <- matrix(NA_real_, B, length(modes), dimnames = list(NULL, modes))
@@ -3966,7 +4042,7 @@ permute_contrasts_one <- function(g, expos, fits, mats, perms, ploidy_shift, mea
   obs.r <- oc_nb["raw", ]
   gvw <- NULL
   if (do_w) {
-    gvw <- lapply(setNames(names(.DRAW.KEY), names(.DRAW.KEY)), function(k) unname(fit_dispersion(mats[[k]][g, ], expos[[k]], "weighted")[["disp"]]))
+    gvw <- lapply(setNames(names(.DRAW.KEY), names(.DRAW.KEY)), function(k) unname(fit_dispersion(mats[[k]][g, ], expos[[k]], share_r[[k]], "weighted")[["disp"]]))
     oc_w <- vapply(modes, .disp_contrasts, numeric(2), gvw)
     obs.ws <- oc_w["log", ]; obs.wr <- oc_w["raw", ]
     mp.sw <- 0.5 * (l2(gvw[["MIX.SC"]]) + l2(gvw[["MIX.SE"]]))
@@ -4003,11 +4079,11 @@ permute_contrasts_one <- function(g, expos, fits, mats, perms, ploidy_shift, mea
       for (kd in c("bsize", "kbal")) stb("total", kd, qq(sp$a, sp$a, kd) - qq(sp$b, sp$b, kd))
 
       ## cis swap: a swapped allele carries its own library offset, so every count keeps its offset
-      cm <- null_cis_fits(cHYCsc, cHYCse, expos$HYC.SC, expos$HYC.SE, p$cis, mt)
+      cm <- null_cis_fits(cHYCsc, cHYCse, expos$HYC.SC, expos$HYC.SE, p$cis, share_r[c("HYC.SC", "HYC.SE")], mt)
       st(b, "cis", fit_ratio_axes(cm$a, cm$b, raw = TRUE))
       ## Noise-split (f_disp) version of the cis null, used only for
       ## the disp_cis/cv2_cis output columns, mirroring cis_n in .MODES
-      cn <- null_cis_fits(cHYCsc.N, cHYCse.N, expos$HYC.SC.N, expos$HYC.SE.N, p$cis_n, mt)
+      cn <- null_cis_fits(cHYCsc.N, cHYCse.N, expos$HYC.SC.N, expos$HYC.SE.N, p$cis_n, share_r[c("HYC.SC.N", "HYC.SE.N")], mt)
       st(b, "cis_n", fit_ratio_axes(cn$a, cn$b, raw = TRUE))
       for (kd in c("bsize", "kbal")) stb("cis", kd, qq(cm$a, cn$a, kd) - qq(cm$b, cn$b, kd))
 
@@ -4019,7 +4095,7 @@ permute_contrasts_one <- function(g, expos, fits, mats, perms, ploidy_shift, mea
       st(b, "trans_n", fit_ratio_axes(tn$sc_a, tn$se_a, raw = TRUE) - fit_ratio_axes(tn$sc_b, tn$se_b, raw = TRUE))
       for (kd in c("bsize", "kbal")) stb("trans", kd, (qq(tm$sc_a, tn$sc_a, kd) - qq(tm$se_a, tn$se_a, kd)) - (qq(tm$sc_b, tn$sc_b, kd) - qq(tm$se_b, tn$se_b, kd)))
 
-      fs <- .fit_m(synth, es, mt)
+      fs <- .fit_m(synth, es, 0, mt)
       par_q <- function(kind) 0.5 * (.burst_q(gvmu[["MIX.SC"]], gv_phi[["MIX.SC"]], kind) + .burst_q(gvmu[["MIX.SE"]], gv_phi[["MIX.SE"]], kind))
       for (kd in c("bsize", "kbal")) stb("dom", kd, qq(fs, fs, kd) - par_q(kd))
       if (mt == "NB") {
@@ -4143,7 +4219,7 @@ permute_contrasts_one <- function(g, expos, fits, mats, perms, ploidy_shift, mea
     for (b in seq_len(R)) {
       d <- resamples[[b]]
       fb <- lapply(setNames(grp, grp), function(k) { ix <- d[[.DRAW.KEY[[k]]]]
-        .fit_one(mats[[k]][g, ix], expos[[k]][ix]) })
+        .fit_one(mats[[k]][g, ix], expos[[k]][ix], share_r[[k]]) })
       mu_b <- lapply(fb, `[[`, "mu"); ds_b <- lapply(fb, `[[`, "disp")
       mm <- .contrast_value("trans", mu_b, "MU", mean_offset); if (is.finite(mm)) Dm[b] <- mm
       dc <- .disp_contrasts("trans_n", ds_b); Ds[b] <- dc[["log"]]; Dr[b] <- dc[["raw"]]
@@ -4152,7 +4228,7 @@ permute_contrasts_one <- function(g, expos, fits, mats, perms, ploidy_shift, mea
       if (all(is.finite(unlist(cv_b[.MODES$trans_n])))) Dc[b] <- .contrast_value("trans_n", cv_b, "CV2")
       if (do_w) {
         dw <- lapply(setNames(grp, grp), function(k) { ix <- d[[.DRAW.KEY[[k]]]]
-          unname(fit_dispersion(mats[[k]][g, ix], expos[[k]][ix], "weighted")[["disp"]]) })
+          unname(fit_dispersion(mats[[k]][g, ix], expos[[k]][ix], share_r[[k]], "weighted")[["disp"]]) })
         wc <- .disp_contrasts("trans_n", dw); Dws[b] <- wc[["log"]]; Dwr[b] <- wc[["raw"]]
         Dq[b, "wrb"] <- .contrast_burst_raw("trans", mu_b, dw, "bsize"); Dq[b, "wrk"] <- .contrast_burst_raw("trans", mu_b, dw, "kbal")
       }
@@ -4169,7 +4245,7 @@ permute_contrasts_one <- function(g, expos, fits, mats, perms, ploidy_shift, mea
     out$rbsize_trans_p <- shift_p(obs_burst("trans", gvbf, "bsize"), Dq[, "rb"])
     out$rkbal_trans_p  <- shift_p(obs_burst("trans", gvbf, "kbal"),  Dq[, "rk"])
     if (do_w) {
-      fw <- lapply(setNames(grp, grp), function(k) unname(fit_dispersion(mats[[k]][g, ], expos[[k]], "weighted")[["disp"]]))
+      fw <- lapply(setNames(grp, grp), function(k) unname(fit_dispersion(mats[[k]][g, ], expos[[k]], share_r[[k]], "weighted")[["disp"]]))
       wo <- .disp_contrasts("trans_n", fw)
       out$wdisp_trans_p  <- shift_p(wo[["log"]], Dws)
       out$wrdisp_trans_p <- shift_p(wo[["raw"]], Dwr)

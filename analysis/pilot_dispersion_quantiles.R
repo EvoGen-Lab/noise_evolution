@@ -19,8 +19,8 @@ SETS <- c(Pc = "MIX.SC", Pe = "MIX.SE", Hc = "HYB.SC", He = "HYB.SE")   # label 
 QUANTILE.PROBS <- c(0.01, 0.05, 0.10, 0.25, 0.50, 0.75, 0.90, 0.95, 0.99)
 
 ## .fit_one() returns the dispersion phi in the current code (disp = phi, theta = 1 / phi). The earlier code returned the NB
-## size theta in disp, so phi is 1 / disp there. PHI.FLOOR exists only in the current code.
-PHI.IS.DISP <- exists("PHI.FLOOR")
+## size theta in disp, so phi is 1 / disp there. fit_dispersion() exists only in the current code.
+PHI.IS.DISP <- exists("fit_dispersion")
 cat(if (PHI.IS.DISP) "functions.R returns phi in disp\n" else "functions.R is the earlier version: disp is theta, phi = 1 / disp\n")
 
 ## One phi per pilot gene and dataset. A gene with no counts, a failed fit or phi = 0 (Poisson limit) has no log10 phi.
