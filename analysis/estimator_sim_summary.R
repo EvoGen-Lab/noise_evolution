@@ -107,7 +107,7 @@ cat(sprintf("Achieved sigma2_C|c in the simulation / that implied by the Hc and 
             median(AGREE$var_cc_sim / (AGREE$cbar^2 * (1 - AGREE$cbar)^2 * (VAR.EPS[["HC"]] + VAR.EPS[["HE"]])))))
 
 ## ---- 4. contrasts: fitted against truth and against the predicted correction ----------------------
-CON <- EST[EST$target %in% c("cis", "trans", "dpar_Pc", "dpar_Pe", "dom") & EST$usable, ]
+CON <- EST[EST$target %in% c("cis", "trans", "par_Pc", "par_Pe", "mid") & EST$usable, ]
 CSPLIT <- split(CON, list(CON$target, CON$est, CON$scenario), drop = TRUE)
 TAB.CON <- data.frame(
   target = vapply(CSPLIT, function(d) d$target[1], ""), est = vapply(CSPLIT, function(d) d$est[1], ""), scenario = vapply(CSPLIT, function(d) d$scenario[1], ""),

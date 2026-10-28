@@ -1,7 +1,7 @@
 ###############################################################
 ### gene_pilot.R
 ### Reads the pilot inputs, runs the per-gene internal-pilot
-### bootstrap (SE of log mu and log disp, undivided hybrid and
+### bootstrap (SE of log mu, log disp and log kinetic balance, undivided hybrid and
 ### parents) on a FORK cluster, saves the output. Mirrors the
 ### structure of gene_boot.R exactly; this is the same
 ### kind of per-gene, per-replicate bootstrap, just over four
@@ -11,7 +11,7 @@
 ### Inputs  : gene_pilot_inputs.rda  (PILOT.MATS, PILOT.EXPOS,
 ###           PILOT.GENES, N.BOOT, SEED.BOOT)
 ### Output  : gene_pilot_output.rda  (PILOT.SE, one row per gene: bootstrap SEs of
-###           log mu and log disp for the four datasets, plus the bootstrap covariance of
+###           log mu, log disp and log kinetic balance for the four datasets, plus the bootstrap covariance of
 ###           the two hybrid alleles' estimates, which share their resampled cells)
 ###############################################################
 
@@ -44,7 +44,7 @@ for (k in seq_along(chunks)) {
   ## A and B, plus the bootstrap covariance between the two hybrid alleles. HYB.SC and HYB.SE
   ## are refit on the SAME resampled cell indices in each replicate because the two alleles
   ## are measured in the same cells; their log estimates therefore co-vary across replicates
-  ## (HYB_logmu_cov, HYB_logdisp_cov), and the variance of the allele contrast is
+  ## (HYB_logmu_cov, HYB_logdisp_cov, HYB_logkbal_cov), and the variance of the allele contrast is
   ## var(SC) + var(SE) - 2 cov(SC, SE), which estimate_f_star() uses for A.
   ##
   ## The RNG is seeded from a hash of the gene's own name and the resamples are

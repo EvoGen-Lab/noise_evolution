@@ -9,7 +9,7 @@
 ### Inputs  : coexpr_boot_inputs.rda (RESID, COEXPR.POINT, DRAWS.COEXPR.REPS:
 ###           one set of pre-drawn resamples per bootstrap replicate)
 ### Output  : coexpr_boot_output_<k>of<K>.rda for array task k of K, holding
-###           CB (CB$total, CB$cis, CB$trans, CB$dpar_sc, CB$dpar_se,
+###           CB (CB$total, CB$cis, CB$trans, CB$par_sc, CB$par_se,
 ###           CB$lambda) for replicate k. Task k uses DRAWS.COEXPR.REPS[[k]];
 ###           replicate 1 is the reported bootstrap and the others check seed
 ###           adequacy.
@@ -32,7 +32,7 @@ source("functions.R")
 write_pkg_versions("coexpr_boot")   # R and package versions of this job, compared with renv.lock by check_pkg_versions()
 
 ## The five decompositions the co-expression bootstrap tracks, in the order each draw returns them.
-.COEXPR_PARTS <- c("total", "cis", "trans", "dpar_sc", "dpar_se")
+.COEXPR_PARTS <- c("total", "cis", "trans", "par_sc", "par_se")
 
 load("coexpr_boot_inputs.rda")     # RESID, COEXPR.POINT, DRAWS.COEXPR.REPS
 
@@ -84,7 +84,7 @@ for (k in seq_along(chunks)) {
   ## One bootstrap draw per task. A draw (from make_coexpr_draws()) resamples the columns of each RESID
   ## dataset. HYB.SC, HYB.SE and HYB.COMB take the same H draw because they are the same cells, and the
   ## per-gene ploidy factors are fixed, so every draw rescales Rhyb identically. Each task returns
-  ## total/cis/trans/dpar_sc/dpar_se at the upper-triangle pair positions.
+  ## total/cis/trans/par_sc/par_se at the upper-triangle pair positions.
   chunk.results <- parLapply(cl, DRAWS.COEXPR[chunks[[k]]], coexpr_bootstrap_one, resid = RESID)
   ## Fold this chunk's draws into the running sums and draw count; the raw draws are then discarded.
   ACC <- local({
