@@ -1305,7 +1305,7 @@ RESID <- list(
 ## latent deviation. Private allele noise does not correlate across genes, so
 ## the shared term e carries the whole covariance. Summing alleles leaves that
 ## covariance unchanged and only lowers each gene's latent variance by
-## g = 2^-s (see ploidy_shift), which lowers phi by g, so the
+## g = 2^-s (s the ploidy shift delta, ploidy_components()), which lowers phi by g, so the
 ## haploid-equivalent phi is phi / g. The covariance stays fixed, so the
 ## haploid-equivalent correlation equals the hybrid's times sd_h / sd_c for
 ## each gene, with sd_h^2 = mu + phi * mu^2 and sd_c^2 = mu + phi * mu^2 / g.
