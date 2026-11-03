@@ -184,7 +184,7 @@ a1_row <- function(i, grid, nrep, offsets, streams) with_stream(streams[[i]], {
 ## a2_one: one random dataset of A2. (a) The closed-form adjusted slope at phi = 0, 0.5 [sum (y - m)^2 - sum m + sum m^2 / sum m], against a forward finite
 ## difference at h = 1e-8 of the adjusted log-likelihood in its stable form (and of the lgamma form the optimizer uses, for its rounding error).
 ## (b) The fitted phi (fit_dispersion()) against a 2000-point grid over log phi on the search range: the grid finds a better interior maximum when its best
-## adjusted log-likelihood exceeds that at the fitted phi by more than tol.
+## adjusted log-likelihood exceeds that at the fitted phi by more than tol, and that point is interior when it is not an end of the grid.
 a2_one <- function(i, streams, h = 1e-8, n_grid = 2000, tol = 1e-7) with_stream(streams[[i]], {
   N <- sample(c(30, 100, 300, 800, 1600), 1); Mbar <- exp(runif(1, log(0.02), log(50)))
   phi <- if (runif(1) < 0.3) 0 else exp(runif(1, log(1e-3), log(5))); cv <- runif(1, 0, 1.2)
@@ -201,7 +201,8 @@ a2_one <- function(i, streams, h = 1e-8, n_grid = 2000, tol = 1e-7) with_stream(
   vg <- vapply(exp(lgrid), ll, numeric(1)); j <- which.max(vg); lf <- ll(ph)
   data.frame(i = i, N = N, Mbar = Mbar, phi = phi, cv = cv, empty = FALSE, slope_cf = cf, slope_fd = fd, slope_fd_lgamma = fdg,
              sign_disagree = sign(cf) != sign(fd) && abs(cf) > 1e-6 * (1 + sum(y)), rel_err = abs(fd - cf) / max(abs(cf), 1e-12),
-             phi_hat = ph, ll_fit = lf, ll_grid = vg[j], phi_grid = exp(lgrid[j]), grid_better = vg[j] > lf + tol * max(1, abs(lf)))
+             phi_hat = ph, ll_fit = lf, ll_grid = vg[j], phi_grid = exp(lgrid[j]), grid_better = vg[j] > lf + tol * max(1, abs(lf)),
+             grid_interior = j > 1 && j < n_grid)
 })
 
 ## e1_row: grid row i of E1 (N, Mbar, offset CV, phi). NREP genes simulated as NB with that phi; dispersion_class_stats() gives the boundary LRT, the upper

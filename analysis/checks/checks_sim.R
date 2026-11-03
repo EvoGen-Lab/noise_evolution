@@ -45,8 +45,8 @@ if ("A2" %in% RUN.CHECKS) {
                                   sum(A2$sign_disagree[ok]), median(A2$rel_err[ok]), max(A2$rel_err[ok])),
                           sprintf("lgamma form (.cr_loglik) finite difference at 1e-8: sign disagreements %d, median rel. error %.2g",
                                   sum(sign(A2$slope_fd_lgamma[ok]) != sign(A2$slope_cf[ok])), median(abs(A2$slope_fd_lgamma[ok] - A2$slope_cf[ok]) / abs(A2$slope_cf[ok]))),
-                          sprintf("(b) grid finds a better interior maximum: %d of %d (largest log-likelihood gain %.3g)", sum(A2$grid_better[ok]), sum(ok),
-                                  max(A2$ll_grid[ok] - A2$ll_fit[ok]))),
+                          sprintf("(b) grid finds a better maximum: %d of %d, interior %d (largest log-likelihood gain %.3g; the others at an end of the search range)",
+                                  sum(A2$grid_better[ok]), sum(ok), sum(A2$grid_better[ok] & A2$grid_interior[ok]), max(A2$ll_grid[ok] - A2$ll_fit[ok]))),
              mc_error = "exact counts", script = CHECK.SCRIPT)
 }
 
