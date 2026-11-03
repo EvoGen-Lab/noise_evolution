@@ -1217,6 +1217,19 @@ STRUCT.DISP.BSIZE      <- local({
 stopifnot("disp_bsize_structural() fields differ from STRUCT.FIELDS; update the function and the call sites together" =
           identical(names(STRUCT.DISP.BSIZE), STRUCT.FIELDS))
 
+# Structural mean-kappa correlation, the same comparison for kinetic balance. kappa = -mean - 2 disp gives Cov(kappa, mean) = -Var(mean) - 2 Cov(mean, disp)
+# and Var(kappa) = Var(mean) + 4 Var(disp) + 4 Cov(mean, disp). With Cov(mean, disp) = 0 the correlation forced by the definition alone is
+# rho_null = -Var(mean) / sqrt(Var(mean) Var(kappa)); the attenuation-corrected observed correlation is read against it on the same scale (eiv_components()).
+# The total contrast takes mean and dispersion from the same cells, so its kappa is the main kinetic balance contrast.
+STRUCT.MEAN.KBAL <- local({
+  e <- eiv_components(BURST.CONTRASTS, "total")
+  Vm <- unname(e["Vm"]); Vf <- unname(e["Vs"]); Cmf <- unname(e["Cms"])
+  Vk <- Vm + 4 * Vf + 4 * Cmf
+  list(n = unname(e["n"]), Vm = Vm, Vf = Vf, Vk = Vk,
+       rho_mean_kbal_observed = suppressWarnings((-Vm - 2 * Cmf) / sqrt(Vm * Vk)), rho_mean_kbal_null = suppressWarnings(-Vm / sqrt(Vm * Vk)),
+       excess_over_null = suppressWarnings((-Vm - 2 * Cmf) / sqrt(Vm * Vk) + Vm / sqrt(Vm * Vk)))
+})
+
 REG.OVERLAP.SUMMARY <- rbind(
   summarize_class_overlap(REG.OVERLAP.MEAN.DISP,  label = "Mean vs dispersion"),
   summarize_class_overlap(REG.OVERLAP.MEAN.BSIZE,  label = "Mean vs burst size"),
@@ -1225,6 +1238,8 @@ REG.OVERLAP.SUMMARY <- rbind(
 print(REG.OVERLAP.SUMMARY)
 cat(sprintf("Disp-vs-bsize correlation: observed (attenuation-corrected) rho = %.3f, expected from the mean/disp variance imbalance alone (Cov(mean,disp) = 0) rho = %.3f, excess over that null = %.3f\n",
   STRUCT.DISP.BSIZE[["rho_disp_bsize_observed"]], STRUCT.DISP.BSIZE[["rho_disp_bsize_null"]], STRUCT.DISP.BSIZE[["excess_over_null"]]))
+cat(sprintf("Mean-vs-kappa correlation (total): observed (attenuation-corrected) rho = %.3f, expected from the definition alone (Cov(mean,disp) = 0) rho = %.3f, excess over that null = %.3f\n",
+  STRUCT.MEAN.KBAL[["rho_mean_kbal_observed"]], STRUCT.MEAN.KBAL[["rho_mean_kbal_null"]], STRUCT.MEAN.KBAL[["excess_over_null"]]))
 write.csv(REG.OVERLAP.SUMMARY, file.path(TABLE.DIR, "gene_identity_overlap_mean_disp_bsize.csv"), row.names = FALSE)
 
 fig_pdf("extra/S_reg_overlap_kappa_null.pdf", 20, 5)
@@ -1242,7 +1257,7 @@ dev.off()
 # Checkpoint
 save(REG.VEC, DOM.VEC,
      REG.OVERLAP.MEAN.DISP, REG.OVERLAP.MEAN.BSIZE, REG.OVERLAP.DISP.BSIZE, REG.OVERLAP.MEAN.KBAL,
-     STRUCT.DISP.BSIZE, REG.OVERLAP.SUMMARY,
+     STRUCT.DISP.BSIZE, STRUCT.MEAN.KBAL, REG.OVERLAP.SUMMARY,
      file = ckpt_path(3))
 
 console_start(4)

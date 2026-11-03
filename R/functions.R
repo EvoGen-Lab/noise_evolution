@@ -870,10 +870,11 @@ eiv_components <- function(BURST.CONTRASTS, mode = .OUT_MODES) {
   X  <- BURST.CONTRASTS[[paste0("mean_",mode,"_est")]]; sx <- BURST.CONTRASTS[[paste0("mean_",mode,"_se")]]
   Y  <- BURST.CONTRASTS[[paste0("disp_",mode,"_est")]]; sy <- BURST.CONTRASTS[[paste0("disp_",mode,"_se")]]
   r  <- BURST.CONTRASTS[[paste0("cor_",mode)]]
-  ## cor_<mode> is measured from the bootstrap draws; a gene with too few finite draws (NA) enters as a
-  ## zero covariance so it stays in the summary.
-  r[!is.finite(r)] <- 0
-  ok <- is.finite(X) & is.finite(Y) & is.finite(sx) & is.finite(sy)
+  ## cor_<mode> is the correlation of the mean and dispersion contrasts over the gene's bootstrap draws, so the measurement covariance r sx sy carries
+  ## the covariance that shared cells give the two errors. A gene enters only with a measured correlation (at least three finite draws for both);
+  ## n_no_cor counts the genes left out for want of one.
+  no_cor <- is.finite(X) & is.finite(Y) & is.finite(sx) & is.finite(sy) & !is.finite(r)
+  ok <- is.finite(X) & is.finite(Y) & is.finite(sx) & is.finite(sy) & is.finite(r)
   X <- X[ok]; Y <- Y[ok]; sx <- sx[ok]; sy <- sy[ok]; r <- r[ok]
   Vm  <- var(X)    - mean(sx^2)
   Vs  <- var(Y)    - mean(sy^2)
@@ -881,7 +882,7 @@ eiv_components <- function(BURST.CONTRASTS, mode = .OUT_MODES) {
   ## Vm or Vs below zero (measurement noise exceeds signal) makes sqrt(Vm * Vs) NaN. The NaN is the
   ## result for that mode (attenuation correction not identifiable), so the warning is suppressed.
   rho_ms <- suppressWarnings(Cms / sqrt(Vm * Vs))
-  c(n = length(X), Vm = Vm, Vs = Vs, Cms = Cms, rho_mean_disp = rho_ms, rho_raw_mean_disp = cor(X, Y))
+  c(n = length(X), Vm = Vm, Vs = Vs, Cms = Cms, rho_mean_disp = rho_ms, rho_raw_mean_disp = cor(X, Y), n_no_cor = sum(no_cor))
 }
 
 ## ============================================================

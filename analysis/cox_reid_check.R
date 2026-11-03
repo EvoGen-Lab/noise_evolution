@@ -33,6 +33,9 @@ a <- fit_dispersion(y, e)[["disp"]]
 stopifnot(abs(fit_dispersion(y, e, 0.01)[["disp"]] - (a - 0.01) / 1.01) < 1e-12, abs(fit_dispersion(y, e, 0, "NB", 0.01)[["disp"]] - (a - 0.01)) < 1e-12)
 stopifnot(fit_dispersion(y, e, 0, "NB", 10)[["disp"]] == 0, fit_dispersion(y, e, 0, "NB", 10)[["boundary"]] == 1)
 
+## the critical value of the boundary test and of the upper bound is the 0.90 quantile of chi-square(1), 2.7055, which makes the bound one-sided at 95%
+stopifnot(round(qchisq(0.90, 1), 4) == 2.7055, isTRUE(all.equal(qchisq(1 - 2 * CLASS.ALPHA, 1), qchisq(0.90, 1))))
+
 ## Poisson genes: the likelihood-ratio statistic is zero about half the time and exceeds 2.71 about 5% of the time
 lrt <- replicate(1000, dispersion_class_stats(rpois(n, 5 * e), e)[["lrt"]])
 stopifnot(abs(mean(lrt > qchisq(0.9, 1)) - 0.05) < 0.02, abs(mean(lrt == 0) - 0.5) < 0.06)
