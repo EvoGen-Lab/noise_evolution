@@ -310,6 +310,40 @@ a4_moment_row <- function(i, grid, nrep, N, streams) with_stream(streams[[i]], {
              cov_mc_se = sd(cp) / sqrt(nrep), cor_moment = cor(X[, 1], X[, 2]), cor_cox_reid = cor(X[, 1], X[, 3]), cor_se = 1 / sqrt(nrep - 3), row.names = NULL)
 })
 
+## a9cr_row: A9 (Cox-Reid revisit), grid row i (N, Mbar, phi, offsets "equal" or "observed"). In sparse cells both ML estimators are biased upward; the
+## question is whether truncation at zero explains it. NREP genes are fitted with the unadjusted profile ML and the Cox-Reid estimate (both truncated at
+## zero) and with the Appendix A moment estimator, kept untruncated (disp_raw) and truncated. Returns bias, SD and P(zero) of each against phi.
+a9cr_row <- function(i, grid, nrep, offsets, streams) with_stream(streams[[i]], {
+  g <- grid[i, ]
+  est <- t(vapply(seq_len(nrep), function(r) {
+    O <- if (g$offsets == "equal") rep(1, g$N) else sample(offsets, g$N, replace = TRUE); mu <- g$Mbar / mean(O)
+    y <- rpois(g$N, O * mu * sim_pos_factor(g$N, "gamma", 1, g$phi)); w <- fit_dispersion(y, O, method = "weighted")
+    c(profile_ml = profile_ml_phi(y, O), cox_reid = fit_dispersion(y, O)[["disp"]], moment_untruncated = w[["disp_raw"]], moment_truncated = w[["disp"]])
+  }, c(profile_ml = 0, cox_reid = 0, moment_untruncated = 0, moment_truncated = 0)))
+  do.call(rbind, lapply(colnames(est), function(k) data.frame(g, estimator = k, t(mc_stats(est[, k], g$phi)), row.names = NULL)))
+})
+
+## a10_row: A10, grid row i (factor family, overlap o, offsets "equal" or "observed", mu, phi). The mean is fitted on N cells A and the dispersion on N
+## cells B that share o N of them. Returns N times the covariance of mu-hat_A with phi-hat_B for the plain moment estimator (S^2 - Ybar) / Ybar^2 on B,
+## the Appendix A estimator, the unadjusted profile ML and the Cox-Reid estimate, each with its Monte Carlo SE and the correlation, next to the formula
+## o mu (E[(a - 1)^3] - 2 phi^2), derived for the moment estimator with equal offsets.
+a10_row <- function(i, grid, nrep, N, offsets, streams) with_stream(streams[[i]], {
+  g <- grid[i, ]; nsh <- round(g$overlap * N); ntot <- 2 * N - nsh
+  a3 <- mean((sim_pos_factor(4e6, as.character(g$family), 1, g$phi) - 1)^3)
+  X <- t(vapply(seq_len(nrep), function(r) {
+    O <- if (g$offsets == "equal") rep(1, ntot) else sample(offsets, ntot, replace = TRUE); mu <- g$mu / mean(O)
+    y <- rpois(ntot, O * mu * sim_pos_factor(ntot, as.character(g$family), 1, g$phi)); A <- seq_len(N); B <- (N - nsh) + seq_len(N)
+    yb <- y[B]; ob <- O[B]; mb <- sum(yb) / sum(ob)
+    c(mu_A = sum(y[A]) / sum(O[A]) * mean(O[A]) , moment = (var(yb / ob * mean(ob)) - mean(yb)) / mean(yb)^2, appendixA = fit_dispersion(yb, ob, method = "weighted")[["disp"]],
+      profile_ml = profile_ml_phi(yb, ob), cox_reid = fit_dispersion(yb, ob)[["disp"]])
+  }, c(mu_A = 0, moment = 0, appendixA = 0, profile_ml = 0, cox_reid = 0)))
+  do.call(rbind, lapply(c("moment", "appendixA", "profile_ml", "cox_reid"), function(k) {
+    cp <- (X[, "mu_A"] - mean(X[, "mu_A"])) * (X[, k] - mean(X[, k]))
+    data.frame(g, N = N, estimator = k, N_cov = N * mean(cp), N_cov_mc_se = N * sd(cp) / sqrt(nrep), N_cov_formula = g$overlap * g$mu * (a3 - 2 * g$phi^2),
+               cor = cor(X[, "mu_A"], X[, k]), cor_se = 1 / sqrt(nrep - 3), row.names = NULL)
+  }))
+})
+
 ## e3_row: grid row i of the simulation arm of E3 (Mbar, phi, phi ratio). NREP experiments of two parental groups with known log2 contrasts of phi, burst
 ## size (log2 mu + log2 phi) and kinetic balance (-log2 mu - 2 log2 phi); each gets B bootstrap replicates (cells resampled within group, indices drawn
 ## first), refitted, with a zero phi mapped to -Inf on the log2 scale; the 95% percentile interval and SE come from .boot_summary(). Returns coverage of the
@@ -638,14 +672,15 @@ size_headline <- function(tab, label) {
 
 ## data_boot_gene: B bootstrap replicates of one gene's fits in every contrast dataset, from pre-drawn indices (make_draws()). Each replicate refits mu and
 ## phi with the pipeline estimator; with refit_share the share terms are re-estimated on the replicate's resampled hybrid cells (share_cells: c-hat and L
-## in HYB order), otherwise the observed eta is applied. Returns a B x (2 x datasets) matrix of mu and phi.
-data_boot_gene <- function(g, mats, expos, eta, draws, refit_share = TRUE, share_cells = NULL, groups = .CONTRAST.GROUPS) {
+## in HYB order), otherwise the observed eta is applied; the summed counts HYB.COMB, when in groups, take the gene's share_sub (named by gene). Returns a
+## B x (2 x datasets) matrix of mu and phi.
+data_boot_gene <- function(g, mats, expos, eta, draws, refit_share = TRUE, share_cells = NULL, groups = .CONTRAST.GROUPS, share_sub = NULL) {
   out <- matrix(NA_real_, length(draws), 2 * length(groups), dimnames = list(NULL, c(paste0("mu.", groups), paste0("phi.", groups))))
   for (b in seq_along(draws)) {
     d <- draws[[b]]; r <- eta
     if (refit_share) { hb <- d$HYB; st <- share_terms(share_cells$chat[hb], share_cells$lib[hb]); r <- share_r_groups(st$r_c, st$r_e) }
     for (k in groups) {
-      ix <- d[[.DRAW.KEY[[k]]]]; f <- fit_dispersion(mats[[k]][g, ix], expos[[k]][ix], r[[k]])
+      ix <- d[[.DRAW.KEY[[k]]]]; f <- fit_dispersion(mats[[k]][g, ix], expos[[k]][ix], r[[k]], "NB", if (k == "HYB.COMB" && !is.null(share_sub)) share_sub[[g]] else 0)
       out[b, paste0("mu.", k)] <- f[["mu"]]; out[b, paste0("phi.", k)] <- f[["disp"]]
     }
   }
@@ -726,7 +761,7 @@ split_mean_calls <- function(s, genes, yc, ye, expo, depth, f, mu_pc, mu_pe, cba
 ## col_quartiles: the 25%, 50% and 75% quantiles across genes (rows) of the selected columns of a statistics matrix, one row per column.
 col_quartiles <- function(M, cols) t(apply(M[, cols, drop = FALSE], 2, quantile, c(0.25, 0.5, 0.75), na.rm = TRUE))
 
-## factor_moment_table: A9, the second and third moments of each gene's expression factor in one group, from factorial moments. For Y_i ~ Poisson(M_i a_i)
+## factor_moment_table: A11, the second and third moments of each gene's expression factor in one group, from factorial moments. For Y_i ~ Poisson(M_i a_i)
 ## with M_i = O_i mu-hat, E[Y(Y - 1)] = M^2 E[a^2] and E[Y(Y - 1)(Y - 2)] = M^3 E[a^3], so the ratios of sums m2 = sum y(y - 1) / sum M^2 and
 ## m3 = sum y(y - 1)(y - 2) / sum M^3 estimate E[a^2] and E[a^3] without any Poisson noise. phi_fm = m2 - 1 is the factor variance, k3 = m3 - 3 m2 + 2 its
 ## third central moment, and excess = k3 - 2 phi_fm^2 its departure from a gamma factor of the same variance, the quantity that sets the covariance of
@@ -742,7 +777,7 @@ factor_moment_table <- function(mat, expo, genes = rownames(mat), cols = seq_alo
   do.call(rbind, out)
 }
 
-## factor_excess_test: A9 test of one gene in one group against a gamma factor. The gene's counts are simulated B times as NB on the same offsets with its
+## factor_excess_test: A11 test of one gene in one group against a gamma factor. The gene's counts are simulated B times as NB on the same offsets with its
 ## fitted mean and factorial-moment dispersion (a gamma factor of the same variance), and the excess E[(a - 1)^3] - 2 phi^2 is re-estimated in each draw
 ## (factor_moment_table()), so the null carries the estimator's own finite-sample bias and skew. Returns the observed excess, the mean of the null excess,
 ## the observed and null ratios k3 / (2 phi^2), the standardized deviation z = (excess - null mean) / null SD, and the two-sided add-one p-value.

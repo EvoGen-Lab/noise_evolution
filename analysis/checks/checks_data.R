@@ -104,38 +104,38 @@ if (have1) {
 } else check_save("A8", NULL, "not run", headline = "the Section 1 checkpoint (parental counts) is missing", script = CHECK.SCRIPT)
 
 ##############################################################################
-## A9. Third moment of the expression factor against the gamma (Methods: Separate partitions; Notes for revision: non-gamma expression factors)
+## A11. Third moment of the expression factor against the gamma (Methods: Separate partitions; Notes for revision: non-gamma expression factors)
 # The mean and dispersion errors of one group are uncorrelated on shared cells only when the factor's third central moment equals the gamma's 2 phi^2;
 # the excess E[(a - 1)^3] - 2 phi^2 sets their covariance and the bias of the NB fit under a non-gamma factor (B4). Factorial moments estimate it for
 # every class-1 gene (factor_moment_table()). Per-gene third moments are noisy and skewed at these cell numbers, so the subsample genes are tested
-# against NB data simulated at their own fitted mean and variance on the same offsets (factor_excess_test(), A9.SIM draws), which carries the
+# against NB data simulated at their own fitted mean and variance on the same offsets (factor_excess_test(), A11.SIM draws), which carries the
 # estimator's finite-sample bias into the null; the share of genes with p < 0.05 is read against 0.05, and the observed k3 / (2 phi^2) against its
 # null mean. One gene's test has little power (simulated lognormal factors with phi 0.5 and 2000 cells: p < 0.05 in about 13% of genes), so the group
 # statistic is the mean over the tested genes of z = (excess - null mean) / null SD, with SE 1 / sqrt(genes), which is near 0 for gamma factors and
 # positive (more skewed than gamma) or negative (less skewed) otherwise. The hybrid alleles' factor includes the transcriptome share multiplier.
-A9.GROUPS <- c("MIX.SC", "MIX.SE", "HYB.SC", "HYB.SE"); A9.SIM <- 200
-A9 <- list(table = list(), tests = list(), summary = list())
-for (k in A9.GROUPS) {
+A11.GROUPS <- c("MIX.SC", "MIX.SE", "HYB.SC", "HYB.SE"); A11.SIM <- 200
+A11 <- list(table = list(), tests = list(), summary = list())
+for (k in A11.GROUPS) {
   m <- if (k == "HYB.SC") HYB.SC else if (k == "HYB.SE") HYB.SE else if (have1) get(k, E1.ENV) else NULL
   if (is.null(m)) next
   e <- CONTRAST.EXPOS[[k]]; cls1 <- rownames(SPLIT.FITS[[k]])[SPLIT.FITS[[k]]$CLASS %in% 1]
   tab <- factor_moment_table(m, e, genes = cls1)
   tg <- intersect(SUB.GENES, cls1)
-  tst <- with_local_seed(SEED.CHECKS + 9, t(vapply(tg, factor_excess_test, numeric(6), mat = m, expo = e, B = A9.SIM)))
-  A9$table[[k]] <- data.frame(dataset = k, tab, row.names = NULL); A9$tests[[k]] <- data.frame(dataset = k, gene = tg, tst, row.names = NULL)
+  tst <- with_local_seed(SEED.CHECKS + 9, t(vapply(tg, factor_excess_test, numeric(6), mat = m, expo = e, B = A11.SIM)))
+  A11$table[[k]] <- data.frame(dataset = k, tab, row.names = NULL); A11$tests[[k]] <- data.frame(dataset = k, gene = tg, tst, row.names = NULL)
   ok <- is.finite(tst[, "p"])
-  A9$summary[[k]] <- data.frame(dataset = k, genes = nrow(tab), pooled_k3_over_gamma = sum(tab$k3, na.rm = TRUE) / sum(tab$k3_gamma[is.finite(tab$k3)], na.rm = TRUE),
+  A11$summary[[k]] <- data.frame(dataset = k, genes = nrow(tab), pooled_k3_over_gamma = sum(tab$k3, na.rm = TRUE) / sum(tab$k3_gamma[is.finite(tab$k3)], na.rm = TRUE),
                                 tested = sum(ok), median_ratio = median(tst[ok, "ratio"]), median_null_ratio = median(tst[ok, "null_ratio"]),
                                 mean_z = mean(tst[ok, "z"]), mean_z_se = 1 / sqrt(sum(ok)), share_p05 = mean(tst[ok, "p"] < 0.05), share_p05_se = binom_se(0.05, sum(ok)),
                                 share_above = mean(tst[ok, "p"] < 0.05 & tst[ok, "excess"] > tst[ok, "null_excess"]),
                                 share_below = mean(tst[ok, "p"] < 0.05 & tst[ok, "excess"] < tst[ok, "null_excess"]), row.names = NULL)
 }
-A9 <- lapply(A9, function(x) do.call(rbind, x))
-if (is.null(A9$summary)) check_save("A9", NULL, "not run", headline = "count matrices missing", script = CHECK.SCRIPT) else
-  check_save("A9", A9, "run", headline = sprintf("%s: k3 / (2 phi^2) pooled over %d class-1 genes %.2f; tested %d genes: mean z %.2f (SE %.2f), median ratio %.2f against %.2f under a gamma factor, p < 0.05 in %.3f (above %.3f, below %.3f)",
-                                                 A9$summary$dataset, A9$summary$genes, A9$summary$pooled_k3_over_gamma, A9$summary$tested, A9$summary$mean_z, A9$summary$mean_z_se, A9$summary$median_ratio,
-                                                 A9$summary$median_null_ratio, A9$summary$share_p05, A9$summary$share_above, A9$summary$share_below),
-             mc_error = sprintf("%d null draws per gene; binomial SE of a 5%% share %.3f", A9.SIM, A9$summary$share_p05_se[1]), script = CHECK.SCRIPT)
+A11 <- lapply(A11, function(x) do.call(rbind, x))
+if (is.null(A11$summary)) check_save("A11", NULL, "not run", headline = "count matrices missing", script = CHECK.SCRIPT) else
+  check_save("A11", A11, "run", headline = sprintf("%s: k3 / (2 phi^2) pooled over %d class-1 genes %.2f; tested %d genes: mean z %.2f (SE %.2f), median ratio %.2f against %.2f under a gamma factor, p < 0.05 in %.3f (above %.3f, below %.3f)",
+                                                 A11$summary$dataset, A11$summary$genes, A11$summary$pooled_k3_over_gamma, A11$summary$tested, A11$summary$mean_z, A11$summary$mean_z_se, A11$summary$median_ratio,
+                                                 A11$summary$median_null_ratio, A11$summary$share_p05, A11$summary$share_above, A11$summary$share_below),
+             mc_error = sprintf("%d null draws per gene; binomial SE of a 5%% share %.3f", A11.SIM, A11$summary$share_p05_se[1]), script = CHECK.SCRIPT)
 
 ##############################################################################
 ## B1. Binomial sampling and independence of the observed share (Methods: Transcriptome share estimate)
@@ -349,8 +349,10 @@ check_save("G1", G1, "run", headline = sprintf("%s: text %g, pipeline %.4g", G1$
 # D8 refits each replicate twice from the same draws: with the share terms re-estimated on the resampled cells (the pipeline) and with the observed ones.
 NCELLS.CK <- vapply(CONTRAST.EXPOS[names(.DRAW.KEY)], length, integer(1))
 DRAWS.CK <- make_draws(NCELLS.CK, N.CHECK.BOOT, SEED.CHECKS + 30, hyc = SPLIT.IDX.MEAN$c, hyc_n = SPLIT.IDX.DISP$c, hyc_k = SPLIT.IDX.KBAL$c)
-MATS.CK <- lapply(setNames(.CONTRAST.GROUPS, .CONTRAST.GROUPS), function(k) as.matrix(CONTRAST.MATS[[k]][SUB.GENES, , drop = FALSE]))
-BOOT.CK <- mclapply(SUB.GENES, data_boot_gene, mats = MATS.CK, expos = CONTRAST.EXPOS, eta = SHARE.R, draws = DRAWS.CK, refit_share = TRUE, share_cells = SHARE.CELLS, mc.cores = CORES)
+CK.GROUPS <- c(.CONTRAST.GROUPS, "HYB.COMB")
+MATS.CK <- lapply(setNames(CK.GROUPS, CK.GROUPS), function(k) as.matrix(CONTRAST.MATS[[k]][SUB.GENES, , drop = FALSE]))
+BOOT.CK <- mclapply(SUB.GENES, data_boot_gene, mats = MATS.CK, expos = CONTRAST.EXPOS, eta = SHARE.R, draws = DRAWS.CK, refit_share = TRUE, share_cells = SHARE.CELLS,
+                    groups = CK.GROUPS, share_sub = setNames(PLOIDY.COMP$share_sub, rownames(PLOIDY.COMP)), mc.cores = CORES)
 BOOT.CK.FIXED <- mclapply(SUB.GENES, data_boot_gene, mats = MATS.CK, expos = CONTRAST.EXPOS, eta = SHARE.R, draws = DRAWS.CK, refit_share = FALSE, mc.cores = CORES)
 STATS.CK <- do.call(rbind, mclapply(BOOT.CK, boot_gene_stats, cbar = C.BAR, mc.cores = CORES)); rownames(STATS.CK) <- SUB.GENES
 STATS.CK.FIXED <- do.call(rbind, mclapply(BOOT.CK.FIXED, boot_gene_stats, cbar = C.BAR, mc.cores = CORES)); rownames(STATS.CK.FIXED) <- SUB.GENES
@@ -375,3 +377,17 @@ D8 <- local({
 })
 check_save("D8", D8, "run", headline = sprintf("%s mean count %s: SE ratio (refit / fixed share) %.4f", D8$mode, D8$stratum, D8$median_se_ratio),
            mc_error = sprintf("same draws in both arms; %d genes, %d replicates", length(SUB.GENES), N.CHECK.BOOT), script = CHECK.SCRIPT)
+
+##############################################################################
+## F5 and B5, the two routes to the per-genome hybrid dispersion on the local bootstrap (Cox-Reid fits)
+# Route A, used by every dominance contrast: log2 of the geometric mean of the two corrected allele dispersions. The summed route: log2 of the corrected
+# summed-count dispersion plus the reported shift delta, which is fixed per gene, so its bootstrap SD is that of log2 phi_Sigma. Both come from the same
+# resampled hybrid cells. Reported: the median over genes of SD(summed route) / SD(route A), and the Spearman correlation of the two point estimates
+# (ROUTE.CHECK, all genes of the matched set). The earlier moment-based comparison (compare_phiG_routes.R) gave 0.965 and 0.97.
+ROUTE.SD <- t(vapply(BOOT.CK, function(D) c(allele = sd(0.5 * (log2(D[, "phi.HYB.SC"]) + log2(D[, "phi.HYB.SE"]))[is.finite(log2(D[, "phi.HYB.SC"]) + log2(D[, "phi.HYB.SE"]))]),
+                                             summed = sd(log2(D[, "phi.HYB.COMB"])[is.finite(log2(D[, "phi.HYB.COMB"]))])), numeric(2)))
+check_save("F5_routes", list(sd = ROUTE.SD, route_check = ROUTE.CHECK), "run",
+           headline = sprintf("bootstrap SD of log2 phi_H, summed route over allele route: median %.3f (IQR %.3f to %.3f), %d genes; Spearman of the point estimates %.3f (%d genes)",
+                              median(ROUTE.SD[, "summed"] / ROUTE.SD[, "allele"], na.rm = TRUE), quantile(ROUTE.SD[, "summed"] / ROUTE.SD[, "allele"], 0.25, na.rm = TRUE),
+                              quantile(ROUTE.SD[, "summed"] / ROUTE.SD[, "allele"], 0.75, na.rm = TRUE), sum(is.finite(ROUTE.SD[, "summed"] / ROUTE.SD[, "allele"])), ROUTE.CHECK$spearman, ROUTE.CHECK$n_genes),
+           mc_error = sprintf("%d bootstrap replicates per gene", N.CHECK.BOOT), script = CHECK.SCRIPT)

@@ -17,7 +17,7 @@ CHECK.SCRIPT <- "analysis/checks/checks_sim.R"
 CORES        <- if (.Platform$OS.type == "windows") 1 else max(1, detectCores() - 1)   # mclapply forks, so Windows runs on one core
 CHECK.SIZE   <- 1
 SEED.CHECKS  <- 2026
-RUN.CHECKS   <- c("A2", "A1", "A7", "B2", "B3", "B4", "E1", "F1", "F2", "F3", "F4", "C4", "A4", "E3", "D5", "D6", "CAL", "CALMERGE")
+RUN.CHECKS   <- c("A2", "A1", "A7", "A9", "A10", "B2", "B3", "B4", "E1", "F1", "F2", "F3", "F4", "C4", "A4", "E3", "D5", "D6", "CAL", "CALMERGE")
 set.seed(SEED.SECTION + 20)
 
 ## The observed design: offsets, hybrid depth factors and libraries, c-bar and sigma2_c from the Section 2 checkpoint when it exists.
@@ -88,6 +88,35 @@ if ("A7" %in% RUN.CHECKS) {
 }
 
 ##############################################################################
+## A9 (Cox-Reid revisit). Does truncation at zero explain the upward bias of the ML estimators in sparse cells?
+# If the untruncated moment estimator is unbiased where the truncated estimators are biased, truncation explains the bias.
+if ("A9" %in% RUN.CHECKS) {
+  G <- expand.grid(N = c(800, 1600, 3200), Mbar = c(0.05, 0.1, 0.2, 0.5), phi = c(0.05, 0.1, 0.2, 0.5), offsets = c("equal", "observed"), stringsAsFactors = FALSE)
+  S <- check_streams(nrow(G), SEED.CHECKS + 19)
+  A9 <- do.call(rbind, mclapply(seq_len(nrow(G)), a9cr_row, grid = G, nrep = ceiling(500 * CHECK.SIZE), offsets = POOLS$O_Pc, streams = S, mc.cores = CORES))
+  A9$bias_z <- A9$bias / A9$bias_se
+  SB <- summary_by(A9, "estimator", "bias", z = "bias_z", keys = c("N", "Mbar", "phi", "offsets"))
+  check_save("A9", A9, "run", headline = c(sprintf("%s: bias median %.4f, range %.4f to %.4f (largest at %s), |bias| > 2 MC SE in %d of %d cells", SB$level, SB$median, SB$min, SB$max, SB$at, SB$n_z2, SB$n),
+                                           sprintf("P(phi-hat = 0), Cox-Reid: %.3f to %.3f", min(A9$p_zero[A9$estimator == "cox_reid"]), max(A9$p_zero[A9$estimator == "cox_reid"]))),
+             mc_error = "bias_se per cell", script = CHECK.SCRIPT)
+}
+
+##############################################################################
+## A10. The covariance of mean and dispersion errors on shared cells (Methods: Separate partitions for each quantity)
+# Formula, derived for the moment estimator with equal offsets: Cov[mu_A, phi_B] = (N_AB / (N_A N_B)) mu (E[(a - 1)^3] - 2 phi^2). The check also measures it
+# for the Appendix A, unadjusted ML and Cox-Reid estimators and for the observed offset spread, where no formula has been derived. N = 400 per set.
+if ("A10" %in% RUN.CHECKS) {
+  G <- expand.grid(family = c("gamma", "lognormal", "bimodal"), overlap = c(0, 0.5, 1), offsets = c("equal", "observed"), mu = 2, phi = 0.5, stringsAsFactors = FALSE)
+  S <- check_streams(nrow(G), SEED.CHECKS + 20)
+  A10 <- do.call(rbind, mclapply(seq_len(nrow(G)), a10_row, grid = G, nrep = ceiling(20000 * CHECK.SIZE), N = 400, offsets = POOLS$O_Pc, streams = S, mc.cores = CORES))
+  A10$z_vs_formula <- (A10$N_cov - A10$N_cov_formula) / A10$N_cov_mc_se
+  x <- A10[A10$estimator == "moment" & A10$offsets == "equal", ]
+  check_save("A10", A10, "run", headline = c(sprintf("moment, equal offsets, %s overlap %.1f: N cov %.3f (MC SE %.3f) against formula %.3f", x$family, x$overlap, x$N_cov, x$N_cov_mc_se, x$N_cov_formula),
+                                             sprintf("%s %s offsets %s overlap %.1f: N cov %.3f (MC SE %.3f), cor %.3f", A10$estimator, A10$offsets, A10$family, A10$overlap, A10$N_cov, A10$N_cov_mc_se, A10$cor)[A10$estimator != "moment" | A10$offsets != "equal"]),
+             mc_error = sprintf("MC SE per row; cor SE %.4f", 1 / sqrt(ceiling(20000 * CHECK.SIZE) - 3)), script = CHECK.SCRIPT)
+}
+
+##############################################################################
 ## E1. Boundary likelihood-ratio test, upper bound and classes (Methods: Informative estimates)
 # (a) At phi = 0 the statistic is an equal mixture of a point mass at zero and a chi-square with one degree of freedom, so the test at 2.71 has size 5%.
 # (b) The upper likelihood bound is where the adjusted likelihood ratio from phi-hat reaches the same critical value (2.71, a one-sided 95% bound; the
@@ -148,6 +177,21 @@ if ("B4" %in% RUN.CHECKS) {
   SB <- summary_by(B4, "family_estimator", "rel_bias", keys = c("Mbar", "phi", "pi", "var_c")); SD_ <- summary_by(B4, "family_estimator", "bias_over_sd")
   hl <- sprintf("%s: median relative bias %.3f (range %.3f to %.3f, largest at %s), median bias/SD %.2f", SB$level, SB$median, SB$min, SB$max, SB$at, SD_$median)
   check_save("B4", B4, "run", headline = hl, mc_error = sprintf("bias_se per row; median bias_se/truth %.4f", median(B4$bias_se / B4$truth_var_ta)), script = CHECK.SCRIPT)
+}
+
+##############################################################################
+## B4 addendum. Cox-Reid against the Appendix A estimator at 20,000 cells with equal offsets, and at the observed hybrid depths and cell count
+if ("B4" %in% RUN.CHECKS) {
+  G <- expand.grid(family = c("gamma", "lognormal", "bimodal"), Mbar = c(1, 5), phi = c(0.3, 1), pi = 0.5, var_c = POOLS$var_c, stringsAsFactors = FALSE)
+  S <- check_streams(2 * nrow(G), SEED.CHECKS + 21)
+  B4A <- rbind(cbind(design = "20000 cells, equal offsets", do.call(rbind, mclapply(seq_len(nrow(G)), b4_row, grid = G, nrep = ceiling(100 * CHECK.SIZE), N = 20000, offsets = 1,
+                                                                                      streams = S[seq_len(nrow(G))], mc.cores = CORES))),
+               cbind(design = "observed hybrid depths", do.call(rbind, mclapply(seq_len(nrow(G)), b4_row, grid = G, nrep = ceiling(300 * CHECK.SIZE), N = length(POOLS$S), offsets = POOLS$S / 2,
+                                                                                  streams = S[nrow(G) + seq_len(nrow(G))], mc.cores = CORES))))
+  B4A$rel_bias <- B4A$bias / B4A$truth_var_ta; B4A$rel_bias_se <- B4A$bias_se / B4A$truth_var_ta
+  x <- B4A[B4A$estimator %in% c("cox_reid", "appendixA") & B4A$family != "gamma", ]
+  check_save("B4_addendum", B4A, "run", headline = sprintf("%s, %s, mean %g phi %g, %s: relative bias %.3f (MC SE %.3f)", x$design, x$family, x$Mbar, x$phi, x$estimator, x$rel_bias, x$rel_bias_se),
+             mc_error = "MC SE per row", script = CHECK.SCRIPT)
 }
 
 ##############################################################################
