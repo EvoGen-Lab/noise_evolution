@@ -38,6 +38,32 @@ These commits change no code in `R/functions.R`, `analysis/analysis.R` or the pi
 
 These cannot be tested: species-specific ploidy effects (they need diploid parental strains), capture differences between parental and hybrid cells, and the bursty-limit reading of θ and ζ.
 
-## Latest numbers
+## Latest numbers (local run, Nov 3)
 
-See below; filled from the local run of `checks_sim.R`.
+These come from the simulation checks at full size (`CHECK.SIZE = 1`). The Section 2 checkpoint is not in the repository, so they ran on stand-in offsets with the reported offset CVs (Pc 0.72, Pe 0.87, hybrid 0.44), 1000 cells per parent, 2000 hybrid cells, c̄ = 0.5024 and σ²_c = 1.9e-5. Rerun `checks_sim.R` once the checkpoint exists to use the observed design. `checks_data.R` and `checks_text.R` were tested on synthetic checkpoints only. They have not run on the data, and G2 could not reach Crossref from this container.
+
+Rows marked **outside** have numbers outside the handoff's stated criterion.
+
+| ID | Headline numbers | Monte Carlo error |
+|---|---|---|
+| A2 | (a) Closed-form slope at φ = 0 against the finite difference of the stable likelihood: 0 sign disagreements in 9873 datasets (median relative error 4.6e-7). (b) The grid finds no better interior maximum. In 19 datasets it finds a gain of at most 4.7e-5 at the upper end φ = 54.6, where the fit stopped at 54.59. The lgamma form `.cr_loglik()` differenced at φ = 1e-8 disagrees in sign in 4910 datasets (rounding; see mismatch 6). | exact counts |
+| A1 | **outside**: the bias is not well below the SD in sparse cells. Largest Cox–Reid \|bias\|/SD is 0.61 (N 800, M̄ 0.2, φ 0.01), and \|bias\| exceeds 2 MC SE in 21 of 60 cells (unadjusted profile ML: 19 of 60). In the sparsest cells the Cox–Reid bias is no smaller than the unadjusted one, for example N 800, M̄ 0.05, φ 0.01: 0.383 against 0.357 (SD 0.64). Relative bias × N M̄ φ (cells with M̄φ ≥ 0.05) has median 3.07 for Cox–Reid and 1.43 for unadjusted, so the 1/(N M̄ φ) pattern is not removed. | per cell; 500 genes |
+| A7 sim | Including the gene's own counts in the library biases φ by −0.13% at a library share of 1e-4, −2.1% at 0.01 and −9.5% at 0.05 (φ = 0.1); −0.05% to −8.1% at φ = 0.5. Read against the observed shares from `checks_data.R`. | below 2e-4 |
+| E1 | (a) LRT size at φ = 0: median 0.044, range 0.029 to 0.059 over 36 cells. (b) Coverage of the upper bound: median 0.992, lowest 0.934 (N 800, M̄ 0.2, φ 0.5). (c) At φM̄ = 0.1, 5 to 6% of genes are called class 2 and 22 to 31% class 3. At φM̄ = 0.02, 11 to 13% are called class 1. | binomial SE 0.007 |
+| B2 sim | Bias of σ̂²_c is within 2 MC SE in all 8 cells. SD at σ²_c = 1.9e-5 is 1.7e-6 (N 800) and 1.2e-6 (N 1600). | per row |
+| B3 | Median \|bias\|/SD 0.033, max 0.61 (φ⁰ 0.005, M̄ 0.1). The correction truncates up to 7% of fits. Relative bias of the corrected means is at most 1.2%. | per row |
+| B4 | **outside** for Cox–Reid with non-gamma factors. Lognormal: median relative bias −6.3% (range −32% to +22%), median bias/SD −0.60. Bimodal: +4.2% (up to +37%), bias/SD 0.35. Gamma: −0.1%. The moment estimators (Appendix A and the code's) have median relative bias near 0 for all three families, max +29% at M̄ 0.5, φ 0.05. | per row |
+| F1 sim | Appendix A as documented: max \|bias\| 0.022 (relative 2.6%); \|bias\| > 2 MC SE in 4 of 48 cells; converged in every fit. | per row |
+| F2 | Star limits: error 0.0011 (σ²*_d) and 0.0012 (σ²*_q) against the target 0.0005. Corrected σ²_d and σ²_q: up to 0.0011 and 0.0012. These are within about 2 MC SE, and the MC SE (0.0006 to 0.0013 at 8e6 cells) exceeds the target, so this run cannot resolve 0.0005. Summed-factor variance against the formula: 6e-5 (target 0.0002). | MC SE 0.0006 to 0.0013 |
+| F3 | δ̂ bias/SD up to 0.58; \|bias\| > 2 MC SE in 9 of 30 cells. Up to 47% of σ̂²_q are truncated at zero (ω 0.1, φ 0.1, M̄ 0.5). | 300 genes per cell |
+| F4 | δ̂ error up to 0.014 (MC SE 0.005) at an intrinsic variance ratio of 4 (ω 0.75). The other ratios are within 2 MC SE. | per row |
+| C4 | f estimated from the same cells: cis size 0.0505 (SE 0.0035), trans 0.043 (0.0032). f fixed at 0.4: cis 0.050 (0.0034), trans 0.041 (0.0031, KS p 0.003). | binomial SE |
+| A4 sim | **outside**. Within a group on the same cells, cor(μ̂, φ̂) reaches 0.129 (M̄ 5, φ 1, ω 0.75) and \|z\| > 2 in 6 of 18 cells. cor(Δμ, Δφ) of the cis contrast on the same cells reaches 0.233 (M̄ 5, φ 1, ω 0.25), \|z\| > 2 in 7 of 18. The disjoint and half-overlapping cell sets are near zero (\|z\| > 2 in 0 and 1 of 18). The departures grow with φ and M̄, which bears on the derivation in Methods: Separate partitions. | Fisher SE 0.032 |
+| C7 sim | cor(μ̂ of one allele, φ̂ of the other): \|cor\| ≤ 0.065, \|z\| > 2 in 1 of 36 cells. | Fisher SE 0.032 |
+| E3 sim | Coverage of the 95% percentile intervals: log₂ φ 0.915 to 0.965, burst size 0.905 to 0.965, κ 0.910 to 0.965. | binomial SE 0.015 |
+| D5 | (a) 10000 projections: 0 violations. (b) Raw total null, reused log₂ draws: size 0.033 to 0.060. Separate arithmetic centre: 0.000 to 0.067. | binomial SE 0.015 to 0.02 |
+| D6 | 0 of 10000 cases violate μ_H = μ_MP or the preservation of the cis contrast. | exact |
+| D1 local | Smoke test only, 20 genes per test (N.SIM 200, N.PERM 400): the pipeline's null generator runs end to end on the generator. Mean rejection at 0.05 by scale is 0.017 to 0.092; too few genes to judge size. The array (`null_calibration.sub`) gives the D1 to D4, D7 and D10 numbers. | binomial SE about 0.05 |
+| G3 | The ratio lies outside [1, cap] in 0 of 10000 cases. The cap identity holds with the population CV (error 1.4e-14) and not with the sample CV. The quadratic residual is 4.5e-12, and `fstar_from_r()` equals the formula. The γ → 0 remainder is γ³/128, so the document's f ≈ ½ − γ/8 is correct to that order. The large-γ form is γf − 1 ≈ −1/γ. | exact |
+
+Not run here, needing the data or the cluster: A3, A4 data, A5, A6, A7 data, A8, B1, B2 data, B5, B6, C1 to C3, C5 (`power_grid`), C6, C7 data, D1 to D4, D7, D8 to D10, E2, E3 data, E4, F1 (b, c), F5, G1, G2.
