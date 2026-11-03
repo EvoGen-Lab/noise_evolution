@@ -42,7 +42,7 @@
 ###     .boot_summary() / apply_gate() - Percentile interval, interquantile-range SE and zero fraction of bootstrap draws; sets the contrasts a gene does not qualify for to NA.
 ###     .contrast_raw() - The raw (difference) contrast of phi for one mode, defined when phi = 0.
 ###     .burst_q() / .contrast_burst_raw() - The raw burst size (mu phi) and kinetic balance (1 / (mu phi^2)) of a group, and their raw difference contrast for one reporting mode.
-###     .contrast_value() - Log2 contrast for one mode (total, cis, trans, mid, par) from a named list of per-group fitted values, with the share offset on cis and trans, the per-genome rescaling of the hybrid mean and the ploidy shift in mid and par.
+###     .contrast_value() / .correct_means() - Log2 contrast for one mode (total, cis, trans, mid, par) as a weighted sum over its groups (.MODE.WEIGHTS), with the allele means divided by their abundance factors and the per-genome hybrid built from the two alleles.
 ###     .cv2_of() - CV2 (1/mu + 1/disp) of one fitted group; NA unless mu and disp are finite and positive.
 ###   4. DISATTENUATED MEAN-DISP COUPLING (population summary)
 ###     eiv_components() - Errors-in-variables mean-disp coupling for one mode: attenuation-corrected variances, covariance and correlation, plus the raw correlation.
@@ -55,7 +55,7 @@
 ###     .se_scatter() - Shared SE-bar scatter body of the three gene-level scatters below.
 ###     plot_contrast_scatter() - Gene-level contrast scatter with SE bars: cis vs trans for one quantity, mean vs dispersion or rotated burst kinetics for one mode.
 ###     sig_hist_panel() - Histogram of one contrast (quantity, mode) with the genes significant at q < sig shaded by direction.
-###   6. PERMUTATION NULL  (per-gene significance for the contrasts)
+###   6. NULL DISTRIBUTIONS  (per-gene significance for the contrasts)
 ###     perm_pval() - Two-sided permutation p-value with add-one continuity correction, shared with the power grid.
 ###   7. CO-EXPRESSION  (residual co-fluctuation, cis/trans decomposed)
 ###     nb_residuals() - Pearson residuals from the offset NB fit, genes x cells.
@@ -79,7 +79,7 @@
 ###     reg_class_vec() - Vector form of classify_reg(), aligned to BURST.CONTRASTS's rows, for a given quantity.
 ###     dom_class_vec() - Vector form of classify_dom(), aligned to BURST.CONTRASTS's rows, for a given quantity.
 ###     class_stats() - Applies a per-class summary (class_mean_var, class_anova) to every regulatory and dominance class vector, named REG.MEAN ... DOM.KBAL.
-###     share_terms() / share_r_groups() - The transcriptome share of a set of hybrid cells (mean, true variance, eta_c, eta_e, xi, cis offset) and the named share correction of every dataset.
+###     share_terms() / share_r_groups() - The transcriptome share of a set of hybrid cells (mean, true variance, eta_c, eta_e, cis offset) and the named share correction of every dataset.
 ###     ploidy_components() / ploidy_shift() - Per gene: extrinsic and intrinsic variances (ratio-of-sums rates, share corrected), the log2 and raw ploidy shifts, and the share term of the summed hybrid's dispersion.
 ###     .overlap_lor() - Log2((observed + 0.5) / (expected + 0.5)) of a class contingency table; one definition for the heatmap colours and shared_overlap_rng().
 ###     class_overlap_heatmap() - Log2(observed/expected) association heatmap between two class vectors with BH-adjusted significance; levels auto-derived from the data or fixed so panels share axes (Figures 2 and 6, diagnostics).
@@ -150,7 +150,7 @@
 ###     fit_counts_dispersion() - One fit_dispersion() per gene (row) of a matrix against one exposure vector: mu, phi, boundary and convergence flags.
 ###     analysis_status_rows() - One long-table block of eligibility, run, estimate, CI, test and significance flags for one quantity and mode.
 ###     exclusion_row() / boot_zero_row() / boot_zero_genes() - Genes excluded from a contrast by reason; bootstrap replicates at a zero dispersion per quantity and the genes flagged.
-###     perm_label_draw() - one permutation's relabelings for every mode; cis and trans label the hybrid cells of the mean, noise and kinetic balance splits from the same swap flags and pool ordering.
+###     perm_label_draw() - one permutation's relabelings for the log2 mean nulls: pooled parents (total), allele swaps (cis), parent and same-genome allele pools (trans), hybrid and parent pools (par).
 ###     eiv_mode_ci_row() - errors-in-variables correlation for one mode m with a gene-resampling bootstrap CI.
 ###     seed_check_rows() - Summary rows (correlation, SE ratio median and IQR, count) of a two-seed bootstrap SE comparison, for the gene-level and co-expression checks.
 ###     se_floor_row() - count and median bootstrap SE (one column per SE vector) among items whose attenuation is at least floor f.
@@ -170,7 +170,9 @@
 ###   13c. FUNCTIONS THE CLUSTER SCRIPTS RUN
 ###     pilot_split_se_one() - one gene's bootstrap SE of log(mu), log(phi) and log kinetic balance for the four datasets needed to compute A and B, plus the hybrid-allele covariances.
 ###     boot_contrasts_one() - one gene's bootstrap contrasts across all modes (the unit of work a cluster worker does): log2 and raw contrasts of phi from the same refits.
-###     permute_contrasts_one() - one gene's permutation null: refits the relabeled groups for every mode and permutation, compares the observed.
+###     null_contrasts_one() - one gene's null distributions and p-values: permutations for the log2 mean contrasts (total, cis, trans with the level factor k, par), simulations from the fitted model for the mid mean and every dispersion and kinetic contrast.
+###     null_phi_log2() / null_phi_raw() / null_phi_kinetic() - Null dispersions by projection that zero a contrast on the log2 or raw scale, or a kinetic contrast with the means held.
+###     rgamma1() / sim_alleles() / simulate_groups() - Mean-one gamma factors; the two allele counts of a hybrid cell with a shared extrinsic factor; one simulated draw of a set of groups.
 ###     coexpr_bootstrap_one() - one bootstrap draw of the co-expression decomposition.
 ###     coexpr_part_table() - estimate, bootstrap SE (from the running sums), z and two-sided normal p for decomposition nm, one row per gene pair.
 ###     coexpr_perm_one() - one permutation draw of the five null spectra, for rank-matched testing of every candidate axis.
@@ -687,43 +689,28 @@ make_draws <- function(ncells, B, seed = 1, hyc, hyc_n, hyc_k) {
   }))
 }
 
-## Contrast definitions. .MODES lists, for each mode, the groups of its noise-axis contrasts (DISP and CV2) and
-## serves as their finite-input gate; .MODES.MEAN lists the groups of the mean-axis contrast, which differs from
-## .MODES for mid and par. Each contrast is a formula on a named list of fitted values.
-## Divergence: total, cis, trans. Dominance, midparent form: mid (arithmetic midparent for mean, geometric for
-## dispersion). Classic hybrid-vs-each-parent: par_sc, par_se.
-## Add an axis by adding one row here.
+## Contrast definitions (Methods: Contrasts between groups). Every contrast is a weighted sum over the groups it uses, with weights lambda_r of +-1 or +-1/2
+## (.MODE.WEIGHTS): on the log2 scale of the dispersions (geometric means for the per-genome hybrid and the midparent), on the raw scale of the dispersions
+## (arithmetic means), and on the log2 scale of the corrected allele means for total, cis and trans. The mid and par mean contrasts compare arithmetic means:
+## the per-genome hybrid mean mu_H = (mu_Hc + mu_He) / 2 against the midparent mu_MP = (mu_Pc + mu_Pe) / 2 or one parent.
+##   total    Pc +1, Pe -1                  the two parents
+##   cis      Hc +1, He -1                  the two hybrid alleles, measured in the same cells
+##   trans    Pc +1, Pe -1, Hc -1, He +1    the parental ratio minus the hybrid allele ratio
+##   mid      Hc +1/2, He +1/2, Pc -1/2, Pe -1/2   the per-genome hybrid against the midparent
+##   par_sc, par_se   Hc +1/2, He +1/2, P -1      the per-genome hybrid against one parent
 ##
-## OFFSETS, HAPLOID PARENTS AND THE DIPLOID HYBRID
-## Every offset is a direct library-size factor (analysis.R Section 2): a parent's offset is its library over the median
-## parental library D, and the two alleles of a hybrid cell share half the cell's hybrid depth, S_H / 2, with the summed
-## hybrid HYB.COMB at S_H. A fitted MU is then the mean count of a cell at depth D. Each allele's mean keeps its genome's
-## share of the hybrid library: with no regulatory divergence mu_Hc = 2 c-bar x the per-genome rate and mu_He = 2 (1 - c-bar) x the
-## per-genome rate (the abundance factors, equal to one only at c-bar = 0.5), so the cis mean contrast of such a gene is
-## log2[c-bar / (1 - c-bar)] rather than 0. Every contrast that compares an allele with a parent or with the other allele puts the
-## alleles on the per-genome scale of the parents:
-## Mean axis
-##   total       A ratio inside one ploidy state, so a shared factor cancels.
-##   cis         The allele ratio inside the hybrid less the share offset log2[c-bar / (1 - c-bar)] (a gene without an allele effect sits at 0).
-##   trans       (parent ratio) - (hybrid allele ratio less the same offset), so trans inherits the share correction of cis.
-##   par, mid   The hybrid mean per genome is the average of the two allele fits after rescaling each by its abundance factor,
-##               [mu_Hc / (2 c-bar) + mu_He / (2 (1 - c-bar))] / 2, which converges to the plain average of the per-genome rates. par compares
-##               it with one parent and mid with the arithmetic midparent (mu_Pc + mu_Pe) / 2.
-## Noise axis (DISP = phi, the NB dispersion, which has no summing rule)
-##   total, cis, trans  Ratios again, so a ploidy effect shared by both species (cell size, cell-cycle timing) cancels.
-##   mid, par   HYB.COMB sums two alleles per cell, which averages their private (intrinsic) noise and lowers DISP in the hybrid: with count
-##               shares pi and 1 - pi of the two alleles the sum keeps the shared (extrinsic) noise and weights the private noise by
-##               pi^2 + (1 - pi)^2 (ploidy_components()). The expected fall in log2 DISP is the ploidy shift delta (between 0 and 1), and on the raw
-##               scale the fall in phi is delta_raw. Both estimators add the estimated shift to the fitted difference: mid against the geometric
-##               (log2) or arithmetic (raw) midparent and par against one parent. On the derived scales bsize (mean + disp) rises by delta, kbal
-##               (-mean - 2 disp) falls by 2 delta, and cv2 recomputes with the latent term scaled by 2^delta. The permutation job reads the adjusted
-##               par contrast against the exchangeability null and reports _p_ploidy (own shift) and _p_ind (shift of 1, fully independent equal
-##               alleles) beside the unadjusted _p; the mid null is corrected by the shift of each synthetic hybrid.
+## THE PER-GENOME SCALE OF THE HYBRID ALLELES
+## Every offset is a direct library-size factor (analysis.R Section 2): a parent's offset is its library over the median parental library D, and the two alleles of
+## a hybrid cell share half the cell's hybrid depth, S_H / 2. A fitted allele mean mu*_r therefore keeps its genome's share of the hybrid library and converges to
+## 2 c-bar mu_Hc or 2 (1 - c-bar) mu_He (the abundance factors), so each allele mean is divided by its abundance factor before any contrast (.correct_means()):
+## mu_Hc = mu*_Hc / (2 c-bar), mu_He = mu*_He / (2 (1 - c-bar)). The allele dispersions arrive already corrected for the transcriptome share (.fit_one(share_r)).
+## The per-genome hybrid is built from the two corrected alleles of all hybrid cells (HYB.SC, HYB.SE): mean mu_H = (mu_Hc + mu_He) / 2, log2 phi_H the mean of
+## the two log2 allele dispersions (their geometric mean), the raw-scale phi_H their arithmetic mean, and CV2_H = 1 / mu_H + (phi_Hc + phi_He) / 2. No fit of the
+## summed counts enters a contrast; HYB.COMB is fitted for reporting only (analysis.R Section 2.6).
 ##
-## cis_n, trans_n, cis_k and trans_k are internal only, not reported directly. They are cis and trans computed from the splits chosen
-## to balance noise-axis power (HYC.N / HYT.N) and kinetic balance power (HYC.K / HYT.K) rather than the mean-axis split (HYC / HYT). The noise
-## axis of cis and trans reads the first (.DISP_SOURCE) and kinetic balance, which needs the mean and the dispersion from the same cells, the
-## second (.KBAL_SOURCE).
+## cis_n, trans_n, cis_k and trans_k are internal only, not reported directly. They are cis and trans computed from the splits chosen to balance noise-axis power
+## (HYC.N / HYT.N) and kinetic balance power (HYC.K / HYT.K) rather than the mean-axis split (HYC / HYT). The noise axis of cis and trans reads the first
+## (.DISP_SOURCE) and kinetic balance, which needs the mean and the dispersion from the same cells, the second (.KBAL_SOURCE).
 .MODES <- list(
   total   = c("MIX.SC","MIX.SE"),
   cis     = c("HYC.SC","HYC.SE"),
@@ -732,16 +719,18 @@ make_draws <- function(ncells, B, seed = 1, hyc, hyc_n, hyc_k) {
   trans_n = c("MIX.SC","MIX.SE","HYT.SC.N","HYT.SE.N"),
   cis_k   = c("HYC.SC.K","HYC.SE.K"),
   trans_k = c("MIX.SC","MIX.SE","HYT.SC.K","HYT.SE.K"),
-  mid     = c("MIX.SC","MIX.SE","HYB.COMB"),
-  par_sc = c("HYB.COMB","MIX.SC"),
-  par_se = c("HYB.COMB","MIX.SE"))
+  mid     = c("HYB.SC","HYB.SE","MIX.SC","MIX.SE"),
+  par_sc  = c("HYB.SC","HYB.SE","MIX.SC"),
+  par_se  = c("HYB.SC","HYB.SE","MIX.SE"))
 
-## Groups of the mean-axis contrast. mid and par read the two allele fits (their average is the hybrid mean rate);
-## every other mode reads the groups listed in .MODES.
+## The weights lambda_r of every mode, in the order of its groups in .MODES.
+.MODE.WEIGHTS <- list(
+  total = c(1, -1), cis = c(1, -1), trans = c(1, -1, -1, 1), cis_n = c(1, -1), trans_n = c(1, -1, -1, 1), cis_k = c(1, -1), trans_k = c(1, -1, -1, 1),
+  mid = c(0.5, 0.5, -0.5, -0.5), par_sc = c(0.5, 0.5, -1), par_se = c(0.5, 0.5, -1))
+.MODE.WEIGHTS <- Map(setNames, .MODE.WEIGHTS, .MODES[names(.MODE.WEIGHTS)])
+
+## Groups of the mean-axis contrast; with the per-genome hybrid built from the allele fits they are the groups of .MODES.
 .MODES.MEAN <- .MODES
-.MODES.MEAN$mid     <- c("MIX.SC","MIX.SE","HYB.SC","HYB.SE")
-.MODES.MEAN$par_sc <- c("HYB.SC","HYB.SE","MIX.SC")
-.MODES.MEAN$par_se <- c("HYB.SC","HYB.SE","MIX.SE")
 
 ## Only these six produce columns in BURST.CONTRASTS; cis_n/trans_n/cis_k/trans_k are sourced
 ## from, never reported under their own name
@@ -758,88 +747,80 @@ make_draws <- function(ncells, B, seed = 1, hyc, hyc_n, hyc_k) {
 
 ## Maps each dataset to the draws-list element (see make_draws()) that resamples it. The twelve hybrid
 ## keys (HYC, HYT, HYC.N, HYT.N, HYC.K, HYT.K) and HYB are built from the same resampled hybrid cell IDs, so every
-## mode shares its resampled cells with every other mode that uses the same cells.
+## mode shares its resampled cells with every other mode that uses the same cells. HYB.COMB, the summed counts, is fitted for reporting only.
 .DRAW.KEY <- c(MIX.SC = "MIX.SC", MIX.SE = "MIX.SE",
                HYC.SC = "HYC", HYC.SE = "HYC", HYT.SC = "HYT", HYT.SE = "HYT",
                HYC.SC.N = "HYC.N", HYC.SE.N = "HYC.N", HYT.SC.N = "HYT.N", HYT.SE.N = "HYT.N",
                HYC.SC.K = "HYC.K", HYC.SE.K = "HYC.K", HYT.SC.K = "HYT.K", HYT.SE.K = "HYT.K",
                HYB.COMB = "HYB", HYB.SC = "HYB", HYB.SE = "HYB")
 
-## Log2 contrast for one mode from a named list gv of per-group fitted values. q selects the
-## quantity: "MU" (mean rate per unit offset), "DISP" (phi, the NB dispersion; geometric midparent for mid) or "CV2".
-## total and cis are ratios within one ploidy state; trans is the parental ratio minus the hybrid allele
-## ratio. cbar is the mean transcriptome share c-bar: on the mean axis cis and trans subtract the share offset log2[c-bar / (1 - c-bar)] from the
-## hybrid allele ratio (both alleles share one library offset, so each fitted allele mean keeps its genome's share), and mid and par use the average of
-## the two allele rates after dividing each by its abundance factor, 2 c-bar and 2 (1 - c-bar), which puts them on the per-genome scale of the parents.
-## cbar = 0.5 leaves every contrast as fitted. On the noise axes mid and par use the summed fit HYB.COMB, and shift (the log2 ploidy shift) is added
-## to the noise-axis contrast of mid and par so the summed hybrid sits on the parents' per-genome scale. With zero_inf a fitted phi = 0 maps to
-## log2 phi = -Inf, which a bootstrap or permutation draw keeps as an extreme value; the result is NaN when both sides are -Inf.
-.contrast_value <- function(mode, gv, q, cbar = 0.5, shift = 0, zero_inf = FALSE) {
-  l2 <- if (zero_inf) function(x) if (is.finite(x) && x == 0) -Inf else log2(x) else log2
-  off <- if (q == "MU") log2(cbar / (1 - cbar)) else 0
-  sft <- if (q == "DISP") shift else 0
-  hyb_mu <- function() 0.5 * (gv[["HYB.SC"]] / (2 * cbar) + gv[["HYB.SE"]] / (2 * (1 - cbar)))
-  switch(mode,
-    total   = l2(gv[["MIX.SC"]]) - l2(gv[["MIX.SE"]]),
-    cis     = l2(gv[["HYC.SC"]]) - l2(gv[["HYC.SE"]]) - off,
-    cis_n   = l2(gv[["HYC.SC.N"]]) - l2(gv[["HYC.SE.N"]]) - off,
-    cis_k   = l2(gv[["HYC.SC.K"]]) - l2(gv[["HYC.SE.K"]]) - off,
-    trans   = (l2(gv[["MIX.SC"]]) - l2(gv[["MIX.SE"]])) -
-              (l2(gv[["HYT.SC"]]) - l2(gv[["HYT.SE"]]) - off),
-    trans_n = (l2(gv[["MIX.SC"]]) - l2(gv[["MIX.SE"]])) -
-              (l2(gv[["HYT.SC.N"]]) - l2(gv[["HYT.SE.N"]]) - off),
-    trans_k = (l2(gv[["MIX.SC"]]) - l2(gv[["MIX.SE"]])) -
-              (l2(gv[["HYT.SC.K"]]) - l2(gv[["HYT.SE.K"]]) - off),
-    mid     = if (q == "MU") l2(hyb_mu()) - l2((gv[["MIX.SC"]] + gv[["MIX.SE"]]) / 2)
-              else           l2(gv[["HYB.COMB"]]) - 0.5 * (l2(gv[["MIX.SC"]]) + l2(gv[["MIX.SE"]])) + sft,
-    par_sc = (if (q == "MU") l2(hyb_mu()) else l2(gv[["HYB.COMB"]])) - l2(gv[["MIX.SC"]]) + sft,
-    par_se = (if (q == "MU") l2(hyb_mu()) else l2(gv[["HYB.COMB"]])) - l2(gv[["MIX.SE"]]) + sft)
+## The datasets whose fits enter a contrast: every dataset but the summed counts.
+.CONTRAST.GROUPS <- setdiff(names(.DRAW.KEY), "HYB.COMB")
+
+## .allele_side: "SC" for an Sc-allele dataset of the hybrid, "SE" for an Se-allele dataset, "" for a parent or the summed counts.
+.allele_side <- function(k) if (grepl("^HY[BCT]\\.SC", k)) "SC" else if (grepl("^HY[BCT]\\.SE", k)) "SE" else ""
+
+## .correct_means: a named list of fitted mean rates with every hybrid allele mean divided by its abundance factor, 2 c-bar for an Sc allele and 2 (1 - c-bar)
+## for an Se allele, which puts it on the per-genome scale of the parents (Methods: Transcriptome share corrections in the hybrid). Parental means pass through.
+.correct_means <- function(gv_mu, cbar) {
+  for (k in names(gv_mu)) {
+    sd_ <- .allele_side(k)
+    if (sd_ == "SC") gv_mu[[k]] <- gv_mu[[k]] / (2 * cbar) else if (sd_ == "SE") gv_mu[[k]] <- gv_mu[[k]] / (2 * (1 - cbar))
+  }
+  gv_mu
 }
 
-## .contrast_raw: the raw (difference) contrast of the dispersion phi for one mode from a named list gv of per-group phi, the
-## counterpart of .contrast_value(mode, gv, "DISP") on the original scale. total and cis are differences within one ploidy state;
-## trans is the parental difference minus the hybrid allele difference; mid is the summed hybrid against the arithmetic midparent;
-## par is the summed hybrid against one parent. The summed hybrid's phi falls by the raw ploidy shift (ploidy_components()), so mid and
-## par add shift to it to sit on the parents' per-genome scale (shift = 0 leaves it as fitted). A fitted phi = 0 is a valid
-## input and gives a defined contrast; the caller supplies NA for a failed fit.
-.contrast_raw <- function(mode, gv, shift = 0) {
-  switch(mode,
-    total   = gv[["MIX.SC"]] - gv[["MIX.SE"]],
-    cis     = gv[["HYC.SC"]] - gv[["HYC.SE"]],
-    cis_n   = gv[["HYC.SC.N"]] - gv[["HYC.SE.N"]],
-    cis_k   = gv[["HYC.SC.K"]] - gv[["HYC.SE.K"]],
-    trans   = (gv[["MIX.SC"]] - gv[["MIX.SE"]]) - (gv[["HYT.SC"]] - gv[["HYT.SE"]]),
-    trans_n = (gv[["MIX.SC"]] - gv[["MIX.SE"]]) - (gv[["HYT.SC.N"]] - gv[["HYT.SE.N"]]),
-    trans_k = (gv[["MIX.SC"]] - gv[["MIX.SE"]]) - (gv[["HYT.SC.K"]] - gv[["HYT.SE.K"]]),
-    mid     = gv[["HYB.COMB"]] + shift - 0.5 * (gv[["MIX.SC"]] + gv[["MIX.SE"]]),
-    par_sc = gv[["HYB.COMB"]] + shift - gv[["MIX.SC"]],
-    par_se = gv[["HYB.COMB"]] + shift - gv[["MIX.SE"]])
+## .contrast_value: the log2 contrast of one mode from a named list gv of per-group values. q is "MU" (corrected mean rates, .correct_means()), "DISP" (corrected
+## dispersions phi) or "CV2". DISP and CV2 contrasts, and the MU contrasts of total, cis and trans, are the weighted sums of the log2 group values
+## (.MODE.WEIGHTS). The MU contrasts of mid and par compare the arithmetic per-genome hybrid mean (mu_Hc + mu_He) / 2 with the arithmetic midparent or one parent.
+## With zero_inf a value of zero maps to log2 = -Inf, which a bootstrap or null draw keeps as an extreme value; the result is NaN when +Inf and -Inf meet.
+.contrast_value <- function(mode, gv, q, zero_inf = FALSE) {
+  l2 <- if (zero_inf) function(x) if (is.finite(x) && x == 0) -Inf else log2(x) else log2
+  g <- .MODES[[mode]]; w <- .MODE.WEIGHTS[[mode]]
+  if (q == "MU" && mode %in% c("mid", "par_sc", "par_se")) {
+    hyb <- 0.5 * (gv[["HYB.SC"]] + gv[["HYB.SE"]])
+    ref <- if (mode == "mid") 0.5 * (gv[["MIX.SC"]] + gv[["MIX.SE"]]) else gv[[g[[3]]]]
+    return(l2(hyb) - l2(ref))
+  }
+  sum(w * vapply(g, function(k) l2(gv[[k]]), numeric(1)))
+}
+
+## .contrast_raw: the raw (difference) contrast of the dispersion phi for one mode, the weighted sum of the group dispersions (arithmetic means for the per-genome
+## hybrid and the midparent). A fitted phi = 0 is a valid input and gives a defined contrast; the caller supplies NA for a failed fit.
+.contrast_raw <- function(mode, gv) {
+  sum(.MODE.WEIGHTS[[mode]] * vapply(.MODES[[mode]], function(k) gv[[k]], numeric(1)))
 }
 
 ## .disp_contrasts: the log2 and the raw contrast of phi for one mode from a named list gv of per-group phi, as c(log, raw). The log2
 ## contrast needs a finite phi > 0 in every group of the mode (.MODES), or with zero_inf a finite phi >= 0 (a zero maps to -Inf), the raw one a finite
-## phi >= 0, and each is NA otherwise. shift and shift_raw are the log2 and raw ploidy shifts of mid and par. Both come from the same phi values,
-## which is how a bootstrap draw or a point fit yields the two scales together.
-.disp_contrasts <- function(mode, gv, shift = 0, shift_raw = 0, zero_inf = FALSE) {
+## phi >= 0, and each is NA otherwise. Both come from the same phi values, which is how a bootstrap draw or a point fit yields the two scales together.
+.disp_contrasts <- function(mode, gv, zero_inf = FALSE) {
   bf <- unlist(gv[.MODES[[mode]]])
-  lg <- if (all(is.finite(bf) & (if (zero_inf) bf >= 0 else bf > 0))) .contrast_value(mode, gv, "DISP", shift = shift, zero_inf = zero_inf) else NA_real_
+  lg <- if (all(is.finite(bf) & (if (zero_inf) bf >= 0 else bf > 0))) .contrast_value(mode, gv, "DISP", zero_inf = zero_inf) else NA_real_
   c(log = if (is.nan(lg)) NA_real_ else lg,
-    raw = if (all(is.finite(bf) & bf >= 0)) .contrast_raw(mode, gv, shift_raw) else NA_real_)
+    raw = if (all(is.finite(bf) & bf >= 0)) .contrast_raw(mode, gv) else NA_real_)
 }
 
-## .mode_contrasts: every contrast of every mode (the rows of .MODES) from named lists of per-group rates (gv_mu) and dispersions (gv_phi), as a matrix with the
-## columns mean (log2, share corrected at cbar), disp (log2, with a fitted phi = 0 mapped to -Inf, plus the ploidy shift in mid and par), raw (the raw
-## difference of phi, plus the raw shift in mid and par) and cv2 (log2 of 1/mu + phi, with the summed hybrid's phi scaled by 2^shift). An entry is NA when a
-## group it needs is not finite. The one definition of the contrasts for the observed fits and for every bootstrap draw.
-.mode_contrasts <- function(gv_mu, gv_phi, cbar, shift = 0, shift_raw = 0, modes = names(.MODES)) {
+## .mode_contrasts: every contrast of the given modes from named lists of fitted mean rates (gv_mu, the uncorrected fits mu*, corrected here at cbar) and
+## corrected dispersions (gv_phi), as a matrix with the columns mean (log2), disp (log2, a fitted phi = 0 mapped to -Inf), raw (the raw difference of phi) and cv2
+## (log2 of 1/mu + phi; for mid and par the hybrid's CV2_H = 1 / mu_H + (phi_Hc + phi_He) / 2 against the geometric midparent or one parent). An entry is NA when a
+## group it needs is not finite. The one definition of the contrasts for the observed fits, every bootstrap draw and every null refit.
+.mode_contrasts <- function(gv_mu, gv_phi, cbar, modes = names(.MODES)) {
+  mu <- .correct_means(gv_mu, cbar)
   out <- matrix(NA_real_, length(modes), 4, dimnames = list(modes, c("mean", "disp", "raw", "cv2")))
-  phi_cv <- gv_phi; if ("HYB.COMB" %in% names(gv_phi)) phi_cv[["HYB.COMB"]] <- gv_phi[["HYB.COMB"]] * 2^shift      # the summed hybrid's latent term on the per-genome scale
-  cv <- Map(.cv2_of, gv_mu, phi_cv)
+  cv <- lapply(setNames(names(mu), names(mu)), function(k) .cv2_of(mu[[k]], gv_phi[[k]]))
   for (k in modes) {
-    v <- .contrast_value(k, gv_mu, "MU", cbar); if (is.finite(v)) out[k, "mean"] <- v
-    dc <- .disp_contrasts(k, gv_phi, shift, shift_raw, zero_inf = TRUE); out[k, c("disp", "raw")] <- dc[c("log", "raw")]
-    cg <- unlist(cv[.MODES[[k]]])
-    if (all(is.finite(cg) & cg > 0)) out[k, "cv2"] <- .contrast_value(k, cv, "CV2")
+    if (!all(.MODES[[k]] %in% names(mu))) next
+    v <- .contrast_value(k, mu, "MU"); if (is.finite(v)) out[k, "mean"] <- v
+    dc <- .disp_contrasts(k, gv_phi, zero_inf = TRUE); out[k, c("disp", "raw")] <- dc[c("log", "raw")]
+    if (k %in% c("mid", "par_sc", "par_se")) {
+      cvh <- .cv2_of(0.5 * (mu[["HYB.SC"]] + mu[["HYB.SE"]]), 0.5 * (gv_phi[["HYB.SC"]] + gv_phi[["HYB.SE"]]))
+      ref <- if (k == "mid") c(cv[["MIX.SC"]], cv[["MIX.SE"]]) else cv[[.MODES[[k]][[3]]]]
+      if (is.finite(cvh) && all(is.finite(ref) & ref > 0)) out[k, "cv2"] <- log2(cvh) - mean(log2(ref))
+    } else {
+      cg <- unlist(cv[.MODES[[k]]])
+      if (all(is.finite(cg) & cg > 0)) out[k, "cv2"] <- .contrast_value(k, cv, "CV2")
+    }
   }
   out
 }
@@ -853,23 +834,17 @@ make_draws <- function(ncells, B, seed = 1, hyc, hyc_n, hyc_k) {
   else                 { if (mu > 0 && phi > 0) 1 / (mu * phi^2) else NA_real_ }
 }
 
-## .contrast_burst_raw: the raw (difference) contrast of burst size or kinetic balance for reporting mode md (one of .OUT_MODES) from named lists
-## of per-group rates (gv_mu) and dispersions (gv_phi). Each group's rate is put on the per-genome scale first (an Sc allele's divided by 2 c-bar, an Se
-## allele's by 2 (1 - c-bar), the summed hybrid's the average of the two). A burst size pairs a group's dispersion with the rate of the matching
-## mean-split dataset (HYC.SC.N with HYC.SC, and so on), the same pairing the log2 bsize uses (mean from the mean split, noise from the noise split), so
-## the two estimates come from independent cells; a kinetic balance takes the rate and the dispersion from the same group, those of the kinetic balance
-## split (.KBAL_SOURCE) for cis and trans. The summed hybrid's phi gets the raw ploidy shift added in the mid and par modes. The difference then follows
-## .contrast_raw() on the source mode, so cis, trans, mid and par read their groups exactly as the dispersion contrasts do.
-.contrast_burst_raw <- function(md, gv_mu, gv_phi, kind, shift = 0, cbar = 0.5) {
+## .contrast_burst_raw: the raw (difference) contrast of burst size or kinetic balance for reporting mode md (one of .OUT_MODES) from named lists of fitted mean
+## rates (gv_mu, uncorrected, corrected here at cbar) and corrected dispersions (gv_phi). Each group's quantity uses its per-genome rate. A burst size pairs a
+## group's dispersion with the rate of the matching mean-split dataset (HYC.SC.N with HYC.SC, and so on), the pairing the log2 bsize uses (mean from the mean
+## split, noise from the noise split); a kinetic balance takes the rate and the dispersion from the same group, those of the kinetic balance split
+## (.KBAL_SOURCE) for cis and trans. The contrast is the weighted sum of the group quantities with the weights of the source mode (.MODE.WEIGHTS), so the
+## per-genome hybrid and the midparent enter as arithmetic means, as on the raw dispersion scale.
+.contrast_burst_raw <- function(md, gv_mu, gv_phi, kind, cbar = 0.5) {
   smd <- if (kind == "bsize") .DISP_SOURCE[[md]] else .KBAL_SOURCE[[md]]
-  hyb_shift <- if (md %in% c("mid", "par_sc", "par_se")) shift else 0
-  gen <- function(k) if (grepl("^HY[BCT]\\.SC", k)) gv_mu[[k]] / (2 * cbar) else if (grepl("^HY[BCT]\\.SE", k)) gv_mu[[k]] / (2 * (1 - cbar)) else gv_mu[[k]]
-  q <- lapply(setNames(.MODES[[smd]], .MODES[[smd]]), function(k) {
-    mu  <- if (k == "HYB.COMB") 0.5 * (gen("HYB.SC") + gen("HYB.SE")) else gen(if (kind == "bsize") sub("\\.N$", "", k) else k)
-    phi <- gv_phi[[k]] + (if (k == "HYB.COMB") hyb_shift else 0)
-    .burst_q(mu, phi, kind)
-  })
-  .contrast_raw(smd, q)
+  mu <- .correct_means(gv_mu, cbar)
+  q <- vapply(.MODES[[smd]], function(k) .burst_q(mu[[if (kind == "bsize") sub("\\.N$", "", k) else k]], gv_phi[[k]], kind), numeric(1))
+  sum(.MODE.WEIGHTS[[smd]] * q)
 }
 
 ## CV2 (squared coefficient of variation) of one fitted group: 1/mu + disp (disp = phi), the Poisson plus
@@ -1081,33 +1056,15 @@ sig_hist_panel <- function(contrasts, pr, mode, quantity, ymax, sig = 0.05, up =
 }
 
 ## ============================================================
-## 6. PERMUTATION NULL  (per-gene significance for the contrasts)
+## 6. NULL DISTRIBUTIONS  (per-gene significance for the contrasts)
 ## ============================================================
-## Mirrors the bootstrap but shuffles labels to null each contrast.
-## Per mode:
-##   total       pool the two parents, reshuffle species labels
-##   cis         swap the two alleles within each hybrid cell
-##   trans       reshuffle parent vs hybrid context on each allele side
-##               (nulls the parental-ratio vs hybrid-ratio difference)
-##   mid         additive surrogate cells from random parent pairs,
-##               compared to the observed midparent (additivity null)
-##   par_sc/se  pool combined hybrid with one parent, relabel
-## Centering of each null
-##   total, cis, trans  Center at zero on both axes.
-##   par        Pools the summed hybrid (offset S_H) with one parent and relabels, so the null
-##               centers at zero. On the mean axis the pooled summed fit stands for the hybrid mean rate, which
-##               equals the average of the two allele rates that the observed contrast uses. On the noise
-##               axis the observed contrast carries the allele averaging shift, so the permutation reads the
-##               ploidy-adjusted contrast against the same null and reports _p_ploidy and _p_ind (see .MODES).
-##   mid         The surrogate pairs a Pc cell with a Pe cell and thins each parent so the two offset totals
-##               are equal, which puts the surrogate's mean rate at the unweighted midparent. The mean axis
-##               centers near zero. The noise axis centers near the averaging shift (up to +1 log2 for equal
-##               parents), so the mid p-value is descriptive and the classifiers read par.
+## Each contrast is tested against a null built under its own null hypothesis (null_contrasts_one(), run by gene_perm.R): permutations for the log2 mean
+## contrasts of total, cis, trans and par, and simulations from the fitted model for the mid mean contrast and every dispersion and kinetic contrast.
 ## Downstream classifiers read the BH-adjusted _q columns (fdr_columns).
 
 ## perm_pval: two-sided permutation p-value on |statistic| with an add-one correction, so a
 ## finite null never yields p = 0; undefined (NA) null draws are dropped and infinite ones count as extreme. Shared by the gene-level
-## permutation null (permute_contrasts_one() in gene_perm.R) and the power grid (power_grid_row() in power_grid.R).
+## null generator (null_contrasts_one() in gene_perm.R) and the power grid (power_grid_row() in power_grid.R).
 perm_pval <- function(obs, null) {
   ok <- !is.na(null)                      # an infinite null draw (a log2 contrast at a zero dispersion) is kept as an extreme value
   if (is.na(obs) || sum(ok) < 1) return(NA_real_)
@@ -1435,14 +1392,9 @@ classify_reg <- function(p_cis, p_trans, est_cis, est_trans, sig = 0.05, colors 
 }
 
 ### Dominance classification (hybrid vs each parent)
-## Inputs are the par q-values and estimates (par = log2 hybrid minus log2 parent). The
-## parents are haploid and the hybrid is diploid. On the mean axis the hybrid mean rate is the
-## average of the two allele fits (equal to the summed fit, both alleles being offset by S_H / 2), so an additive
-## gene sits at the midparent (to within (2 c-bar - 1) (mu_Pc - mu_Pe) / (mu_Pc + mu_Pe)) and the calls need no ploidy correction. On
-## the noise axis HYB.COMB averages the intrinsic noise of two alleles, which lowers DISP
-## in the hybrid relative to both parents; noise-axis calls therefore use the
-## ploidy-adjusted estimates (the BURST.CONTRASTS block in analysis.R) and the _q_ploidy q-values
-## (disp, bsize, kbal, cv2; dom_class_vec selects them), while the mean axis uses _q.
+## Inputs are the par q-values and estimates (par = the per-genome hybrid minus one parent, log2). The per-genome hybrid is built from the two corrected
+## allele fits (mean: their average; dispersion: their geometric mean), each of which is a single-genome estimate, so the calls compare one genome with one
+## genome on every axis and need no ploidy correction.
 
 classify_dom <- function(p_par_sc, p_par_se, est_par_sc, est_par_se, sig = 0.05, colors = COLOR.LIST.2) {
   n   <- length(p_par_sc)
@@ -1484,16 +1436,13 @@ reg_class_vec <- function(BURST.CONTRASTS, PR, quantity = c("mean", "disp", "bsi
   classify_reg(PR[[paste0(quantity, "_cis_q")]][i], PR[[paste0(quantity, "_trans_q")]][i], BURST.CONTRASTS[[paste0(quantity, "_cis_est")]], BURST.CONTRASTS[[paste0(quantity, "_trans_est")]], sig = sig)$class
 }
 
-## dom_class_vec: classify_dom() for one quantity, aligned to BURST.CONTRASTS rows. basis picks
-## the noise-axis q-values: "own" reads _q_ploidy (this gene's own ploidy shift) and "ind"
-## reads _q_ind (a shift of 1). The mean axis always reads _q. A missing column stops with a
-## message, so a permutation run without PLOIDY.SHIFT cannot pass through unnoticed.
-dom_class_vec <- function(BURST.CONTRASTS, PR, quantity = c("mean", "disp", "bsize", "kbal", "cv2"), sig = 0.05, basis = c("own", "ind")) {
-  quantity <- match.arg(quantity); basis <- match.arg(basis)
+## dom_class_vec: classify_dom() for one quantity, aligned to BURST.CONTRASTS rows, from the par q-values (_q) and estimates. The par contrasts compare the
+## per-genome hybrid (built from the two allele fits) with each parent, so no ploidy adjustment enters. A missing column stops with a message.
+dom_class_vec <- function(BURST.CONTRASTS, PR, quantity = c("mean", "disp", "bsize", "kbal", "cv2"), sig = 0.05) {
+  quantity <- match.arg(quantity)
   i   <- match(BURST.CONTRASTS$gene, PR$gene)
-  sfx <- if (quantity == "mean") "_q" else if (basis == "own") "_q_ploidy" else "_q_ind"
-  cs <- paste0(quantity, "_par_sc", sfx); ce <- paste0(quantity, "_par_se", sfx)
-  if (!all(c(cs, ce) %in% names(PR))) stop(sprintf("PR lacks %s. Rerun gene_perm.R with SHARE.OBS (the per-gene shifts) in the inputs.", cs))
+  cs <- paste0(quantity, "_par_sc_q"); ce <- paste0(quantity, "_par_se_q")
+  if (!all(c(cs, ce) %in% names(PR))) stop(sprintf("PR lacks %s. Rerun gene_perm.R.", cs))
   classify_dom(PR[[cs]][i], PR[[ce]][i], BURST.CONTRASTS[[paste0(quantity, "_par_sc_est")]], BURST.CONTRASTS[[paste0(quantity, "_par_se_est")]], sig = sig)$class
 }
 
@@ -2184,8 +2133,8 @@ shared_overlap_rng <- function(pairs, levels_common) {
 ## alleles, hybrid = one Sc-like plus one Se-like allele), a nonlinear
 ## function of log2(Sc) and log2(Se). In the AD frame SE bars use
 ## cor_par_<quantity> when present (exact for the rotation) and fall back
-## to independence otherwise. The noise quantities plot the ploidy-adjusted
-## estimates, so a cloud on the zero lines means hybrid noise matches the
+## to independence otherwise. The noise quantities plot the per-genome
+## hybrid built from the two allele fits, so a cloud on the zero lines means hybrid noise matches the
 ## parents at the per-genome scale. Returns the class vector invisibly
 ## (finite genes only).
 plot_dom_class <- function(BURST.CONTRASTS, PR, quantity = c("mean", "disp", "bsize", "kbal", "cv2"), frame = c("parent","AD"), sig = 0.05, main = NULL, lim = NULL, bar_col = adjustcolor(COLOR.GREY[["dark"]], 0.25)) {
@@ -2220,7 +2169,7 @@ plot_dom_class <- function(BURST.CONTRASTS, PR, quantity = c("mean", "disp", "bs
 ## size L_H. The variance of the true share is the observed variance of c_hat minus the binomial sampling variance, estimated with L - 1 as the
 ## finite-sample denominator and truncated at zero; the mean share c-bar is the unweighted mean of c_hat. From them come the allele multiplier variances
 ## eta_c = var(c) / c-bar^2 and eta_e = var(c) / (1 - c-bar)^2 (r_c and r_e, the dispersion correction of the Hc and He alleles), the opposing-share term
-## xi = var(c) / [c-bar (1 - c-bar)] and the log2 offset log2[c-bar / (1 - c-bar)] of the cis mean contrast. Used for the observed cells in analysis.R
+## the log2 ratio log2[c-bar / (1 - c-bar)] of the two abundance factors. Used for the observed cells in analysis.R
 ## Section 1.2 and for every bootstrap resample of cells, so each replicate refits its own share terms.
 share_terms <- function(c_hat, lib) {
   stopifnot(length(c_hat) == length(lib), length(c_hat) > 2, all(is.finite(c_hat)), all(lib > 1))
@@ -2228,7 +2177,7 @@ share_terms <- function(c_hat, lib) {
   var_obs <- var(c_hat); var_binom <- mean(c_hat * (1 - c_hat) / (lib - 1))
   v <- max(var_obs - var_binom, 0)
   list(cbar = cbar, var_obs = var_obs, var_binom = var_binom, var_c = v, negative = var_obs < var_binom,
-       r_c = v / cbar^2, r_e = v / (1 - cbar)^2, xi = v / (cbar * (1 - cbar)), offset = log2(cbar / (1 - cbar)))
+       r_c = v / cbar^2, r_e = v / (1 - cbar)^2, offset = log2(cbar / (1 - cbar)))
 }
 
 ## share_r_groups(r_c, r_e): the named transcriptome share correction of every dataset, the .fit_one(share_r) argument: r_c for each Sc-allele dataset (HYB.SC
@@ -2248,7 +2197,8 @@ share_r_groups <- function(r_c, r_e) {
 ##   sigma_d* = mean(a b) - 1                                    (extrinsic: the allele covariance)
 ##   sigma_q* = 0.5 mean((a - b)^2) - 0.5 mean(y_c / (O mu_c)^2 + y_e / (O mu_e)^2)   (intrinsic: half the squared difference less the Poisson noise),
 ## with a = y_c / (O mu_c) and b = y_e / (O mu_e). Cell-to-cell variation of the share biases them; the corrected estimators solve their limits (Appendix C):
-##   sigma_d = (1 + sigma_d*) / (1 - xi) - 1,   sigma_q = (sigma_q* - [(eta_c + eta_e) / 2 + xi] (1 + sigma_d)) / (1 + (eta_c + eta_e) / 2).
+##   sigma_d = (1 + sigma_d*) / (1 - sqrt(eta_c eta_e)) - 1,   sigma_q = (sigma_q* - [(eta_c + eta_e) / 2 + sqrt(eta_c eta_e)] (1 + sigma_d)) / (1 + (eta_c + eta_e) / 2),
+## where sqrt(eta_c eta_e) = var(c) / [c-bar (1 - c-bar)].
 ## The star estimators enter untruncated and each corrected variance is truncated at zero afterwards. With pi-hat = sum(y_c) / (sum(y_c) + sum(y_e)) the Hc
 ## share of the summed count and wsq = pi^2 + (1 - pi)^2 the weight on private noise in the sum:
 ##   delta     = log2[(sigma_d + sigma_q) / (sigma_d + wsq sigma_q)]   the expected fall in log2 phi when the alleles are summed (0 when both variances are 0),
@@ -2262,7 +2212,7 @@ ploidy_components <- function(yc, ye, expo, share, block = 500) {
   n_g <- nrow(yc); so <- sum(expo)
   nm <- c("pi", "sigma_d", "sigma_q", "delta", "delta_raw", "share_sub")
   out <- matrix(NA_real_, n_g, length(nm), dimnames = list(rownames(yc), nm))
-  eta_bar <- 0.5 * (share$r_c + share$r_e); xi <- share$xi; cbar <- share$cbar
+  eta_bar <- 0.5 * (share$r_c + share$r_e); eta_ce <- sqrt(share$r_c * share$r_e); cbar <- share$cbar
   for (rows in split(seq_len(n_g), ceiling(seq_len(n_g) / block))) {
     a <- yc[rows, , drop = FALSE]; b <- ye[rows, , drop = FALSE]
     mc <- rowSums(a) / so; me <- rowSums(b) / so
@@ -2272,8 +2222,8 @@ ploidy_components <- function(yc, ye, expo, share, block = 500) {
     shot <- 0.5 * (rowMeans(sweep(a, 2, expo^2, "/")) / mc^2 + rowMeans(sweep(b, 2, expo^2, "/")) / me^2)
     d_star <- rowMeans(sa * sb) - 1
     q_star <- 0.5 * rowMeans((sa - sb)^2) - shot
-    sd2 <- (1 + d_star) / (1 - xi) - 1
-    sq2 <- (q_star - (eta_bar + xi) * (1 + sd2)) / (1 + eta_bar)
+    sd2 <- (1 + d_star) / (1 - eta_ce) - 1
+    sq2 <- (q_star - (eta_bar + eta_ce) * (1 + sd2)) / (1 + eta_bar)
     sd <- pmax(sd2, 0); sq <- pmax(sq2, 0)
     pi_h <- rowSums(a) / (rowSums(a) + rowSums(b)); wsq <- pi_h^2 + (1 - pi_h)^2
     delta <- ifelse(sd + sq > 0, log2((sd + sq) / (sd + wsq * sq)), 0)
@@ -3558,41 +3508,22 @@ boot_zero_genes <- function(q, md, burst, pr) {
              q = pr[[paste0(q, "_", md, "_q")]][match(burst$gene[fl], pr$gene)], row.names = NULL, stringsAsFactors = FALSE)
 }
 
-## perm_label_draw: one permutation's relabelings for every mode. total and par shuffle pooled
-## cell labels, mid pairs random parent cells, and cis and trans are drawn so that the mean-split, noise-split and
-## kinetic-balance-split versions of a contrast (cis, cis_n and cis_k; trans, trans_n and trans_k) are relabeled from the same
-## cells. Each version keeps its exact marginal null, so only the coupling between them is new.
-## - cis swaps the alleles of a hybrid cell with probability 0.5. One swap flag is drawn per hybrid
-##   cell, and the cis, cis_n and cis_k groups read the flags of their own cells (hyc, hyc_n, hyc_k: positions of the
-##   HYC, HYC.N and HYC.K cells among the nHYB hybrid cells), so a cell in several groups swaps in all of them.
-## - trans pools the nP parent cells of one allele with the hybrid cells of the trans group. One random
-##   ordering of the parent cells plus every hybrid cell of any trans group (hyt, hyt_n, hyt_k: positions
-##   of the HYT, HYT.N and HYT.K cells) serves all versions; each version keeps the members of its own pool
-##   in that order. Restricting a uniform ordering to a subset leaves a uniform ordering, so each
-##   pooled shuffle is exact, and the parent cells sent to the hybrid-sized group follow the same
-##   ordering in all versions. The hybrid positions are in column order of their datasets (ascending),
-##   as split_indices_by_depth() returns them. The SC and SE allele pools are ordered separately.
-## nSC, nSE are the parent cell counts and b the permutation index (not used).
-perm_label_draw <- function(b, hyc, hyc_n, hyc_k, hyt, hyt_n, hyt_k, nHYB, nSC, nSE) {
+## perm_label_draw: one permutation's relabelings for the log2 mean nulls (null_contrasts_one()). total shuffles the pooled parental cells; cis draws one
+## swap flag per cell of the cis group (hyc: positions of the HYC cells among the nHYB hybrid cells), exchanging its two rescaled allele counts with
+## probability 0.5; trans pools the cells of one parent with the trans cells (hyt) of the same genome, the two alleles ordered separately (perm_trans_pool());
+## par pools all hybrid cells with the cells of one parent. Each permutation's first group is the parent-sized one for total and trans and the hybrid-sized one
+## for par. b is the permutation index (not used).
+perm_label_draw <- function(b, hyc, hyt, nHYB, nSC, nSE) {
   stopifnot(is.numeric(nHYB), length(nHYB) == 1, nHYB >= 1,
-            all(vapply(list(hyc, hyc_n, hyc_k, hyt, hyt_n, hyt_k), function(x) !is.unsorted(x, strictly = TRUE) && all(x >= 1 & x <= nHYB), logical(1))))
-  sc <- perm_trans_pool(nSC, hyt, hyt_n, hyt_k); se <- perm_trans_pool(nSE, hyt, hyt_n, hyt_k)
+            all(vapply(list(hyc, hyt), function(x) !is.unsorted(x, strictly = TRUE) && all(x >= 1 & x <= nHYB), logical(1))))
   flip <- runif(nHYB) < 0.5
   list(
-    total     = sample.int(nSC + nSE),
-    cis       = flip[hyc],
-    cis_n     = flip[hyc_n],
-    cis_k     = flip[hyc_k],
-    transSC   = sc$m,
-    transSE   = se$m,
-    transSC_n = sc$n,
-    transSE_n = se$n,
-    transSC_k = sc$k,
-    transSE_k = se$k,
-    mid_i   = sample.int(nSC, nHYB, replace = TRUE),
-    mid_j   = sample.int(nSE, nHYB, replace = TRUE),
-    parSC  = sample.int(nHYB + nSC),
-    parSE  = sample.int(nHYB + nSE))
+    total   = sample.int(nSC + nSE),
+    cis     = flip[hyc],
+    transSC = perm_trans_pool(nSC, hyt, hyt)$m,
+    transSE = perm_trans_pool(nSE, hyt, hyt)$m,
+    parSC   = sample.int(nHYB + nSC),
+    parSE   = sample.int(nHYB + nSE))
 }
 
 ## perm_trans_pool: the pooled relabeling of the trans null for one allele's parent dataset of nP cells.
@@ -3660,7 +3591,7 @@ null_cis_fits <- function(sc, se, expo_sc, expo_se, swap, share_r = c(0, 0), met
 ## within a cell, count and offset together, which keeps the allele pairing; share_r holds the
 ## transcriptome share corrections of the first and second fit (the Sc and Se allele positions, .fit_one()); the
 ## contrast is the swapped Sc allele against the swapped Se allele (fit_ratio_axes(); raw adds the raw difference, method picks the estimator). Shared by
-## permute_contrasts_one() and the power grid (which passes one exposure for both alleles).
+## the power grid (which passes one exposure for both alleles).
 null_cis_axes <- function(sc, se, expo_sc, expo_se, swap, share_r = c(0, 0), raw = FALSE, method = "NB") {
   f <- null_cis_fits(sc, se, expo_sc, expo_se, swap, share_r, method)
   fit_ratio_axes(f$a, f$b, raw)
@@ -3677,8 +3608,7 @@ null_trans_fits <- function(par_sc, par_se, hyb_sc, hyb_se, expo_par_sc, expo_pa
 ## null_trans_axes: one draw of the trans null. For each allele the parent cells and the hybrid cells of the
 ## trans group are pooled (each allele's hybrid cells with that allele's offset) and relabeled by perm_sc / perm_se (pooled indices: parents first, then hybrid
 ## cells; the first length(par) entries form the parent-sized group, .fit_split()). The contrast is the
-## parental ratio minus the hybrid allele ratio of the relabeled groups. Shared by permute_contrasts_one()
-## and the power grid; raw and method as in null_cis_axes().
+## parental ratio minus the hybrid allele ratio of the relabeled groups. Used by the power grid; raw and method as in null_cis_axes().
 null_trans_axes <- function(par_sc, par_se, hyb_sc, hyb_se, expo_par_sc, expo_par_se, expo_hyb_sc, expo_hyb_se, perm_sc, perm_se, raw = FALSE, method = "NB") {
   f <- null_trans_fits(par_sc, par_se, hyb_sc, hyb_se, expo_par_sc, expo_par_se, expo_hyb_sc, expo_hyb_se, perm_sc, perm_se, method)
   fit_ratio_axes(f$sc_a, f$se_a, raw) - fit_ratio_axes(f$sc_b, f$se_b, raw)
@@ -3961,7 +3891,7 @@ BOOT.ZERO.FLAG <- 0.025
                        kbal = "kbal", wkbal = "kbal", rkbal = "kbal", wrkbal = "kbal", kbalsup = c("mean", "log"), wkbalsup = c("mean", "log"))
 
 ## apply_gate: sets to NA every output of a gene whose contrast does not qualify. out is the list of one gene's columns (boot_contrasts_one() or
-## permute_contrasts_one()) and gate a named logical vector with one entry per scale_mode (scale one of mean, raw, log, kbal, mode one of .OUT_MODES): TRUE
+## null_contrasts_one()) and gate a named logical vector with one entry per scale_mode (scale one of mean, raw, log, kbal, mode one of .OUT_MODES): TRUE
 ## when every group the contrast uses is in an allowed dispersion class (analysis.R Section 2.3). A column belongs to a quantity and a mode by its prefix
 ## <quantity>_<mode>_, so the estimate, SE, interval, null summaries and p-values of a gated contrast all go. NULL gate leaves the outputs alone.
 apply_gate <- function(out, gate) {
@@ -3979,65 +3909,60 @@ apply_gate <- function(out, gate) {
 
 ## boot_contrasts_one: one gene's bootstrap contrasts across all modes (the unit of work a cluster worker does). draws holds every resample
 ## index set, drawn before any fit so replicates are independent. share_cells holds each hybrid cell's observed Sc share (chat) and hybrid library size (lib)
-## in the column order of HYB.SC; share_obs the observed transcriptome share quantities: cbar, the named share corrections r of the datasets
-## (SHARE.R), and the per-gene sub, shift and shift_raw (the summed hybrid's share correction and the log2 and raw ploidy shifts, ploidy_components()). Each
-## replicate recomputes the share terms from its resampled cells (share_terms()), refits the allele dispersions with its own corrections, subtracts its own
-## summed-hybrid term, refits the ploidy shifts, and rebuilds every contrast with its own mean share, so the SEs carry the sampling error of all of them.
-## Each draw yields the contrasts of .mode_contrasts(): log2 contrasts of phi, where a refit of phi = 0 maps to -Inf and stays in the draws (the gene's
-## classes are fixed from the observed fits and arrive in gate), and raw differences of phi, which need a fitted phi >= 0 in every group. The log2
-## standard errors and intervals are percentile based (.boot_summary()), with the zero fraction of each interval recorded and flagged above BOOT.ZERO.FLAG.
-## Burst size and kinetic balance are built draw by draw from the mean and dispersion contrasts: bsize = mean (mean split) + disp (noise split), the
-## main kbal = -mean - 2 disp both from the kinetic balance split (.KBAL_SOURCE), and kbalsup = -mean (mean split) - 2 disp (noise split), the supplementary
-## version from the other two splits. methods lists the dispersion estimators: "NB" is the pipeline estimator; adding "weighted" refits every resample
-## with fit_dispersion(method = "weighted") on the same cells and adds the w* columns, so the estimators are compared on identical resamples. The mean
-## axis stays with NB. gates is the genes x contrasts logical matrix of the contrasts that qualify (apply_gate()); a gene's disqualified contrasts are NA.
+## in the column order of HYB.SC; share_obs the observed transcriptome share quantities: cbar, the mean share, and r, the named share corrections of the datasets
+## (SHARE.R, eta_Hc for an Sc allele and eta_He for an Se allele). Each replicate recomputes the share terms from its resampled cells (share_terms()), refits the
+## allele means and dispersions with its own corrections, and rebuilds every contrast from them (.mode_contrasts()), so the SEs carry the sampling error of the
+## corrections. Each draw yields log2 contrasts of phi, where a refit of phi = 0 maps to -Inf and stays in the draws (the gene's classes are fixed from the
+## observed fits and arrive in gates), and raw differences of phi, which need a fitted phi >= 0 in every group. The log2 standard errors and intervals are
+## percentile based (.boot_summary()), with the zero fraction of each interval recorded and flagged above BOOT.ZERO.FLAG. Burst size and kinetic balance are built
+## draw by draw from the mean and dispersion contrasts: bsize = mean (mean split) + disp (noise split), the main kbal = -mean - 2 disp both from the kinetic
+## balance split (.KBAL_SOURCE), and kbalsup = -mean (mean split) - 2 disp (noise split), the supplementary version from the other two splits. methods lists the
+## dispersion estimators: "NB" is the pipeline estimator; adding "weighted" refits every resample with fit_dispersion(method = "weighted") on the same cells and
+## adds the w* columns, so the estimators are compared on identical resamples. The mean axis stays with NB. gates is the genes x contrasts logical matrix of the
+## contrasts that qualify (apply_gate()); a gene's disqualified contrasts are NA.
 boot_contrasts_one <- function(g, expos, fits, mats, draws, share_cells, share_obs, gates = NULL, methods = "NB") {
   stopifnot(all(methods %in% c("NB", "weighted")), "NB" %in% methods, is.list(share_cells), all(c("chat", "lib") %in% names(share_cells)),
-            all(c("cbar", "r", "sub", "shift", "shift_raw") %in% names(share_obs)), all(names(.DRAW.KEY) %in% names(share_obs$r)))
+            all(c("cbar", "r") %in% names(share_obs)), all(.CONTRAST.GROUPS %in% names(share_obs$r)))
   do_w <- "weighted" %in% methods
-  B <- length(draws); modes <- names(.MODES); grp_all <- names(.DRAW.KEY)
-  cb <- share_obs$cbar; sh <- unname(share_obs$shift[g]); shr <- unname(share_obs$shift_raw[g]); sub_obs <- unname(share_obs$sub[g])
-  if (!is.finite(sub_obs)) sub_obs <- 0
-  nan_na <- function(x) if (is.nan(x)) NA_real_ else x
+  B <- length(draws); modes <- names(.MODES); grp_all <- .CONTRAST.GROUPS
+  cb <- share_obs$cbar
   Dm <- Ds <- Dc <- Dr <- Dws <- Dwr <- matrix(NA_real_, B, length(modes), dimnames = list(NULL, modes))
   ## raw burst size and kinetic balance draws for the reporting modes: NB (rb., rk.) and weighted (wrb., wrk.)
   BQ <- matrix(NA_real_, B, 4 * length(.OUT_MODES), dimnames = list(NULL, c(paste0("rb.", .OUT_MODES), paste0("rk.", .OUT_MODES), paste0("wrb.", .OUT_MODES), paste0("wrk.", .OUT_MODES))))
   for (b in seq_len(B)) {
     d <- draws[[b]]; hi <- d$HYB
-    ## The share terms, summed-hybrid correction and ploidy shifts of this replicate's hybrid cells, and the datasets refit on the resample of their draw key
-    ## (.DRAW.KEY) with their own offsets, so the two alleles of a resampled cell stay paired.
+    ## The share terms of this replicate's hybrid cells, and the datasets refit on the resample of their draw key (.DRAW.KEY) with their own offsets and
+    ## corrections, so the two alleles of a resampled cell stay paired.
     st <- share_terms(share_cells$chat[hi], share_cells$lib[hi]); sr <- share_r_groups(st$r_c, st$r_e)
-    pc <- ploidy_components(mats$HYB.SC[g, hi, drop = FALSE], mats$HYB.SE[g, hi, drop = FALSE], expos$HYB.SC[hi], st)
     f <- vector("list", length(grp_all)); names(f) <- grp_all
     for (grp in grp_all) {
       ix <- d[[.DRAW.KEY[[grp]]]]
-      f[[grp]] <- .fit_one(mats[[grp]][g, ix], expos[[grp]][ix], sr[[grp]], if (grp == "HYB.COMB") pc$share_sub else 0)
+      f[[grp]] <- .fit_one(mats[[grp]][g, ix], expos[[grp]][ix], sr[[grp]])
     }
     gv.mu <- lapply(f, function(x) unname(x[["mu"]])); gv.bf <- lapply(f, function(x) unname(x[["disp"]]))
-    mc <- .mode_contrasts(gv.mu, gv.bf, st$cbar, pc$delta, pc$delta_raw)
+    mc <- .mode_contrasts(gv.mu, gv.bf, st$cbar)
     Dm[b, ] <- mc[, "mean"]; Ds[b, ] <- mc[, "disp"]; Dr[b, ] <- mc[, "raw"]; Dc[b, ] <- mc[, "cv2"]
     for (md in .OUT_MODES) {
-      BQ[b, paste0("rb.", md)] <- .contrast_burst_raw(md, gv.mu, gv.bf, "bsize", pc$delta_raw, st$cbar)
-      BQ[b, paste0("rk.", md)] <- .contrast_burst_raw(md, gv.mu, gv.bf, "kbal", pc$delta_raw, st$cbar)
+      BQ[b, paste0("rb.", md)] <- .contrast_burst_raw(md, gv.mu, gv.bf, "bsize", st$cbar)
+      BQ[b, paste0("rk.", md)] <- .contrast_burst_raw(md, gv.mu, gv.bf, "kbal", st$cbar)
     }
     if (do_w) {
       gv.w <- lapply(setNames(grp_all, grp_all), function(grp) { ix <- d[[.DRAW.KEY[[grp]]]]
-        unname(fit_dispersion(mats[[grp]][g, ix], expos[[grp]][ix], sr[[grp]], "weighted", if (grp == "HYB.COMB") pc$share_sub else 0)[["disp"]]) })
-      mw <- .mode_contrasts(gv.mu, gv.w, st$cbar, pc$delta, pc$delta_raw)
+        unname(fit_dispersion(mats[[grp]][g, ix], expos[[grp]][ix], sr[[grp]], "weighted")[["disp"]]) })
+      mw <- .mode_contrasts(gv.mu, gv.w, st$cbar)
       Dws[b, ] <- mw[, "disp"]; Dwr[b, ] <- mw[, "raw"]
       for (md in .OUT_MODES) {
-        BQ[b, paste0("wrb.", md)] <- .contrast_burst_raw(md, gv.mu, gv.w, "bsize", pc$delta_raw, st$cbar)
-        BQ[b, paste0("wrk.", md)] <- .contrast_burst_raw(md, gv.mu, gv.w, "kbal", pc$delta_raw, st$cbar)
+        BQ[b, paste0("wrb.", md)] <- .contrast_burst_raw(md, gv.mu, gv.w, "bsize", st$cbar)
+        BQ[b, paste0("wrk.", md)] <- .contrast_burst_raw(md, gv.mu, gv.w, "kbal", st$cbar)
       }
     }
   }
-  ## The observed contrasts, from the fits of the full data with the observed share terms and shifts
-  fv <- fit_group_values(fits, g)
-  oc <- .mode_contrasts(fv$mu, fv$disp, cb, sh, shr)
-  oc0 <- .mode_contrasts(fv$mu, fv$disp, cb, 0, 0)         # the mid and par noise contrasts without the ploidy shift, kept as the _est_raw columns
+  ## The observed contrasts, from the fits of the full data with the observed share terms
+  fv <- fit_group_values(fits[grp_all], g)
+  oc <- .mode_contrasts(fv$mu, fv$disp, cb)
   if (do_w) {
-    fw <- lapply(setNames(grp_all, grp_all), function(grp) unname(fit_dispersion(mats[[grp]][g, ], expos[[grp]], share_obs$r[[grp]], "weighted", if (grp == "HYB.COMB") sub_obs else 0)[["disp"]]))
-    ow <- .mode_contrasts(fv$mu, fw, cb, sh, shr)
+    fw <- lapply(setNames(grp_all, grp_all), function(grp) unname(fit_dispersion(mats[[grp]][g, ], expos[[grp]], share_obs$r[[grp]], "weighted")[["disp"]]))
+    ow <- .mode_contrasts(fv$mu, fw, cb)
   }
   out <- list(gene = g)
   ## put: one estimate with its bootstrap SE, 95% interval and, for the log2 dispersion-derived quantities (inf = TRUE), the zero fraction and its flag
@@ -4048,6 +3973,7 @@ boot_contrasts_one <- function(g, expos, fits, mats, draws, share_cells, share_o
     if (inf) { out[[paste0(q, "_", md, "_zero")]] <<- unname(s[["zero"]]); out[[paste0(q, "_", md, "_zeroflag")]] <<- as.numeric(unname(s[["zero"]]) > BOOT.ZERO.FLAG) }
     if (nfin) out[[paste0(q, "_", md, "_nfin")]] <<- mean(is.finite(x))
   }
+  cor_fin <- function(x, y) { ok <- is.finite(x) & is.finite(y); if (sum(ok) > 2) cor(x[ok], y[ok]) else NA_real_ }
   for (md in .OUT_MODES) {
     smd <- .DISP_SOURCE[[md]]; kmd <- .KBAL_SOURCE[[md]]
     put("mean", md, oc[md, "mean"], Dm[, md])
@@ -4059,7 +3985,7 @@ boot_contrasts_one <- function(g, expos, fits, mats, draws, share_cells, share_o
     put("kbalsup", md, -oc[md, "mean"] - 2 * oc[smd, "disp"], -Dm[, md] - 2 * Ds[, smd], inf = TRUE)
     for (kd in c("bsize", "kbal")) {
       tag <- if (kd == "bsize") "b" else "k"
-      put(paste0("r", kd), md, .contrast_burst_raw(md, fv$mu, fv$disp, kd, shr, cb), BQ[, paste0("r", tag, ".", md)])
+      put(paste0("r", kd), md, .contrast_burst_raw(md, fv$mu, fv$disp, kd, cb), BQ[, paste0("r", tag, ".", md)])
     }
     if (do_w) {
       put("wdisp", md, ow[smd, "disp"], Dws[, smd], inf = TRUE)
@@ -4069,288 +3995,245 @@ boot_contrasts_one <- function(g, expos, fits, mats, draws, share_cells, share_o
       put("wkbalsup", md, -oc[md, "mean"] - 2 * ow[smd, "disp"], -Dm[, md] - 2 * Dws[, smd], inf = TRUE)
       for (kd in c("bsize", "kbal")) {
         tag <- if (kd == "bsize") "b" else "k"
-        put(paste0("wr", kd), md, .contrast_burst_raw(md, fv$mu, fw, kd, shr, cb), BQ[, paste0("wr", tag, ".", md)])
+        put(paste0("wr", kd), md, .contrast_burst_raw(md, fv$mu, fw, kd, cb), BQ[, paste0("wr", tag, ".", md)])
       }
     }
     ## cor_<md>: correlation of the mean and disp bootstrap draws. Every hybrid dataset of a replicate is built from the same resampled cell IDs
     ## (make_draws()), and the parents are shared, so the mean contrast of a mode and the disp contrast of its source mode are measured on the same
     ## cells. NA only when fewer than three draws give finite values for both.
-    if (md %in% c("mid", "par_sc", "par_se")) {
-      out[[paste0("disp_", md, "_est_raw")]] <- oc0[smd, "disp"]; out[[paste0("bsize_", md, "_est_raw")]] <- oc0[md, "mean"] + oc0[smd, "disp"]
-      out[[paste0("kbal_", md, "_est_raw")]] <- -oc0[kmd, "mean"] - 2 * oc0[kmd, "disp"]; out[[paste0("cv2_", md, "_est_raw")]] <- oc0[smd, "cv2"]
-    }
-    cor_fin <- function(x, y) { ok <- is.finite(x) & is.finite(y); if (sum(ok) > 2) cor(x[ok], y[ok]) else NA_real_ }
     out[[paste0("cor_", md)]] <- cor_fin(Dm[, md], Ds[, smd])
     if (do_w) out[[paste0("wcor_", md)]] <- cor_fin(Dm[, md], Dws[, smd])
   }
-  cor_pair <- function(x, y) { ok <- is.finite(x) & is.finite(y); if (sum(ok) > 2) cor(x[ok], y[ok]) else NA_real_ }
-  out$cor_par_mean <- cor_pair(Dm[, "par_sc"], Dm[, "par_se"])
-  out$cor_par_disp <- cor_pair(Ds[, "par_sc"], Ds[, "par_se"])
-  out$ploidy_shift <- sh; out$ploidy_shift_raw <- shr
+  out$cor_par_mean <- cor_fin(Dm[, "par_sc"], Dm[, "par_se"])
+  out$cor_par_disp <- cor_fin(Ds[, "par_sc"], Ds[, "par_se"])
   data.frame(apply_gate(out, if (is.null(gates)) NULL else gates[g, ]), row.names = NULL, check.names = FALSE)
 }
 
-## permute_contrasts_one: one gene's permutation null: refits the relabeled groups for every mode and permutation, compares the observed
-## contrasts (mean, disp, CV2, bsize, kbal, kbalsup) with the null by a two-sided permutation p, and adds ploidy-adjusted p-values for the par
-## contrasts. bsize and kbal nulls recombine the mean and disp null draws of the same permutation (kbal from the kinetic balance split, kbalsup from the
-## mean and noise splits). resamples (a make_draws() list, NULL for none) and methods add the resampling null of the trans test, described where it is computed.
-## share_obs holds the observed transcriptome share quantities (cbar, r, sub, shift, shift_raw as in boot_contrasts_one()). The cis nulls apply the share
-## correction of each allele position (share_obs$r); the trans, mid and par nulls pool parent and hybrid cells into relabeled groups, where no group is one
-## allele, and fit them without it (the correction is at most r (1 + phi), about 1e-4). Every hybrid allele count is paired with its offset times its
-## abundance factor, 2 c-bar for an Sc allele and 2 (1 - c-bar) for an Se allele, which puts it on the per-genome scale of the parents: the swap and the
-## pooled relabelings then mix groups with one mean rate under the null, and the null of every mean contrast is centred at zero, where the observed
-## contrast (offset and rescaled in .contrast_value()) also sits for a gene without an effect. The permutation nulls keep the observed ploidy shifts.
-## A log2 contrast with a zero dispersion in a permuted group is +Inf or -Inf and counts as extreme in the rank p-value (perm_pval()); the share of such
-## draws is recorded per contrast (_infrac). gates (genes x contrasts, apply_gate()) NAs the disqualified contrasts of each gene.
-permute_contrasts_one <- function(g, expos, fits, mats, perms, share_obs, seed = 1, gates = NULL, resamples = NULL, methods = "NB") {
-  stopifnot(all(methods %in% c("NB", "weighted")), "NB" %in% methods, all(c("cbar", "r", "sub", "shift", "shift_raw") %in% names(share_obs)),
-            all(names(.DRAW.KEY) %in% names(share_obs$r)))
-  if (!is.numeric(seed) || length(seed) != 1 || !is.finite(seed)) stop("permute_contrasts_one(): seed must be one finite number")
-  share_r <- share_obs$r; cb <- share_obs$cbar
-  sh <- unname(share_obs$shift[g]); shr <- unname(share_obs$shift_raw[g]); sub_obs <- unname(share_obs$sub[g])
-  if (!is.finite(sub_obs)) sub_obs <- 0
-  l2 <- log2; B <- length(perms); modes <- names(.MODES)
-  Nm <- matrix(NA_real_, B, length(modes), dimnames = list(NULL, modes)); Ns <- Nm; Nc <- Nm
-  Nr <- Ns; Nws <- Ns; Nwr <- Ns          # nulls of the raw (NB), log2 (weighted) and raw (weighted) dispersion contrasts
-  ## nulls of the raw burst size and kinetic balance, NB (NRb, NRk) and weighted (NWb, NWk), one column per reporting mode
-  NRb <- matrix(NA_real_, B, length(.OUT_MODES), dimnames = list(NULL, .OUT_MODES)); NRk <- NRb; NWb <- NRb; NWk <- NRb
+## ============================================================
+## NULL DISTRIBUTIONS (Methods: Null distributions)
+## ============================================================
+## Every contrast is tested against a null generated under its own null hypothesis, and every null draw is refitted with the same estimators and transcriptome
+## share corrections as the observed data. Log2 mean contrasts use permutations of cells that share one expected count per unit offset under the null (total,
+## cis, trans, par) and a simulation for mid; log2 and raw dispersion contrasts, and the kinetic contrasts, use simulations from the fitted model with the contrast
+## set to zero.
+
+## null_phi_log2: null dispersions for one contrast on the log2 scale, the fitted log2 dispersions moved the shortest distance that zeroes the contrast
+## sum(lambda log2 phi); the contrast of the returned values is exactly zero. phi_hat must be positive (class 1).
+null_phi_log2 <- function(phi_hat, lambda) {
+  stopifnot(length(phi_hat) == length(lambda), all(is.finite(phi_hat) & phi_hat > 0))
+  delta <- sum(lambda * log2(phi_hat))
+  2^(log2(phi_hat) - lambda * delta / sum(lambda^2))
+}
+
+## null_phi_raw: the raw-scale version, the fitted dispersions moved the shortest distance that zeroes sum(lambda phi). A null value below zero is held at zero
+## and the projection is repeated over the groups that remain free, so the contrast is zero whenever that is reachable with non-negative dispersions.
+null_phi_raw <- function(phi_hat, lambda) {
+  stopifnot(length(phi_hat) == length(lambda), all(is.finite(phi_hat) & phi_hat >= 0))
+  phi0 <- phi_hat; free <- rep(TRUE, length(phi_hat))
+  repeat {
+    delta <- sum(lambda * phi0)
+    phi0[free] <- phi0[free] - lambda[free] * delta / sum(lambda[free]^2)
+    neg <- free & phi0 < 0
+    if (!any(neg)) break
+    phi0[neg] <- 0; free[neg] <- FALSE
+    if (!any(free)) break
+  }
+  phi0
+}
+
+## null_phi_kinetic: null dispersions that zero a kinetic contrast a Delta(mu) + b Delta(phi) with the fitted means held fixed: the log2 dispersions move by
+## -lambda (a Delta(mu) + b Delta(phi)) / (b sum(lambda^2)), which changes Delta(phi) by -(a Delta(mu) + b Delta(phi)) / b. Burst size is a = 1, b = 1 and kinetic
+## balance a = -1, b = -2, so kappa moves by lambda Delta(kappa) / (2 sum(lambda^2)) as in the Methods. dmu is the observed mean contrast.
+null_phi_kinetic <- function(phi_hat, lambda, dmu, a, b) {
+  stopifnot(length(phi_hat) == length(lambda), all(is.finite(phi_hat) & phi_hat > 0), is.finite(dmu))
+  stat <- a * dmu + b * sum(lambda * log2(phi_hat))
+  2^(log2(phi_hat) - lambda * stat / (b * sum(lambda^2)))
+}
+
+## rgamma1: n draws of a mean-one gamma factor with variance v (v = 0 gives the constant 1).
+rgamma1 <- function(n, v) if (v > 0) rgamma(n, shape = 1 / v, rate = 1 / v) else rep(1, n)
+
+## sim_alleles: the two allele counts of every hybrid cell with expected counts m_hc and m_he, each allele's expression factor the product of a factor shared by
+## the cell (variance s2d, the extrinsic variance sigma_d of Appendix B) and a private factor whose variance (1 + phi) / (1 + s2d) - 1 gives the allele the total
+## factor variance phi; a private variance below zero is set to zero. The covariance of the two allele factors is s2d, the noise the two alleles share. Pass the
+## dispersion the uncorrected fit would show, phi0 (1 + eta) + eta, so that the corrected refit returns phi0.
+sim_alleles <- function(m_hc, m_he, phi_hc, phi_he, s2d) {
+  n  <- length(m_hc)
+  d  <- rgamma1(n, s2d)
+  vq <- function(phi) max((1 + phi) / (1 + s2d) - 1, 0)
+  list(hc = rpois(n, m_hc * d * rgamma1(n, vq(phi_hc))),
+       he = rpois(n, m_he * d * rgamma1(n, vq(phi_he))))
+}
+
+## simulate_groups: one null draw of the counts of a set of groups. m holds each group's expected counts per cell (the fitted M_i, which for an allele includes its
+## abundance factor), phi the dispersion each group is simulated with (for an allele the dispersion its uncorrected fit would show) and s2d the gene's extrinsic
+## variance. Parental groups are NB; the two alleles of a hybrid split are drawn together by sim_alleles(), so they keep their shared extrinsic noise.
+simulate_groups <- function(m, phi, s2d) {
+  out <- vector("list", length(m)); names(out) <- names(m)
+  for (k in names(m)) {
+    if (!is.null(out[[k]])) next
+    side <- .allele_side(k)
+    if (side == "") { out[[k]] <- rpois(length(m[[k]]), m[[k]] * rgamma1(length(m[[k]]), phi[[k]])); next }
+    kc <- if (side == "SC") k else sub("\\.SE", ".SC", k); ke <- sub("\\.SC", ".SE", kc)
+    if (all(c(kc, ke) %in% names(m))) { s <- sim_alleles(m[[kc]], m[[ke]], phi[[kc]], phi[[ke]], s2d); out[[kc]] <- s$hc; out[[ke]] <- s$he }
+    else out[[k]] <- rpois(length(m[[k]]), m[[k]] * rgamma1(length(m[[k]]), s2d) * rgamma1(length(m[[k]]), max((1 + phi[[k]]) / (1 + s2d) - 1, 0)))
+  }
+  out
+}
+
+## null_contrasts_one: one gene's null distributions and p-values for every contrast (the unit of work of gene_perm.R). expos, fits and mats are the offsets, the
+## observed fits (MU the fitted mean mu*, DISP the corrected dispersion) and the counts of every dataset; share_obs holds cbar, the share corrections r (eta per
+## dataset) and sigma_d (the gene's extrinsic variance, ploidy_components()). perms (perm_label_draw()) drive the permutation nulls of the log2 mean contrasts:
+##   total  the parental cells pooled and split at random;
+##   cis    the two allele counts of each cell, each divided by its abundance factor, swapped at random, which keeps their shared extrinsic noise;
+##   trans  each parent pooled with the hybrid allele of the same genome, whose offset carries its abundance factor and the level factor
+##          k = sqrt(mu_Hc mu_He / (mu_Pc mu_Pe)) (corrected means of the trans subset), so the pool shares one rate under the null whatever the dominance;
+##   par    each hybrid cell's two rescaled allele counts summed (expectation S_H mu_H), with offset S_H, pooled with one parent's cells.
+## n_sim draws simulate the remaining nulls from the fitted model (simulate_groups()) and refit them:
+##   mid mean  null allele means scaled so their average is the midparent, with the dispersions their fits would show;
+##   disp      log2 null dispersions by projection (null_phi_log2()); raw ones by projection with truncation (null_phi_raw()), generated separately for trans,
+##             mid and par, while for the two-group contrasts the log2 null, which also sets the two dispersions equal, serves both scales;
+##   bsize, kbal, kbalsup  the fitted means held and the dispersions moved until the kinetic contrast is zero (null_phi_kinetic()).
+## Each null is applied to its own contrast and quantity; the weighted method of moments (methods = c("NB", "weighted")) is refitted on the same simulated counts.
+## The p-value is two-sided with an add-one correction (perm_pval()); a log2 null draw with a zero dispersion is +-Inf and counts as extreme, and its share is
+## recorded (_infrac). gates (genes x contrasts, apply_gate()) NAs the contrasts a gene does not qualify for, and only qualifying nulls are simulated.
+## Quantities without a null in the Methods (cv2 and the raw burst quantities) carry an observed value and no p-value.
+null_contrasts_one <- function(g, expos, fits, mats, perms, share_obs, n_sim, seed = 1, gates = NULL, methods = "NB") {
+  stopifnot(all(methods %in% c("NB", "weighted")), "NB" %in% methods, all(c("cbar", "r", "sigma_d") %in% names(share_obs)),
+            is.numeric(n_sim), length(n_sim) == 1, n_sim >= 1, is.numeric(seed), length(seed) == 1, is.finite(seed))
   do_w <- "weighted" %in% methods
-  fv   <- fit_group_values(fits, g)
-  gvmu <- fv$mu; gvbf <- fv$disp
-  oc  <- .mode_contrasts(gvmu, gvbf, cb, sh, shr)          # observed contrasts, ploidy-adjusted in mid and par
-  oc0 <- .mode_contrasts(gvmu, gvbf, cb, 0, 0)             # the same without the adjustment
-  cMIXsc <- mats$MIX.SC[g, ]; cMIXse <- mats$MIX.SE[g, ]
-  cHYCsc <- mats$HYC.SC[g, ]; cHYCse <- mats$HYC.SE[g, ]
-  cHYTsc <- mats$HYT.SC[g, ]; cHYTse <- mats$HYT.SE[g, ]
-  cHYCsc.N <- mats$HYC.SC.N[g, ]; cHYCse.N <- mats$HYC.SE.N[g, ]
-  cHYTsc.N <- mats$HYT.SC.N[g, ]; cHYTse.N <- mats$HYT.SE.N[g, ]
-  cHYCsc.K <- mats$HYC.SC.K[g, ]; cHYCse.K <- mats$HYC.SE.K[g, ]
-  cHYTsc.K <- mats$HYT.SC.K[g, ]; cHYTse.K <- mats$HYT.SE.K[g, ]
-  cHYBc <- mats$HYB.COMB[g, ]
-  ## the hybrid allele offsets on the per-genome scale of the parents (abundance factors 2 c-bar and 2 (1 - c-bar))
-  ax <- function(nm) expos[[nm]] * (if (grepl("^HY[BCT]\\.SC", nm)) 2 * cb else 2 * (1 - cb))
-  mp.m <- l2((gvmu[["MIX.SC"]] + gvmu[["MIX.SE"]]) / 2)
-  mp.s <- 0.5 * (l2(gvbf[["MIX.SC"]]) + l2(gvbf[["MIX.SE"]]))
-  mp.c <- 0.5 * (l2(.cv2_of(gvmu[["MIX.SC"]], gvbf[["MIX.SC"]])) + l2(.cv2_of(gvmu[["MIX.SE"]], gvbf[["MIX.SE"]])))
-  nSC <- length(cMIXsc); nSE <- length(cMIXse); nHYB <- length(cHYBc)
-  ## the weighted-moment observed contrasts refit every dataset on all its cells with the observed share corrections
-  gvw <- NULL
+  cb <- share_obs$cbar; eta <- share_obs$r; s2d <- unname(share_obs$sigma_d[g]); if (!is.finite(s2d)) s2d <- 0
+  gate <- if (is.null(gates)) NULL else gates[g, ]
+  ok_gate <- function(q, md) is.null(gate) || all(gate[paste0(.QUANTITY.GATE[[q]], "_", md)] %in% TRUE)
+  grp_all <- .CONTRAST.GROUPS
+  fv <- fit_group_values(fits[grp_all], g); gvmu <- fv$mu; gvbf <- fv$disp
+  oc <- .mode_contrasts(gvmu, gvbf, cb)
   if (do_w) {
-    gvw <- lapply(setNames(names(.DRAW.KEY), names(.DRAW.KEY)), function(k) unname(fit_dispersion(mats[[k]][g, ], expos[[k]], share_r[[k]], "weighted", if (k == "HYB.COMB") sub_obs else 0)[["disp"]]))
-    ow  <- .mode_contrasts(gvmu, gvw, cb, sh, shr); ow0 <- .mode_contrasts(gvmu, gvw, cb, 0, 0)
-    mp.sw <- 0.5 * (l2(gvw[["MIX.SC"]]) + l2(gvw[["MIX.SE"]]))
+    gvw <- lapply(setNames(grp_all, grp_all), function(k) unname(fit_dispersion(mats[[k]][g, ], expos[[k]], eta[[k]], "weighted")[["disp"]]))
+    ow <- .mode_contrasts(gvmu, gvw, cb)
   }
-  ## an observed raw burst contrast, with the raw ploidy shift added to the summed hybrid's phi in the mid and par modes (shift 0 leaves it as fitted)
-  obs_burst <- function(md, gv_phi, kind, shift = 0) .contrast_burst_raw(md, gvmu, gv_phi, kind, shift, cb)
-  ## mid surrogate: every UMI of a parent cell is kept with probability rho and that cell's offset is scaled by rho,
-  ## which leaves the NB dispersion unchanged (a thinned NB is an NB) and gives the two parents equal offset totals.
-  ## The surrogate's mean rate is then the unweighted midparent. The thinning draws come from a stream seeded by
-  ## the gene's position, so a gene's null does not depend on chunking or core count.
-  e.sc <- expos$MIX.SC; e.se <- expos$MIX.SE
-  rho.sc <- min(1, sum(e.se) / sum(e.sc)); rho.se <- min(1, sum(e.sc) / sum(e.se))
+  cnt <- lapply(setNames(grp_all, grp_all), function(k) mats[[k]][g, ])
+  Mhat <- lapply(setNames(grp_all, grp_all), function(k) expos[[k]] * gvmu[[k]])          # fitted expected counts, with the abundance factor for an allele
+  sim_phi <- function(k, phi0) if (.allele_side(k) == "") phi0 else phi0 * (1 + eta[[k]]) + eta[[k]]   # the dispersion an uncorrected fit would show
   gi <- match(g, rownames(mats$MIX.SC))
-  if (is.na(gi)) stop("permute_contrasts_one(): gene ", g, " is not a row of mats$MIX.SC")
-  ## store: one row of the Nm / Ns / Nc / Nr null matrices (mean, log2 disp, CV2 and raw disp axes) for mode md, from the
-  ## c(mu, disp, cv2, rdisp) contrast that fit_ratio_axes() returns (a zero dispersion maps to +-Inf on the log2 axis)
-  ## The NB fit fills the mean, log2 disp, CV2 and raw disp nulls; the weighted fit (methods = c("NB", "weighted")) fills the log2 and raw disp nulls
-  ## of the weighted-moment estimator. Both read the same relabelings of the same permutation.
-  store <- function(b, md, ax) { Nm[b, md] <<- ax[["mu"]]; Ns[b, md] <<- ax[["disp"]]; Nc[b, md] <<- ax[["cv2"]]; Nr[b, md] <<- ax[["rdisp"]] }
-  storew <- function(b, md, ax) { Nws[b, md] <<- ax[["disp"]]; Nwr[b, md] <<- ax[["rdisp"]] }
-  with_local_seed(seed + gi, for (b in seq_len(B)) {
-    p <- perms[[b]]
-    ## mid surrogate draws (one thinning per permutation, shared by both estimators), and the ploidy shift of the synthetic hybrid: all of its noise is
-    ## private (omega = 1), so delta = -log2(pi^2 + (1 - pi)^2) with pi the Pc share of the summed synthetic counts
-    syn_c <- rbinom(nHYB, cMIXsc[p$mid_i], rho.sc); syn_e <- rbinom(nHYB, cMIXse[p$mid_j], rho.se)
-    synth <- syn_c + syn_e
-    es    <- rho.sc * e.sc[p$mid_i] + rho.se * e.se[p$mid_j]
-    pi_s  <- if (sum(synth) > 0) sum(syn_c) / sum(synth) else NA_real_
-    wsq_s <- pi_s^2 + (1 - pi_s)^2
-    dl_s  <- -log2(wsq_s)
-    for (mt in methods) {
-      st <- if (mt == "NB") store else storew
-      stb <- function(md, kind, v) { if (mt == "NB") { if (kind == "bsize") NRb[b, md] <<- v else NRk[b, md] <<- v } else { if (kind == "bsize") NWb[b, md] <<- v else NWk[b, md] <<- v } }
-      gv_phi <- if (mt == "NB") gvbf else gvw
-      ## raw burst quantity of a group whose rate comes from the mean-split fit fm and dispersion from the noise-split fit fn
-      qq <- function(fm, fn, kind) .burst_q(fm[["mu"]], fn[["disp"]], kind)
-      zi <- TRUE
-      sp <- .fit_split(c(cMIXsc, cMIXse), c(expos$MIX.SC, expos$MIX.SE), p$total, nSC, mt)
-      st(b, "total", fit_ratio_axes(sp$a, sp$b, raw = TRUE, zero_inf = zi))
-      for (kd in c("bsize", "kbal")) stb("total", kd, qq(sp$a, sp$a, kd) - qq(sp$b, sp$b, kd))
-
-      ## cis swap: a swapped allele carries its own offset, so every count keeps its offset. The three splits (mean, noise, kinetic balance) read the
-      ## swap flags of their own cells.
-      cm <- null_cis_fits(cHYCsc, cHYCse, ax("HYC.SC"), ax("HYC.SE"), p$cis, share_r[c("HYC.SC", "HYC.SE")], mt)
-      st(b, "cis", fit_ratio_axes(cm$a, cm$b, raw = TRUE, zero_inf = zi))
-      cn <- null_cis_fits(cHYCsc.N, cHYCse.N, ax("HYC.SC.N"), ax("HYC.SE.N"), p$cis_n, share_r[c("HYC.SC.N", "HYC.SE.N")], mt)
-      st(b, "cis_n", fit_ratio_axes(cn$a, cn$b, raw = TRUE, zero_inf = zi))
-      ck <- null_cis_fits(cHYCsc.K, cHYCse.K, ax("HYC.SC.K"), ax("HYC.SE.K"), p$cis_k, share_r[c("HYC.SC.K", "HYC.SE.K")], mt)
-      st(b, "cis_k", fit_ratio_axes(ck$a, ck$b, raw = TRUE, zero_inf = zi))
-      stb("cis", "bsize", qq(cm$a, cn$a, "bsize") - qq(cm$b, cn$b, "bsize"))
-      stb("cis", "kbal", qq(ck$a, ck$a, "kbal") - qq(ck$b, ck$b, "kbal"))
-
-      tm <- null_trans_fits(cMIXsc, cMIXse, cHYTsc, cHYTse, expos$MIX.SC, expos$MIX.SE, ax("HYT.SC"), ax("HYT.SE"), p$transSC, p$transSE, mt)
-      st(b, "trans", fit_ratio_axes(tm$sc_a, tm$se_a, raw = TRUE, zero_inf = zi) - fit_ratio_axes(tm$sc_b, tm$se_b, raw = TRUE, zero_inf = zi))
-      tn <- null_trans_fits(cMIXsc, cMIXse, cHYTsc.N, cHYTse.N, expos$MIX.SC, expos$MIX.SE, ax("HYT.SC.N"), ax("HYT.SE.N"), p$transSC_n, p$transSE_n, mt)
-      st(b, "trans_n", fit_ratio_axes(tn$sc_a, tn$se_a, raw = TRUE, zero_inf = zi) - fit_ratio_axes(tn$sc_b, tn$se_b, raw = TRUE, zero_inf = zi))
-      tk <- null_trans_fits(cMIXsc, cMIXse, cHYTsc.K, cHYTse.K, expos$MIX.SC, expos$MIX.SE, ax("HYT.SC.K"), ax("HYT.SE.K"), p$transSC_k, p$transSE_k, mt)
-      st(b, "trans_k", fit_ratio_axes(tk$sc_a, tk$se_a, raw = TRUE, zero_inf = zi) - fit_ratio_axes(tk$sc_b, tk$se_b, raw = TRUE, zero_inf = zi))
-      stb("trans", "bsize", (qq(tm$sc_a, tn$sc_a, "bsize") - qq(tm$se_a, tn$se_a, "bsize")) - (qq(tm$sc_b, tn$sc_b, "bsize") - qq(tm$se_b, tn$se_b, "bsize")))
-      stb("trans", "kbal", (qq(tk$sc_a, tk$sc_a, "kbal") - qq(tk$se_a, tk$se_a, "kbal")) - (qq(tk$sc_b, tk$sc_b, "kbal") - qq(tk$se_b, tk$se_b, "kbal")))
-
-      ## mid surrogate: its dispersion falls by the averaging shift of the synthetic hybrid, dl_s on the log2 scale and (1 - wsq_s) times the midparent
-      ## phi on the raw scale, so each draw is corrected by its own shift before it is compared with the shifted observed contrast
-      fs <- .fit_m(synth, es, 0, mt)
-      mid_phi <- 0.5 * (gv_phi[["MIX.SC"]] + gv_phi[["MIX.SE"]])
-      fs_adj <- c(mu = fs[["mu"]], disp = fs[["disp"]] + (1 - wsq_s) * mid_phi)
-      par_q <- function(kind) 0.5 * (.burst_q(gvmu[["MIX.SC"]], gv_phi[["MIX.SC"]], kind) + .burst_q(gvmu[["MIX.SE"]], gv_phi[["MIX.SE"]], kind))
-      for (kd in c("bsize", "kbal")) stb("mid", kd, qq(fs_adj, fs_adj, kd) - par_q(kd))
-      lz <- function(x) if (is.finite(x) && x == 0) -Inf else l2(x)
-      mid_s  <- lz(fs[["disp"]]) - (if (mt == "NB") mp.s else mp.sw) + dl_s
-      mid_s  <- if (is.nan(mid_s)) NA_real_ else mid_s
-      mid_r  <- if (is.finite(fs[["disp"]]) && fs[["disp"]] >= 0) fs_adj[["disp"]] - mid_phi else NA_real_
-      if (mt == "NB") {
-        if (is.finite(fs[["mu"]]) && fs[["mu"]] > 0) Nm[b, "mid"] <- l2(fs[["mu"]]) - mp.m
-        if (is.finite(fs[["disp"]]) && fs[["disp"]] >= 0) { Ns[b, "mid"] <- mid_s; Nr[b, "mid"] <- mid_r }
-        fs.cv <- .cv2_of(fs[["mu"]], fs[["disp"]] * 2^dl_s)
-        if (is.finite(fs.cv) && fs.cv > 0 && is.finite(mp.c)) Nc[b, "mid"] <- l2(fs.cv) - mp.c
-      } else if (is.finite(fs[["disp"]]) && fs[["disp"]] >= 0) { Nws[b, "mid"] <- mid_s; Nwr[b, "mid"] <- mid_r }
-      d1 <- .fit_split(c(cHYBc, cMIXsc), c(expos$HYB.COMB, expos$MIX.SC), p$parSC, nHYB, mt)
-      st(b, "par_sc", fit_ratio_axes(d1$a, d1$b, raw = TRUE, zero_inf = zi))
-      for (kd in c("bsize", "kbal")) stb("par_sc", kd, qq(d1$a, d1$a, kd) - qq(d1$b, d1$b, kd))
-      d2 <- .fit_split(c(cHYBc, cMIXse), c(expos$HYB.COMB, expos$MIX.SE), p$parSE, nHYB, mt)
-      st(b, "par_se", fit_ratio_axes(d2$a, d2$b, raw = TRUE, zero_inf = zi))
-      for (kd in c("bsize", "kbal")) stb("par_se", kd, qq(d2$a, d2$a, kd) - qq(d2$b, d2$b, kd))
-    }
-    })
+  if (is.na(gi)) stop("null_contrasts_one(): gene ", g, " is not a row of mats$MIX.SC")
   out <- list(gene = g)
-  ## put: the observed value and the permutation p-value of one quantity and mode
-  put <- function(q, md, obs, null) {
-    out[[paste0(q, "_", md, "_obs")]] <<- unname(obs)
-    out[[paste0(q, "_", md, "_p")]] <<- perm_pval(obs, null)
+
+  ## ---- log2 mean contrasts by permutation ----
+  B <- length(perms); NM <- matrix(NA_real_, B, length(.OUT_MODES), dimnames = list(NULL, .OUT_MODES))
+  l2r <- function(y, o) { s <- sum(y); if (s > 0) log2(s / sum(o)) else NA_real_ }
+  e_mc <- expos$MIX.SC; e_me <- expos$MIX.SE; nSC <- length(e_mc); nSE <- length(e_me)
+  yc <- cnt$HYC.SC / (2 * cb); ye <- cnt$HYC.SE / (2 * (1 - cb))                          # rescaled allele counts of the cis cells
+  cm <- .correct_means(gvmu, cb)
+  k_hat <- sqrt(cm$HYT.SC * cm$HYT.SE / (cm$MIX.SC * cm$MIX.SE))
+  o_tc <- k_hat * cb * 2 * expos$HYT.SC; o_te <- k_hat * (1 - cb) * 2 * expos$HYT.SE      # S_H = 2 x the allele offset
+  zH <- cnt$HYB.SC / (2 * cb) + cnt$HYB.SE / (2 * (1 - cb)); oH <- 2 * expos$HYB.SC; nH <- length(zH)
+  pool_tc <- c(cnt$MIX.SC, cnt$HYT.SC); pool_tco <- c(e_mc, o_tc); pool_te <- c(cnt$MIX.SE, cnt$HYT.SE); pool_teo <- c(e_me, o_te)
+  for (b in seq_len(B)) {
+    p <- perms[[b]]
+    a <- p$total[seq_len(nSC)]; y <- c(cnt$MIX.SC, cnt$MIX.SE); o <- c(e_mc, e_me)
+    NM[b, "total"] <- l2r(y[a], o[a]) - l2r(y[-a], o[-a])
+    sw <- p$cis; NM[b, "cis"] <- l2r(ifelse(sw, ye, yc), expos$HYC.SC) - l2r(ifelse(sw, yc, ye), expos$HYC.SE)
+    ac <- p$transSC[seq_len(nSC)]; ae <- p$transSE[seq_len(nSE)]
+    NM[b, "trans"] <- (l2r(pool_tc[ac], pool_tco[ac]) - l2r(pool_te[ae], pool_teo[ae])) - (l2r(pool_tc[-ac], pool_tco[-ac]) - l2r(pool_te[-ae], pool_teo[-ae]))
+    for (pp in c("par_sc", "par_se")) {
+      yp <- if (pp == "par_sc") cnt$MIX.SC else cnt$MIX.SE; op <- if (pp == "par_sc") e_mc else e_me
+      perm <- if (pp == "par_sc") p$parSC else p$parSE; yy <- c(zH, yp); oo <- c(oH, op); h <- perm[seq_len(nH)]
+      NM[b, pp] <- l2r(yy[h], oo[h]) - l2r(yy[-h], oo[-h])
+    }
   }
-  infrac <- function(x) { x <- x[!is.na(x)]; if (length(x)) mean(is.infinite(x)) else NA_real_ }
+
+  ## ---- simulated nulls ----
+  ## the specification of every simulated null this gene qualifies for: the groups simulated with null dispersions (gp) and, for burst size and the supplementary
+  ## kinetic balance, the mean-split groups simulated at their fitted values (gm)
+  specs <- list()
+  add <- function(name, kind, md, src, gp, phi0, gm = NULL) specs[[name]] <<- list(kind = kind, md = md, src = src, gp = gp, phi0 = phi0, gm = gm)
   for (md in .OUT_MODES) {
     smd <- .DISP_SOURCE[[md]]; kmd <- .KBAL_SOURCE[[md]]
-    isdp <- md %in% c("par_sc", "par_se"); ismid <- md == "mid"
-    ## the observed contrast the unadjusted p-value reads: the fit as it is for par (ploidy-adjusted versions follow), the adjusted contrast for mid,
-    ## whose null carries the shift of each synthetic hybrid
-    o  <- if (isdp) oc0 else oc
-    put("mean", md, oc[md, "mean"], Nm[, md])
-    put("disp", md, o[smd, "disp"], Ns[, smd]); out[[paste0("disp_", md, "_infrac")]] <- infrac(Ns[, smd])
-    put("cv2", md, o[smd, "cv2"], Nc[, smd])
-    put("rdisp", md, o[smd, "raw"], Nr[, smd])
-    bs_obs <- o[md, "mean"] + o[smd, "disp"]; bs_null <- Nm[, md] + Ns[, smd]
-    put("bsize", md, bs_obs, bs_null)
-    kb_obs <- -o[kmd, "mean"] - 2 * o[kmd, "disp"]; kb_null <- -Nm[, kmd] - 2 * Ns[, kmd]
-    put("kbal", md, kb_obs, kb_null); out[[paste0("kbal_", md, "_infrac")]] <- infrac(kb_null)
-    ks_obs <- -o[md, "mean"] - 2 * o[smd, "disp"]; ks_null <- -Nm[, md] - 2 * Ns[, smd]
-    put("kbalsup", md, ks_obs, ks_null)
-    ## raw burst size (rbsize) and kinetic balance (rkbal) and their weighted versions (wrbsize, wrkbal); the observed value is read against the
-    ## null of the same permutation draws. par adds the ploidy-adjusted p-values below.
-    for (kd in c("bsize", "kbal")) {
-      put(paste0("r", kd), md, obs_burst(md, gvbf, kd, if (ismid) shr else 0), if (kd == "bsize") NRb[, md] else NRk[, md])
+    G <- .MODES[[smd]]; lam <- .MODE.WEIGHTS[[smd]]; ph <- unlist(gvbf[G])
+    two <- length(G) == 2
+    if (ok_gate("disp", md)) add(paste0("disp.", md), "disp", md, smd, G, setNames(null_phi_log2(ph, lam), G))
+    if (ok_gate("rdisp", md) && !two && all(is.finite(ph) & ph >= 0)) add(paste0("rdisp.", md), "rdisp", md, smd, G, setNames(null_phi_raw(ph, lam), G))
+    if (ok_gate("rdisp", md) && two && !ok_gate("disp", md) && all(is.finite(ph) & ph >= 0)) add(paste0("rdisp.", md), "rdisp", md, smd, G, setNames(null_phi_raw(ph, lam), G))
+    if (ok_gate("bsize", md) && is.finite(oc[md, "mean"]))
+      add(paste0("bsize.", md), "bsize", md, smd, G, setNames(null_phi_kinetic(ph, lam, oc[md, "mean"], 1, 1), G), gm = if (smd == md) NULL else .MODES[[md]])
+    if (ok_gate("kbalsup", md) && is.finite(oc[md, "mean"]))
+      add(paste0("kbalsup.", md), "kbalsup", md, smd, G, setNames(null_phi_kinetic(ph, lam, oc[md, "mean"], -1, -2), G), gm = if (smd == md) NULL else .MODES[[md]])
+    K <- .MODES[[kmd]]; phk <- unlist(gvbf[K])
+    if (ok_gate("kbal", md) && is.finite(oc[kmd, "mean"]))
+      add(paste0("kbal.", md), "kbal", md, kmd, K, setNames(null_phi_kinetic(phk, .MODE.WEIGHTS[[kmd]], oc[kmd, "mean"], -1, -2), K))
+  }
+  mid_mean <- ok_gate("mean", "mid") && is.finite(oc["mid", "mean"])
+  if (mid_mean) {
+    mu_H <- 0.5 * (cm$HYB.SC + cm$HYB.SE); mu_MP <- 0.5 * (cm$MIX.SC + cm$MIX.SE); sc_f <- mu_MP / mu_H
+    Gm <- .MODES$mid
+    m_mid <- lapply(setNames(Gm, Gm), function(k) if (.allele_side(k) == "") Mhat[[k]] else Mhat[[k]] * sc_f)
+    phi_mid <- lapply(setNames(Gm, Gm), function(k) sim_phi(k, gvbf[[k]]))
+  }
+  cols <- unique(c(unlist(lapply(names(specs), function(s) { sp <- specs[[s]]; md <- sp$md
+    switch(sp$kind, disp = c(paste0("disp.", md), if (length(sp$gp) == 2) paste0("rdisp.", md), if (do_w) c(paste0("wdisp.", md), if (length(sp$gp) == 2) paste0("wrdisp.", md))),
+           rdisp = c(paste0("rdisp.", md), if (do_w) paste0("wrdisp.", md)), bsize = c(paste0("bsize.", md), if (do_w) paste0("wbsize.", md)),
+           kbal = c(paste0("kbal.", md), if (do_w) paste0("wkbal.", md)), kbalsup = c(paste0("kbalsup.", md), if (do_w) paste0("wkbalsup.", md))) })),
+    if (mid_mean) "mean.mid"))
+  NS <- matrix(NA_real_, n_sim, length(cols), dimnames = list(NULL, cols))
+  refit <- function(y, groups, method) lapply(setNames(groups, groups), function(k) .fit_m(y[[k]], expos[[k]], eta[[k]], method))
+  with_local_seed(seed + gi, if (length(cols)) for (b in seq_len(n_sim)) {
+    if (mid_mean) {
+      y <- simulate_groups(m_mid, phi_mid, s2d)
+      mu <- .correct_means(lapply(setNames(Gm, Gm), function(k) sum(y[[k]]) / sum(expos[[k]])), cb)
+      NS[b, "mean.mid"] <- .contrast_value("mid", mu, "MU")
     }
+    for (s in names(specs)) {
+      sp <- specs[[s]]; md <- sp$md; G <- sp$gp
+      y <- simulate_groups(Mhat[G], lapply(setNames(G, G), function(k) sim_phi(k, sp$phi0[[k]])), s2d)
+      f <- refit(y, G, "NB"); mu_d <- lapply(f, `[[`, "mu"); ph_d <- lapply(f, `[[`, "disp")
+      mc <- .mode_contrasts(mu_d, ph_d, cb, modes = sp$src)
+      if (do_w) { fw <- refit(y, G, "weighted"); mw <- .mode_contrasts(mu_d, lapply(fw, `[[`, "disp"), cb, modes = sp$src) }
+      dmu <- if (is.null(sp$gm)) mc[sp$src, "mean"] else {
+        ym <- simulate_groups(Mhat[sp$gm], lapply(setNames(sp$gm, sp$gm), function(k) sim_phi(k, gvbf[[k]])), s2d)
+        .contrast_value(md, .correct_means(lapply(setNames(sp$gm, sp$gm), function(k) sum(ym[[k]]) / sum(expos[[k]])), cb), "MU")
+      }
+      if (sp$kind == "disp") {
+        NS[b, paste0("disp.", md)] <- mc[sp$src, "disp"]
+        if (length(G) == 2) NS[b, paste0("rdisp.", md)] <- mc[sp$src, "raw"]
+        if (do_w) { NS[b, paste0("wdisp.", md)] <- mw[sp$src, "disp"]; if (length(G) == 2) NS[b, paste0("wrdisp.", md)] <- mw[sp$src, "raw"] }
+      } else if (sp$kind == "rdisp") {
+        NS[b, paste0("rdisp.", md)] <- mc[sp$src, "raw"]; if (do_w) NS[b, paste0("wrdisp.", md)] <- mw[sp$src, "raw"]
+      } else if (sp$kind == "kbal") {
+        NS[b, paste0("kbal.", md)] <- -mc[sp$src, "mean"] - 2 * mc[sp$src, "disp"]; if (do_w) NS[b, paste0("wkbal.", md)] <- -mc[sp$src, "mean"] - 2 * mw[sp$src, "disp"]
+      } else if (sp$kind == "bsize") {
+        NS[b, paste0("bsize.", md)] <- dmu + mc[sp$src, "disp"]; if (do_w) NS[b, paste0("wbsize.", md)] <- dmu + mw[sp$src, "disp"]
+      } else {
+        NS[b, paste0("kbalsup.", md)] <- -dmu - 2 * mc[sp$src, "disp"]; if (do_w) NS[b, paste0("wkbalsup.", md)] <- -dmu - 2 * mw[sp$src, "disp"]
+      }
+    }
+  })
+
+  ## ---- observed values and p-values ----
+  infrac <- function(x) { x <- x[!is.na(x)]; if (length(x)) mean(is.infinite(x)) else NA_real_ }
+  put <- function(q, md, obs, null) { out[[paste0(q, "_", md, "_obs")]] <<- unname(obs); out[[paste0(q, "_", md, "_p")]] <<- if (is.null(null)) NA_real_ else perm_pval(obs, null) }
+  nul <- function(key) if (key %in% colnames(NS)) NS[, key] else NULL
+  for (md in .OUT_MODES) {
+    smd <- .DISP_SOURCE[[md]]; kmd <- .KBAL_SOURCE[[md]]
+    put("mean", md, oc[md, "mean"], if (md == "mid") nul("mean.mid") else NM[, md])
+    put("disp", md, oc[smd, "disp"], nul(paste0("disp.", md))); out[[paste0("disp_", md, "_infrac")]] <- if (is.null(nul(paste0("disp.", md)))) NA_real_ else infrac(nul(paste0("disp.", md)))
+    put("rdisp", md, oc[smd, "raw"], nul(paste0("rdisp.", md)))
+    put("bsize", md, oc[md, "mean"] + oc[smd, "disp"], nul(paste0("bsize.", md)))
+    put("kbal", md, -oc[kmd, "mean"] - 2 * oc[kmd, "disp"], nul(paste0("kbal.", md))); out[[paste0("kbal_", md, "_infrac")]] <- if (is.null(nul(paste0("kbal.", md)))) NA_real_ else infrac(nul(paste0("kbal.", md)))
+    put("kbalsup", md, -oc[md, "mean"] - 2 * oc[smd, "disp"], nul(paste0("kbalsup.", md)))
+    put("cv2", md, oc[smd, "cv2"], NULL)
+    for (kd in c("bsize", "kbal")) put(paste0("r", kd), md, .contrast_burst_raw(md, gvmu, gvbf, kd, cb), NULL)
     if (do_w) {
-      ow_ <- if (isdp) ow0 else ow
-      put("wdisp", md, ow_[smd, "disp"], Nws[, smd]); out[[paste0("wdisp_", md, "_infrac")]] <- infrac(Nws[, smd])
-      put("wrdisp", md, ow_[smd, "raw"], Nwr[, smd])
-      wbs_obs <- ow_[md, "mean"] + ow_[smd, "disp"]; wbs_null <- Nm[, md] + Nws[, smd]
-      put("wbsize", md, wbs_obs, wbs_null)
-      wkb_obs <- -ow_[kmd, "mean"] - 2 * ow_[kmd, "disp"]; wkb_null <- -Nm[, kmd] - 2 * Nws[, kmd]
-      put("wkbal", md, wkb_obs, wkb_null)
-      put("wkbalsup", md, -ow_[md, "mean"] - 2 * ow_[smd, "disp"], -Nm[, md] - 2 * Nws[, smd])
-      for (kd in c("bsize", "kbal")) put(paste0("wr", kd), md, obs_burst(md, gvw, kd, if (ismid) shr else 0), if (kd == "bsize") NWb[, md] else NWk[, md])
-    }
-    ## Ploidy-adjusted p-values for the hybrid-versus-parent contrasts. HYB.COMB sums two alleles, which lowers disp by the shift (see
-    ## ploidy_components()). Adding the shift to the observed contrast and reading it against the same zero-centred exchangeability null tests hybrid
-    ## noise at the per-genome scale of the parents. _p_ploidy uses this gene's own shift and _p_ind uses a log2 shift of 1, the fully independent
-    ## equal-allele bound. disp rises by the shift, bsize rises by it, kbal falls by twice it, and cv2 rebuilds with its latent term scaled by 2^shift;
-    ## on the raw scale the shift is added to phi (delta_raw, and phi_H at a log2 shift of 1).
-    if (isdp) {
-      ph <- gvbf[["HYB.COMB"]]; par.nm <- if (md == "par_sc") "MIX.SC" else "MIX.SE"
-      ## recompute with a log2 shift s: the cv2 of the summed hybrid carries 2^s
-      adj <- function(s, s_raw, mc0, gv_phi) {
-        m <- .mode_contrasts(gvmu, gv_phi, cb, s, s_raw); m
-      }
-      for (tag in c("ploidy", "ind")) {
-        s <- if (tag == "ploidy") sh else 1
-        sr_raw <- if (tag == "ploidy") shr else ph
-        oa <- adj(s, sr_raw, oc0, gvbf)
-        out[[paste0("disp_", md, "_p_", tag)]]  <- perm_pval(oa[smd, "disp"], Ns[, smd])
-        out[[paste0("bsize_", md, "_p_", tag)]] <- perm_pval(oa[md, "mean"] + oa[smd, "disp"], bs_null)
-        out[[paste0("kbal_", md, "_p_", tag)]]  <- perm_pval(-oa[kmd, "mean"] - 2 * oa[kmd, "disp"], kb_null)
-        out[[paste0("kbalsup_", md, "_p_", tag)]] <- perm_pval(-oa[md, "mean"] - 2 * oa[smd, "disp"], ks_null)
-        out[[paste0("cv2_", md, "_p_", tag)]]   <- perm_pval(oa[smd, "cv2"], Nc[, smd])
-        out[[paste0("rdisp_", md, "_p_", tag)]] <- perm_pval(oa[smd, "raw"], Nr[, smd])
-        for (kd in c("bsize", "kbal")) out[[paste0("r", kd, "_", md, "_p_", tag)]] <- perm_pval(obs_burst(md, gvbf, kd, sr_raw), if (kd == "bsize") NRb[, md] else NRk[, md])
-        if (do_w) {
-          wa <- adj(s, sr_raw, ow0, gvw)
-          out[[paste0("wdisp_", md, "_p_", tag)]]  <- perm_pval(wa[smd, "disp"], Nws[, smd])
-          out[[paste0("wbsize_", md, "_p_", tag)]] <- perm_pval(wa[md, "mean"] + wa[smd, "disp"], wbs_null)
-          out[[paste0("wkbal_", md, "_p_", tag)]]  <- perm_pval(-wa[kmd, "mean"] - 2 * wa[kmd, "disp"], wkb_null)
-          out[[paste0("wkbalsup_", md, "_p_", tag)]] <- perm_pval(-wa[md, "mean"] - 2 * wa[smd, "disp"], -Nm[, md] - 2 * Nws[, smd])
-          out[[paste0("wrdisp_", md, "_p_", tag)]] <- perm_pval(wa[smd, "raw"], Nwr[, smd])
-          for (kd in c("bsize", "kbal")) out[[paste0("wr", kd, "_", md, "_p_", tag)]] <- perm_pval(obs_burst(md, gvw, kd, if (tag == "ploidy") shr else gvw[["HYB.COMB"]]), if (kd == "bsize") NWb[, md] else NWk[, md])
-        }
-      }
+      put("wdisp", md, ow[smd, "disp"], nul(paste0("wdisp.", md))); out[[paste0("wdisp_", md, "_infrac")]] <- if (is.null(nul(paste0("wdisp.", md)))) NA_real_ else infrac(nul(paste0("wdisp.", md)))
+      put("wrdisp", md, ow[smd, "raw"], nul(paste0("wrdisp.", md)))
+      put("wbsize", md, oc[md, "mean"] + ow[smd, "disp"], nul(paste0("wbsize.", md)))
+      put("wkbal", md, -ow[kmd, "mean"] - 2 * ow[kmd, "disp"], nul(paste0("wkbal.", md)))
+      put("wkbalsup", md, -oc[md, "mean"] - 2 * ow[smd, "disp"], nul(paste0("wkbalsup.", md)))
+      for (kd in c("bsize", "kbal")) put(paste0("wr", kd), md, .contrast_burst_raw(md, gvmu, gvw, kd, cb), NULL)
     }
   }
-  ## Trans test: the resampling null. Each resample (make_draws(), drawn once for every gene) refits the trans datasets on cells resampled
-  ## within their own group, with the two hybrid alleles sharing one cell resample, and the null is the resample distribution of the trans
-  ## contrast recentered on its observed value (draw - observed). Every group keeps its own mean, exposures and dispersion, so the hypothesis
-  ## tested is that the trans contrast itself is zero on its own scale (log2 or raw), not that the groups are exchangeable. The p-value
-  ## is two-sided (perm_pval()); draws without a defined contrast are dropped, and a log2 draw with a zero dispersion in some group is +-Inf and kept.
-  ## It replaces the pooled-relabeling p-value of disp, bsize, kbal, kbalsup and cv2 (kept as <q>_trans_p_pooled) and adds the raw (rdisp) and, with
-  ## methods = c("NB", "weighted"), the weighted-moment (wdisp, wrdisp) p-values. bsize, kbal and kbalsup use the draw-wise sums of the mean and
-  ## noise draws of their own splits. The mean-axis trans p-value uses the same resampling null.
-  if (!is.null(resamples)) {
-    grp <- c("MIX.SC", "MIX.SE", "HYT.SC", "HYT.SE", "HYT.SC.N", "HYT.SE.N", "HYT.SC.K", "HYT.SE.K")
-    tmodes <- c("trans", "trans_n", "trans_k")
-    R <- length(resamples)
-    Dm <- Ds <- Dc <- Dr <- Dws <- Dwr <- matrix(NA_real_, R, length(tmodes), dimnames = list(NULL, tmodes))
-    Dq <- matrix(NA_real_, R, 4, dimnames = list(NULL, c("rb", "rk", "wrb", "wrk")))
-    for (b in seq_len(R)) {
-      d <- resamples[[b]]
-      fb <- lapply(setNames(grp, grp), function(k) { ix <- d[[.DRAW.KEY[[k]]]]
-        .fit_one(mats[[k]][g, ix], expos[[k]][ix], share_r[[k]]) })
-      mu_b <- lapply(fb, `[[`, "mu"); ds_b <- lapply(fb, `[[`, "disp")
-      mc <- .mode_contrasts(mu_b, ds_b, cb, modes = tmodes)
-      Dm[b, ] <- mc[, "mean"]; Ds[b, ] <- mc[, "disp"]; Dr[b, ] <- mc[, "raw"]; Dc[b, ] <- mc[, "cv2"]
-      Dq[b, "rb"] <- .contrast_burst_raw("trans", mu_b, ds_b, "bsize", 0, cb); Dq[b, "rk"] <- .contrast_burst_raw("trans", mu_b, ds_b, "kbal", 0, cb)
-      if (do_w) {
-        dw <- lapply(setNames(grp, grp), function(k) { ix <- d[[.DRAW.KEY[[k]]]]
-          unname(fit_dispersion(mats[[k]][g, ix], expos[[k]][ix], share_r[[k]], "weighted")[["disp"]]) })
-        mw <- .mode_contrasts(mu_b, dw, cb, modes = tmodes)
-        Dws[b, ] <- mw[, "disp"]; Dwr[b, ] <- mw[, "raw"]
-        Dq[b, "wrb"] <- .contrast_burst_raw("trans", mu_b, dw, "bsize", 0, cb); Dq[b, "wrk"] <- .contrast_burst_raw("trans", mu_b, dw, "kbal", 0, cb)
-      }
-    }
-    shift_p <- function(est, draws_) perm_pval(est, draws_ - est)
-    est_m <- oc["trans", "mean"]; est_s <- oc["trans_n", "disp"]; est_bs <- est_m + est_s
-    est_k <- -oc["trans_k", "mean"] - 2 * oc["trans_k", "disp"]
-    for (q in c("mean", "disp", "bsize", "kbal", "kbalsup", "cv2", "rdisp", "rbsize", "rkbal", if (do_w) c("wdisp", "wrdisp", "wbsize", "wkbal", "wkbalsup", "wrbsize", "wrkbal")))
-      out[[paste0(q, "_trans_p_pooled")]] <- out[[paste0(q, "_trans_p")]]
-    out$mean_trans_p  <- shift_p(est_m, Dm[, "trans"])
-    out$disp_trans_p  <- shift_p(est_s, Ds[, "trans_n"])
-    out$bsize_trans_p <- shift_p(est_bs, Dm[, "trans"] + Ds[, "trans_n"])
-    out$kbal_trans_p  <- shift_p(est_k, -Dm[, "trans_k"] - 2 * Ds[, "trans_k"])
-    out$kbalsup_trans_p <- shift_p(-est_bs - est_s, -Dm[, "trans"] - 2 * Ds[, "trans_n"])
-    out$cv2_trans_p   <- shift_p(oc["trans_n", "cv2"], Dc[, "trans_n"])
-    out$rdisp_trans_p <- shift_p(oc["trans_n", "raw"], Dr[, "trans_n"])
-    out$rbsize_trans_p <- shift_p(obs_burst("trans", gvbf, "bsize"), Dq[, "rb"])
-    out$rkbal_trans_p  <- shift_p(obs_burst("trans", gvbf, "kbal"),  Dq[, "rk"])
-    if (do_w) {
-      out$wdisp_trans_p  <- shift_p(ow["trans_n", "disp"], Dws[, "trans_n"])
-      out$wrdisp_trans_p <- shift_p(ow["trans_n", "raw"], Dwr[, "trans_n"])
-      out$wrbsize_trans_p <- shift_p(obs_burst("trans", gvw, "bsize"), Dq[, "wrb"])
-      out$wrkbal_trans_p  <- shift_p(obs_burst("trans", gvw, "kbal"),  Dq[, "wrk"])
-      out$wbsize_trans_p <- shift_p(est_m + ow["trans_n", "disp"], Dm[, "trans"] + Dws[, "trans_n"])
-      out$wkbal_trans_p  <- shift_p(-ow["trans_k", "mean"] - 2 * ow["trans_k", "disp"], -Dm[, "trans_k"] - 2 * Dws[, "trans_k"])
-      out$wkbalsup_trans_p <- shift_p(-est_m - 2 * ow["trans_n", "disp"], -Dm[, "trans"] - 2 * Dws[, "trans_n"])
-    }
-  }
-  out$ploidy_shift <- sh; out$ploidy_shift_raw <- shr
-  data.frame(apply_gate(out, if (is.null(gates)) NULL else gates[g, ]), row.names = NULL, check.names = FALSE)
+  out$k_trans <- k_hat
+  data.frame(apply_gate(out, gate), row.names = NULL, check.names = FALSE)
 }
 
 ## coexpr_bootstrap_one: one bootstrap draw of the co-expression decomposition. draw (from make_coexpr_draws()) resamples the columns of each

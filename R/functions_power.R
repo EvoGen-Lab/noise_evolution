@@ -173,7 +173,7 @@ power_grid_row <- function(i, ALPHA, CELL.RATIO, EXPOSURE.CV, GRID, MEAN.READS, 
 ## power_grid_row() simulates one two-group contrast. The functions below simulate the contrasts the
 ## pipeline actually tests. cis compares the two alleles of the same hybrid cells and is nulled by the
 ## within-cell allele swap. trans is the parental ratio minus the hybrid allele ratio and is nulled by
-## pooling parent and hybrid cells (two versions: independent allele shuffles, as in permute_contrasts_one(),
+## pooling parent and hybrid cells (two versions: independent allele shuffles, as in perm_trans_pool(),
 ## and a pairing-preserving one). The nulls come from the helpers the pipeline calls (null_cis_axes(),
 ## null_trans_axes(), perm_trans_pool(), perm_trans_pool_paired(), fit_ratio_axes()).
 

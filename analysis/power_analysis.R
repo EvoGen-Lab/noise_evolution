@@ -253,7 +253,7 @@ console_stop()
 # 1 / SIZE; phi = 0 gives unpaired alleles and, as a control, cis and trans should then follow the
 # total result. The counts are Poisson, so the marginal law is close to negative binomial; the check below
 # confirms the recovered size. The trans null runs in two versions on the same data: the independent
-# shuffles that permute_contrasts_one() uses and a pairing-preserving swap (perm_trans_pool_paired()),
+# shuffles that the earlier permutation null used and a pairing-preserving swap (perm_trans_pool_paired()),
 # so the SIZE.RATIO == 1 type I error validates the pairing fix.
 
 # Real design parameters from the Section 2 checkpoint: hybrid and parent cell counts, the split

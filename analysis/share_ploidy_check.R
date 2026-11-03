@@ -25,7 +25,7 @@ for (g in seq_len(nrow(genes))) {
                   share_sub = var_c * ((1 + genes$sd[g]) * w^2 + genes$sq[g] * (pi^2 / cbar^2 + (1 - pi)^2 / (1 - cbar)^2)),
                   var_atilde = var(pi * ci / cbar * ac + (1 - pi) * (1 - ci) / (1 - cbar) * ae) - var(pi * ac + (1 - pi) * ae))   # same draws with and without share variation
 }
-share_true <- list(cbar = cbar, var_c = var_c, r_c = var_c / cbar^2, r_e = var_c / (1 - cbar)^2, xi = var_c / (cbar * (1 - cbar)))
+share_true <- list(cbar = cbar, var_c = var_c, r_c = var_c / cbar^2, r_e = var_c / (1 - cbar)^2)
 pc <- ploidy_components(Yc, Ye, rep(1, N) * O[1] * 0 + O, share_true)
 tr <- do.call(rbind, truth)
 stopifnot(all(abs(pc$sigma_d - genes$sd) < 0.01), all(abs(pc$sigma_q - genes$sq) < 0.01), all(abs(pc$pi - tr[, "pi"]) < 0.002),
@@ -33,7 +33,7 @@ stopifnot(all(abs(pc$sigma_d - genes$sd) < 0.01), all(abs(pc$sigma_q - genes$sq)
 ## the summed-hybrid term equals the variance that share variation adds to the summed expression factor (compared on common random numbers)
 stopifnot(all(abs(pc$share_sub - tr[, "var_atilde"]) < 0.0003), all(abs(pc$share_sub - tr[, "share_sub"]) < 1e-4))
 ## ignoring the share variation (zero share terms) leaves the star estimators, which are biased upward in sigma_q as Appendix C derives
-pc0 <- ploidy_components(Yc, Ye, O, list(cbar = cbar, var_c = 0, r_c = 0, r_e = 0, xi = 0))
+pc0 <- ploidy_components(Yc, Ye, O, list(cbar = cbar, var_c = 0, r_c = 0, r_e = 0))
 stopifnot(all(pc0$sigma_q > pc$sigma_q), all(pc0$share_sub == 0))
 ## share_terms() recovers the share variance from the observed shares: binomial noise is removed with L - 1
 lib <- round(S * 20000); chat <- rbinom(N, lib, ci) / lib

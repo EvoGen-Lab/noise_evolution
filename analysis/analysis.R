@@ -402,7 +402,7 @@ cat(sprintf("Genes retained: %d, minimum detected cells: %d\n", length(GENE.SET)
 # or (1 - c_i) / (1 - c-bar) (He), which has mean 1 and variance r_c = var(c) / c-bar^2 or r_e = var(c) / (1 - c-bar)^2, so an allele's apparent
 # dispersion is phi + (1 + phi) r. Given the cell's depth the observed share is a binomial draw around c_i, so var(c) is the observed variance
 # minus the binomial sampling variance (the cell's own share estimates it, with L - 1 as the finite-sample denominator; share_terms()).
-# Section 2 removes this term from every hybrid-allele dispersion (.fit_one(share_r)) and a second term from the summed hybrid's (share_sub, ploidy_components()). The check below sizes it against the allele dispersions of a
+# Section 2 removes this term from every hybrid-allele dispersion (.fit_one(share_r)); the summed counts, reported only, carry their own term (share_sub, ploidy_components()). The check below sizes it against the allele dispersions of a
 # random sample of genes informative in both hybrid alleles, fitted without the correction with the Section 2 estimator and offsets, so the
 # correction is reported next to what it corrects. SHARE.TOL is the fraction of the median allele dispersion above which the correction, and with it
 # the estimate of var(c), starts to matter, and a warning is issued.
@@ -502,12 +502,12 @@ stopifnot(all(c(EXPO.MIX.SC, EXPO.MIX.SE, EXPO.HYB) > 0))
 C.HAT <- C.HAT[HYB.ORD]
 stopifnot(isTRUE(all.equal(C.HAT, colSums(HYB.SC) / LIB.HYB)))
 # SHARE.R is the transcriptome share correction of every dataset's fits (.fit_one(share_r)): r_c for the Sc-allele datasets, r_e for the Se-allele
-# datasets, and 0 for the parents and the summed hybrid (whose own additive correction enters through share_sub).
+# datasets, and 0 for the parents and the summed counts (whose own additive correction enters through share_sub).
 SHARE.R <- share_r_groups(R.C, R.E)
-# The two-allele decomposition of the hybrid's noise, from all hybrid cells, gives per gene the extrinsic and intrinsic variances, the log2 and raw ploidy shifts
-# (the fall in the summed hybrid's dispersion from averaging the two alleles' private noise) and share_sub, the term that share variation adds to the summed
-# hybrid's dispersion (ploidy_components(), Methods Appendices C and D). The summed hybrid is fitted with share_sub removed, and the shifts enter the mid and par
-# contrasts of the noise axis.
+# The two-allele decomposition of the hybrid's noise (Methods Appendix B), from all hybrid cells, gives per gene the extrinsic and intrinsic variances (share
+# corrected), the log2 and raw ploidy shifts (the fall in the dispersion of the summed counts from averaging the two alleles' private noise) and share_sub, the
+# term that share variation adds to the dispersion of the summed counts. They are reported only: no contrast uses the summed counts or the shifts. The extrinsic
+# variance sigma_d is also the shared factor of the simulated allele nulls (gene_perm.R), and the summed counts are fitted with share_sub removed for reporting.
 PLOIDY.COMP <- ploidy_components(HYB.SC, HYB.SE, EXPO.HYB.SC, SHARE)
 cat(sprintf("Ploidy shift: median delta %.3f (log2), median raw shift %.4f; summed-hybrid share term: median %.2e, maximum %.2e\n",
             median(PLOIDY.COMP$delta, na.rm = TRUE), median(PLOIDY.COMP$delta_raw, na.rm = TRUE), median(PLOIDY.COMP$share_sub), max(PLOIDY.COMP$share_sub)))
@@ -516,7 +516,7 @@ cat(sprintf("Ploidy shift: median delta %.3f (log2), median raw shift %.4f; summ
 N.BOOT <- 1000; SEED.BOOT <- 1            # bootstrap resamples
 N.BOOT.REP <- 2                           # bootstrap replicates at seeds SEED.BOOT, SEED.BOOT + 1, ...; replicate 1 is reported, the rest check seed adequacy
 N.PERM <- 10000; SEED.PERM <- 1          # permutation shuffles
-N.NULL <- 10000                          # resamples of the trans resampling null (gene_perm); the smallest p-value is 1 / (N.NULL + 1)
+N.SIM <- 2000                            # simulated draws of each dispersion, kinetic and mid mean null (gene_perm); the smallest p-value is 1 / (N.SIM + 1)
 N.COEXPR <- 5000; SEED.COEXPR <- 1        # Coexpression
 
 ## 2.1 Internal split fraction
@@ -626,6 +626,21 @@ SPLIT.OFFSET <- data.frame(
 SPLIT.OFFSET$difference_from_all <- SPLIT.OFFSET$offset_log2 - OFFSET.CBAR
 cat("Share offset of each hybrid cell subset (log2 units)\n"); print(SPLIT.OFFSET, digits = 4, row.names = FALSE)
 
+# The three partitions: gamma-hat (the parental variance in units of the best hybrid precision, median-pooled over genes), the cis fraction f and the resulting
+# numbers of cis and trans cells for the mean, dispersion and kinetic balance axes. The Methods drop terms of order 1/N on the basis that every group keeps about
+# PARTITION.MIN.CELLS cells or more, so a smaller partition is flagged. The median pilot SE of log phi per dataset documents how imprecisely phi is estimated.
+PARTITION.MIN.CELLS <- 800
+PARTITION.REPORT <- data.frame(
+  quantity = c("mean", "dispersion", "kinetic balance"), gamma = c(SPLIT.FRAC$r_mean, SPLIT.FRAC$r_disp, SPLIT.FRAC$r_kbal),
+  f = c(SPLIT.FRAC$f_mean, SPLIT.FRAC$f_disp, SPLIT.FRAC$f_kbal), genes_pooled = c(SPLIT.FRAC$n_genes_mean, SPLIT.FRAC$n_genes_disp, SPLIT.FRAC$n_genes_kbal),
+  n_cis = c(length(SPLIT.IDX.MEAN$c), length(SPLIT.IDX.DISP$c), length(SPLIT.IDX.KBAL$c)), n_trans = c(length(SPLIT.IDX.MEAN$t), length(SPLIT.IDX.DISP$t), length(SPLIT.IDX.KBAL$t)))
+PARTITION.REPORT$below_min_cells <- pmin(PARTITION.REPORT$n_cis, PARTITION.REPORT$n_trans) < PARTITION.MIN.CELLS
+PILOT.LOGPHI.SE <- vapply(c("MIX.SC", "MIX.SE", "HYB.SC", "HYB.SE"), function(k) median(PILOT.SE[[paste0(k, "_logdisp_se")]], na.rm = TRUE), numeric(1))
+cat("Partitions of the hybrid cells\n"); print(PARTITION.REPORT, digits = 4, row.names = FALSE)
+if (any(PARTITION.REPORT$below_min_cells)) warning(sprintf("a partition holds fewer than %d cells; the O(1/N) terms the Methods drop may matter there", PARTITION.MIN.CELLS))
+cat("Median bootstrap SE of log phi in the pilot (natural log):\n"); print(round(PILOT.LOGPHI.SE, 3))
+write.csv(PARTITION.REPORT, file.path(TABLE.DIR, "partition_report.csv"), row.names = FALSE)
+
 # SPLIT.FIT.MATS/SPLIT.FIT.EXPOS hold 17 datasets, each with its own offsets (a hybrid allele S_H / 2,
 # HYB.COMB the summed S_H); SHARE.R gives each dataset its transcriptome share correction:
 # 5 split-independent (MIX.SC, MIX.SE, HYB.SC, HYB.SE, HYB.COMB), already fitted in 2.1
@@ -727,7 +742,7 @@ GENE.TABLE <- local({
   }
   flags <- grep("^(mean|raw|log|kbal)_.*_valid$", names(tab))
   tab$inference_set <- rowSums(tab[, flags]) > 0
-  contrast_groups <- setdiff(FILTER.GROUPS, c("HYB.SC", "HYB.SE"))      # the datasets whose dispersions enter a contrast
+  contrast_groups <- setdiff(FILTER.GROUPS, "HYB.COMB")      # the datasets whose dispersions enter a contrast (the summed counts are reported only)
   tab$in_matched_set <- n_class(contrast_groups, 1) == length(contrast_groups) & mean_ok(FILTER.GROUPS)
   ## The statuses of the weighted method of moments (SPLIT.FITS.W) on the same datasets, for reference; its contrasts are gated by the NB classes above.
   wstatus <- sapply(FILTER.GROUPS, gene_fit_status, fits = SPLIT.FITS.W)
@@ -753,7 +768,7 @@ cat(sprintf("Matched set: %d of %d genes (class 1 in every dataset of every part
 
 ## Sensitivity of the sets to the provisional thresholds, from the stored statistics: the matched set (class 1 everywhere) as the level of the Poisson test changes,
 ## and the raw-scale set of the total contrast (class 1 or 2 in both parents) as the near-zero threshold changes (the upper bounds were found at CLASS.ALPHA).
-CLASS.GROUPS <- setdiff(FILTER.GROUPS, c("HYB.SC", "HYB.SE"))      # the datasets whose dispersions enter a contrast
+CLASS.GROUPS <- setdiff(FILTER.GROUPS, "HYB.COMB")      # the datasets whose dispersions enter a contrast (the summed counts are reported only)
 CLASS.SENSITIVITY <- rbind(
   data.frame(threshold = "alpha", value = c(0.01, 0.025, 0.05, 0.10, 0.20), set = "class 1 in every dataset (before the mean floors)",
              genes = vapply(c(0.01, 0.025, 0.05, 0.10, 0.20), class_set_size, numeric(1), eps = CLASS.EPS, fits = SPLIT.FITS, groups = CLASS.GROUPS)),
@@ -773,54 +788,37 @@ CONTRAST.EXPOS <- SPLIT.FIT.EXPOS       # offsets keyed by dataset, as the fits 
 
 CONTRAST.FITS.INFER <- lapply(SPLIT.FITS, function(fr) data.frame(MU = as.numeric(as.character(fr[GENES.INFER, "MU"])), DISP = as.numeric(as.character(fr[GENES.INFER, "DISP"])), row.names = GENES.INFER))
 
-# The observed transcriptome share quantities the jobs read: the mean share, the share corrections of the datasets, and per gene the summed hybrid's share term
-# and the ploidy shifts (the expected fall in the summed hybrid's dispersion when it averages the two alleles' private noise, log2 delta between 0 and 1 and raw
-# delta_raw), which the mid and par contrasts add to the noise axis. The bootstrap refits all of them in every replicate from SHARE.CELLS, each hybrid cell's observed
-# share and library size; the permutation job keeps the observed shifts.
-SHARE.OBS <- list(cbar = C.BAR, r = SHARE.R,
-                  sub = setNames(PLOIDY.COMP$share_sub, rownames(PLOIDY.COMP))[GENES.INFER], shift = setNames(PLOIDY.COMP$delta, rownames(PLOIDY.COMP))[GENES.INFER],
-                  shift_raw = setNames(PLOIDY.COMP$delta_raw, rownames(PLOIDY.COMP))[GENES.INFER])
+# The observed transcriptome share quantities the jobs read: the mean share and the share corrections of the datasets (both refit in every bootstrap replicate from
+# SHARE.CELLS, each hybrid cell's observed share and library size), and each gene's extrinsic variance sigma_d, the shared factor of the simulated allele nulls.
+# The ploidy shifts of the summed counts are reported only (PLOIDY.SHIFT, PLOIDY.SHIFT.RAW).
+SHARE.OBS <- list(cbar = C.BAR, r = SHARE.R, sigma_d = setNames(PLOIDY.COMP$sigma_d, rownames(PLOIDY.COMP))[GENES.INFER])
 SHARE.CELLS <- list(chat = C.HAT, lib = LIB.HYB)
-PLOIDY.SHIFT.INFER <- SHARE.OBS$shift; PLOIDY.SHIFT.RAW.INFER <- SHARE.OBS$shift_raw
+PLOIDY.SHIFT.INFER <- setNames(PLOIDY.COMP$delta, rownames(PLOIDY.COMP))[GENES.INFER]; PLOIDY.SHIFT.RAW.INFER <- setNames(PLOIDY.COMP$delta_raw, rownames(PLOIDY.COMP))[GENES.INFER]
 
 # The contrasts each gene qualifies for (GENE.TABLE flags by scale and mode): the jobs set every other contrast of the gene to NA (apply_gate()).
 GATES <- as.matrix(GENE.TABLE[match(GENES.INFER, GENE.TABLE$gene), grep("^(mean|raw|log|kbal)_.*_valid$", names(GENE.TABLE))])
 colnames(GATES) <- sub("_valid$", "", colnames(GATES)); rownames(GATES) <- GENES.INFER
 
-## Pre-draws every permutation label vector (one list entry per permutation, all modes) from one
-## seeded stream, so each gene is tested against the same relabelings. total/par shuffle pooled
-## cell labels and mid pairs random parent cells. cis and trans are drawn once per permutation for the
-## mean, noise and kinetic balance splits together: the splits share the alleles' swap flags (cis) and one
-## pool ordering of the parent and hybrid cells (trans), so the bsize and kbal nulls, which combine a
-## mean-split draw with a noise-split draw (or, for kbal, the mean and noise of one split) of the same permutation, keep their dependence.
-PERMS <- local({
-  ncells <- NCELLS
-  NPERM <- N.PERM
-  seed <- SEED.PERM
-  with_local_seed(seed, lapply(seq_len(NPERM), perm_label_draw, hyc = SPLIT.IDX.MEAN$c, hyc_n = SPLIT.IDX.DISP$c, hyc_k = SPLIT.IDX.KBAL$c,
-         hyt = SPLIT.IDX.MEAN$t, hyt_n = SPLIT.IDX.DISP$t, hyt_k = SPLIT.IDX.KBAL$t,
-         nHYB = ncells[["HYB.COMB"]], nSC = ncells[["MIX.SC"]], nSE = ncells[["MIX.SE"]]))
-})
-
-## Resamples of the trans resampling null, drawn once from their own seed (not the bootstrap's) so every gene is tested against the same
-## cell resamples. The hybrid cells are resampled within the eight strata of the mean, noise and kinetic balance split overlap, as in the bootstrap, and the
-## two hybrid alleles share one resample (make_draws()). gene_perm.R uses them for the trans p-values.
-NULL.DRAWS <- make_draws(NCELLS, N.NULL, SEED.PERM + 500, hyc = SPLIT.IDX.MEAN$c, hyc_n = SPLIT.IDX.DISP$c, hyc_k = SPLIT.IDX.KBAL$c)
+## Pre-draws every permutation label vector of the log2 mean nulls (one list entry per permutation) from one seeded stream, so each gene is tested against the
+## same relabelings: pooled parents (total), allele swaps in the cis cells of the mean split (cis), each parent pooled with the trans cells of the mean split
+## (trans), and all hybrid cells pooled with one parent (par). The mid mean null and every dispersion and kinetic null are simulated in gene_perm.R.
+PERMS <- with_local_seed(SEED.PERM, lapply(seq_len(N.PERM), perm_label_draw, hyc = SPLIT.IDX.MEAN$c, hyt = SPLIT.IDX.MEAN$t,
+                                           nHYB = NCELLS[["HYB.COMB"]], nSC = NCELLS[["MIX.SC"]], nSE = NCELLS[["MIX.SE"]]))
 
 ## ---- Cluster round trip: Rscript gene_boot.R (job array, one task per replicate) / gene_perm.R ----
 ## gene_boot.R reads gene_boot_inputs.rda and writes gene_boot_output_<k>of<K>.rda (BOOT.CONTRASTS) for replicate k.
 ## Each replicate resamples with its own pre-drawn indices (DRAWS.REPS[[k]], seed SEED.BOOT + k - 1). The hybrid
 ## cells are resampled within the eight strata of the three splits and every hybrid dataset is
 ## assembled from the same resampled cell IDs (make_draws()), so the mean, noise and kinetic balance contrasts share their cells.
-## gene_perm.R reads gene_perm_inputs.rda and writes gene_perm_output.rda (PERM.RESULTS).
+## gene_perm.R reads gene_perm_inputs.rda and writes gene_perm_output.rda (PERM.RESULTS, the null p-values).
 DRAWS.REPS <- lapply(SEED.BOOT + seq_len(N.BOOT.REP) - 1, function(seed) make_draws(NCELLS, N.BOOT, seed, hyc = SPLIT.IDX.MEAN$c, hyc_n = SPLIT.IDX.DISP$c, hyc_k = SPLIT.IDX.KBAL$c))
 ## The cluster scripts read the objects under their plain names, with GENES the genes to run, so the inputs are saved from an environment that
 ## holds the inference-set objects under those names.
 JOB.INPUTS <- list2env(list(CONTRAST.MATS = CONTRAST.MATS.INFER, CONTRAST.EXPOS = CONTRAST.EXPOS, CONTRAST.FITS = CONTRAST.FITS.INFER, GENES = GENES.INFER,
                             DRAWS.REPS = DRAWS.REPS, N.BOOT = N.BOOT, SHARE.OBS = SHARE.OBS, SHARE.CELLS = SHARE.CELLS, GATES = GATES, PERMS = PERMS, N.PERM = N.PERM,
-                            SEED.PERM = SEED.PERM, NULL.DRAWS = NULL.DRAWS))
+                            SEED.PERM = SEED.PERM, N.SIM = N.SIM))
 save(list = c("CONTRAST.MATS", "CONTRAST.EXPOS", "CONTRAST.FITS", "GENES", "DRAWS.REPS", "N.BOOT", "SHARE.OBS", "SHARE.CELLS", "GATES"), envir = JOB.INPUTS, file = file.path(INPUT.DIR, "gene_boot_inputs.rda"))
-save(list = c("CONTRAST.MATS", "CONTRAST.EXPOS", "CONTRAST.FITS", "GENES", "PERMS", "N.PERM", "SEED.PERM", "SHARE.OBS", "GATES", "NULL.DRAWS"), envir = JOB.INPUTS, file = file.path(INPUT.DIR, "gene_perm_inputs.rda"))
+save(list = c("CONTRAST.MATS", "CONTRAST.EXPOS", "CONTRAST.FITS", "GENES", "PERMS", "N.PERM", "SEED.PERM", "SHARE.OBS", "GATES", "N.SIM"), envir = JOB.INPUTS, file = file.path(INPUT.DIR, "gene_perm_inputs.rda"))
 BOOT.CONTRASTS.REPS.INFER <- load_replicates("gene_boot", "BOOT.CONTRASTS", N.BOOT.REP, expected = length(GENES.INFER))
 BOOT.CONTRASTS.INFER <- BOOT.CONTRASTS.REPS.INFER[[1]]
 load(file.path(OUTPUT.DIR, "gene_perm_output.rda"))            # PERM.RESULTS
@@ -834,10 +832,10 @@ stopifnot(identical(sort(PERM.RESULTS.INFER$gene), sort(GENES.INFER)), identical
 ## of the mean split minus 2 the disp of the noise split; the two kinetic balance versions need not agree). The log2 dispersion-derived quantities carry the share of
 ## bootstrap replicates at a zero dispersion (_zero) and its flag (_zeroflag, above BOOT.ZERO.FLAG), with percentile intervals and interquantile-range SEs. The
 ## rdisp_<mode>_est / _se / _nfin columns hold the raw difference of phi for the same modes, from the same bootstrap refits as the log2 columns; a zero-boundary
-## refit contributes to them (rdisp_*_nfin is the share of draws that did). The mid and par noise estimates already carry the ploidy shift (log2 delta; raw
-## delta_raw on the raw scale), refit in every replicate, and the mid and par columns keep the unadjusted disp in the _est_raw columns. The wdisp_* and wrdisp_*
-## columns repeat both scales with the weighted method of moments (fit_dispersion(method = "weighted")) on the same resamples, a sensitivity analysis next to the
-## NB estimator. A contrast a gene does not qualify for (GATES) is NA throughout.
+## refit contributes to them (rdisp_*_nfin is the share of draws that did). The mid and par contrasts compare the per-genome hybrid, built from the two corrected
+## allele fits of all hybrid cells, with the parents. The wdisp_* and wrdisp_* columns repeat both scales with the weighted method of moments
+## (fit_dispersion(method = "weighted")) on the same resamples, a sensitivity analysis next to the NB estimator. A contrast a gene does not qualify for (GATES) is NA
+## throughout. PR holds the null p-values of every contrast (gene_perm.R); cv2 and the raw burst quantities have estimates and intervals but no null in the Methods.
 BURST.CONTRASTS.INFER <- BOOT.CONTRASTS.INFER
 PR.INFER <- PERM.RESULTS.INFER[match(BURST.CONTRASTS.INFER$gene, PERM.RESULTS.INFER$gene), ]   
 # Benjamini-Hochberg FDR across genes, one family per contrast and quantity.
@@ -962,6 +960,29 @@ ALLELE.DISP <- local({
 cat("log2(phi_Hc / phi_He) across genes (equal allele dispersions: median 0, share |z| > 1.96 near 0.05)\n")
 print(ALLELE.DISP$summary, digits = 3, row.names = FALSE)
 write.csv(ALLELE.DISP$summary, file.path(TABLE.DIR, "allele_dispersion_check.csv"), row.names = FALSE)
+
+# Appendix B quantities, reported only: per gene the Hc share of the summed count (pi), the corrected extrinsic and intrinsic variances (sigma_d, sigma_q), the log2
+# and raw ploidy shifts (delta, delta_raw), the share term of the summed counts (share_sub) and the dispersion of the summed counts phi_Sigma (fitted with share_sub
+# removed). ROUTE.CHECK compares the per-genome hybrid dispersion of route A (the geometric mean of the two corrected allele dispersions, which every dominance
+# contrast uses) with the route through the summed counts (log2 phi_Sigma + delta) on the matched set: their Spearman correlation and the median and spread of
+# their log2 difference. PHI.MU.COR is the Spearman correlation of phi with the corrected mean across the class-1 genes of each dataset.
+APPENDIX.B <- data.frame(gene = rownames(PLOIDY.COMP), PLOIDY.COMP[, c("pi", "sigma_d", "sigma_q", "delta", "delta_raw", "share_sub")],
+                         phi_sigma = SPLIT.FITS$HYB.COMB[rownames(PLOIDY.COMP), "DISP"], row.names = NULL)
+cat("Appendix B quantities (medians over genes with both allele means positive):\n")
+print(round(sapply(APPENDIX.B[PLOIDY.COMP$good, -1], median, na.rm = TRUE), 5))
+write.csv(APPENDIX.B, file.path(TABLE.DIR, "appendix_b_quantities.csv"), row.names = FALSE)
+ROUTE.CHECK <- local({
+  a <- 0.5 * (log2(CONTRAST.FITS$HYB.SC[GENES, "DISP"]) + log2(CONTRAST.FITS$HYB.SE[GENES, "DISP"]))
+  b <- log2(SPLIT.FITS$HYB.COMB[GENES, "DISP"]) + PLOIDY.SHIFT[GENES]
+  ok <- is.finite(a) & is.finite(b)
+  data.frame(n_genes = sum(ok), spearman = cor(a[ok], b[ok], method = "spearman"), median_log2_diff = median(a[ok] - b[ok]), mad_log2_diff = mad(a[ok] - b[ok]))
+})
+cat("Per-genome hybrid dispersion: route A (allele geometric mean) against the summed counts plus the shift\n"); print(ROUTE.CHECK, digits = 3, row.names = FALSE)
+PHI.MU.COR <- data.frame(dataset = CLASS.GROUPS, spearman = vapply(CLASS.GROUPS, function(k) { f <- SPLIT.FITS[[k]]; i <- f$CLASS %in% 1; cor(f$DISP[i], f$MU[i], method = "spearman") }, numeric(1)),
+                         genes = vapply(CLASS.GROUPS, function(k) sum(SPLIT.FITS[[k]]$CLASS %in% 1), numeric(1)), row.names = NULL)
+cat("Spearman correlation of phi and mu across class-1 genes:\n"); print(PHI.MU.COR, digits = 3, row.names = FALSE)
+write.csv(ROUTE.CHECK, file.path(TABLE.DIR, "route_check.csv"), row.names = FALSE)
+write.csv(PHI.MU.COR, file.path(TABLE.DIR, "phi_mu_correlation.csv"), row.names = FALSE)
 fig_pdf("extra/S_allele_dispersion_ratio.pdf", 10, 4.5)
 par(mfrow = c(1, 2))
 hist(pmax(pmin(ALLELE.DISP$ratio, 4), -4), breaks = seq(-4, 4, by = 0.1), col = COLOR.GREY[["light"]], border = "white", main = "",
@@ -977,7 +998,7 @@ save(GENES, GENES.INFER, GENE.TABLE, SPLIT.FITS.W, CONTRAST.FITS.INFER, PLOIDY.S
      HYB.SC, HYB.SE, EXPO.MIX.SC, EXPO.MIX.SE, EXPO.HYB.SC, EXPO.HYB.SE, EXPO.HYB, C.HAT, C.BAR, VAR.C, R.C, R.E, SHARE, SHARE.R, OFFSET.CBAR, SHARE.BOOT, SHARE.TABLE, SHARE.DISP, SPLIT.OFFSET,
      WEIGHT.CHECK, ALLELE.DISP,
      N.COEXPR, SEED.COEXPR,
-     SPLIT.IDX.MEAN, SPLIT.IDX.DISP, SPLIT.IDX.KBAL, SPLIT.FRAC,
+     SPLIT.IDX.MEAN, SPLIT.IDX.DISP, SPLIT.IDX.KBAL, SPLIT.FRAC, PARTITION.REPORT, PILOT.LOGPHI.SE, APPENDIX.B, ROUTE.CHECK, PHI.MU.COR,
      file = ckpt_path(2))
 
 console_start(3)
@@ -1044,18 +1065,12 @@ cat("Genes classified per quantity (regulatory and dominance):\n"); print(CLASSI
 write.csv(CLASSIFIED.COUNTS, file.path(TABLE.DIR, "classified_gene_counts.csv"), row.names = FALSE)
 CLASS.VEC <- list(REG = REG.VEC, DOM = DOM.VEC)
 
-# Sensitivity to the size of the shift. The _q_ind calls use s = 1 for every
-# gene, the upper bound for fully independent equal alleles. Classes that hold
-# under both bases do not depend on how private the allele noise is.
-DOM.DISP.IND <- dom_class_vec(BURST.CONTRASTS, PR, "disp", basis = "ind")
+# The ploidy shift of the summed counts (Methods Appendix B) is reported only: the dominance calls compare the per-genome hybrid with the parents. PLOIDY.CHECK gives
+# its median and that of the par dispersion contrasts.
 PLOIDY.CHECK <- data.frame(
-  median_shift = median(PLOIDY.SHIFT, na.rm = TRUE),
-  raw_sc = median(BURST.CONTRASTS$disp_par_sc_est_raw, na.rm = TRUE),
-  adj_sc = median(BURST.CONTRASTS$disp_par_sc_est,     na.rm = TRUE),
-  raw_se = median(BURST.CONTRASTS$disp_par_se_est_raw, na.rm = TRUE),
-  adj_se = median(BURST.CONTRASTS$disp_par_se_est,     na.rm = TRUE))
-PLOIDY.CHECK   
-table(own = DOM.VEC$disp, ind = DOM.DISP.IND)
+  median_shift = median(PLOIDY.SHIFT, na.rm = TRUE), median_shift_raw = median(PLOIDY.SHIFT.RAW, na.rm = TRUE),
+  par_sc = median(BURST.CONTRASTS$disp_par_sc_est, na.rm = TRUE), par_se = median(BURST.CONTRASTS$disp_par_se_est, na.rm = TRUE))
+PLOIDY.CHECK
 
 ## 3.4 Mean against dispersion and burst size, parents and hybrids
 # Burst size is the composite of the two (bsize = mean + disp in log2
