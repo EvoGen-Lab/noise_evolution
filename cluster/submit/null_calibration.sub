@@ -1,0 +1,35 @@
+#!/bin/sh -l
+# FILENAME:  null_calibration.sbatch
+#
+# Null calibration array of the validation checks (D1 to D4, D7, D10): the 279 tasks of calib_task_grid(), each 100 synthetic
+# genes with N.SIM = N.PERM = 1000, dealt round-robin across the array tasks.
+#
+# Sizing. A local run at N.SIM = 200 took about 50 core-seconds per gene with both estimators; at N.SIM = 1000 that is about
+# 250 core-seconds, so the array needs about 279 x 100 x 250 / 3600 = 1,900 core-hours. With 16 tasks of 24 cores the average
+# task needs about 5 hours; the time limit allows a factor of 8. null_calibration_grid.R reads the task count from
+# SLURM_ARRAY_TASK_COUNT, so changing --array needs no other edit.
+#
+# Restarts. A task writes its output file only when it finishes. Resubmitting the array recomputes only the tasks whose
+# null_calibration_output_<k>of<K>.rda is missing.
+#
+# Files next to this script: functions.R, functions_checks.R, null_calibration_grid.R, null_calibration_inputs.rda.
+
+#SBATCH --account=bphm
+#SBATCH --nodes=1
+#SBATCH --ntasks=1
+#SBATCH --partition=cpu
+#SBATCH --cpus-per-task=24
+#SBATCH --qos=normal
+#SBATCH --time=2-00:00:00
+#SBATCH --job-name null_cal
+#SBATCH --array=1-16
+#SBATCH --output=null_cal_%A_%a.out
+
+module load r/4.5.2
+
+export OMP_NUM_THREADS=1
+export MKL_NUM_THREADS=1
+export OPENBLAS_NUM_THREADS=1
+export VECLIB_MAXIMUM_THREADS=1
+
+Rscript null_calibration_grid.R
