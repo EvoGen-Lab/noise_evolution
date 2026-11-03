@@ -23,7 +23,7 @@ Covers `docs/methods.md` (revision 17945) and the validation handoff of Nov 3. T
 4. **Gene set for the quoted median dispersions.** The text quotes median φ of Hc 0.150 and He 0.152 without naming the genes. G1 reports both the class-1 median and the median of all fits.
 5. **Handoff B4, allele weight π.** The allele weight π is read as the allele's mean share, so t = c/π with η = σ²_c/π². This reading is confirmed.
 6. **Numerical precision of `.cr_loglik()` (not a document mismatch).** The lgamma form takes the difference of two terms of size log Γ(1/φ). At φ = 1e-8 its finite-difference slope is dominated by rounding (A2). The fit searches φ ≥ 3.06e-7 and A2(b) checks the fitted maxima against a grid. The class LRT uses the same function.
-7. **Burst size standard errors.** The document says the burst size SEs treat Δ(μ) and Δ(φ) as uncorrelated. The code takes them from bootstrap replicates that resample the same cells for both partitions, so they include the covariance. The bsize and kbalsup nulls simulate the mean groups independently of the dispersion groups, so the nulls do treat them as uncorrelated. See the section on overlapping cell sets below.
+7. **Burst size standard errors (the document now says the SEs include the covariance; resolved).** Previously the document said the burst size SEs treat Δ(μ) and Δ(φ) as uncorrelated. The code takes them from bootstrap replicates that resample the same cells for both partitions, so they include the covariance. The bsize and kbalsup nulls simulate the mean groups independently of the dispersion groups, so the nulls do treat them as uncorrelated. See the section on overlapping cell sets below.
 8. **C6 call stability** (approach confirmed) uses a Wald approximation, |estimate / bootstrap SE| > 1.96, instead of rerunning the permutation tests for each of the 50 random partitions.
 
 ## Overlapping cell sets: the derivation in "Separate partitions for each quantity"
@@ -51,6 +51,29 @@ The correlation grows with μ and φ: at μ = 1, φ = 0.3 every family lies with
 - **Bootstrap SEs and intervals:** not affected. They resample the observed cells, so they carry the data's covariance, including the shared cells of the mean, noise and kinetic partitions.
 - **The document's statements:** not supported. These are the sentence on uncorrelated errors and the statement that burst size SEs treat Δ(μ) and Δ(φ) as uncorrelated (mismatch 7).
 - **The burst size and κ nulls:** affected. They hold the fitted means fixed and simulate the dispersion groups, so within a null draw the mean and dispersion errors have the generator's third moment, not the data's. bsize and kbalsup also draw the mean groups independently of the dispersion groups. A positive covariance raises the variance of both burst size (Δμ + Δφ) and κ (−Δμ − 2Δφ), which makes the nulls too narrow, and a negative one makes them too wide. D4a (lognormal and bimodal truths) and D7 in the calibration array measure the resulting size. The data arms A4 and C7 (`checks_data.R`) measure the correlation in the data.
+
+## Handoff section 9 (Nov 3 corrections): status
+
+| ID | Status |
+|---|---|
+| H1 | Done: `share_terms()` sets c̄̂ = mean(ĉ_i), unweighted. |
+| H2 | Done: `.mode_contrasts()` divides every allele mean by 2c̄̂ or 2(1 − c̄̂) (`.correct_means()`) before the mid and par contrasts average them. |
+| H3 | Done: route A, geometric mean of the corrected allele dispersions on the log₂ scale and arithmetic mean on the raw scale; δ̂ and δ̂_raw are reported only (`APPENDIX.B`). |
+| H4 | Done: contrasts are named mid and par. |
+| H5 | Not done. This is a full-pipeline simulation, beyond the synthetic harness used to test the code. |
+| H6 | Not done. The Oct 23 scripts are not in the repository or in this session. Checks A4_theory, A10, F2 and F3 cover the same ground with new code. |
+| H7 | Done in code (commit 4d53e03): `STRUCT.MEAN.KBAL` in Section 3.6. It needs the data. |
+| H8 | Not done. It needs a modeling choice (the dropout model) and the data. The suggesting reference stays uncited until its DOI is supplied. |
+| H9 | Not done. It needs a modeling choice (clusters from Section 7.3, a shared φ across clusters) and the data. |
+| H10 | Done: `PHI.MU.COR` in Section 2.6. |
+| K2 addendum | Done: the class threshold is `qchisq(1 − 2 CLASS.ALPHA, 1)`, which is 2.7055 at α = 0.05. `cox_reid_check.R` asserts it. |
+| K9 | Done. The burst size and κ bootstrap draws are sums of the mean and dispersion draws on the same resampled cells, so their SEs and intervals carry the covariance. `eiv_components()` no longer enters a missing correlation as zero (commit 4d53e03). The bsize and kbalsup simulation nulls still draw the mean groups independently (see the overlap section). |
+| A4, A10 | Code: A4_theory and A10 (overlaps 0, 0.5, 1; equal and observed offsets; moment, Appendix A, unadjusted ML, Cox–Reid). |
+| A5 | Code: A5 in `checks_data.R` gives each gene's realized ratio against its group's cap. Replacing the CV of 0.53 in the text waits for the numbers. |
+| A9 | Code: Cox–Reid revisit with the untruncated moment estimator. My factor third-moment data check is renamed A11. |
+| B4 addendum | Code: 20,000 cells with equal offsets, and the observed hybrid depths. |
+| F2, F3 | Redone with new code (F2 replicated; see above). |
+| F5, B5 | Code: F5_routes adds the bootstrap SD ratio of the two routes with Cox–Reid fits, next to ROUTE.CHECK's Spearman correlation. |
 
 ## Rerun note
 
