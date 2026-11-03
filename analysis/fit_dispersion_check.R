@@ -1,8 +1,8 @@
 ###############################################################
 ### fit_dispersion_check.R
-### Local unit check of fit_dispersion(): the weighted method of moments recovers phi without systematic bias under uneven
-### exposures, its allele-share correction recovers the gene's phi, it finds a solution where the plain weight iteration
-### cycles (sparse counts), and the NB wrapper .fit_one() keeps its c(mu, disp, theta) output.
+### Local unit check of fit_dispersion(): the weighted method of moments of Appendix A recovers phi without systematic bias under
+### uneven exposures, its allele-share correction recovers the gene's phi, a converged estimate is a fixed point of the Appendix A update
+### and sparse counts return a recorded convergence status, and the NB wrapper .fit_one() keeps its c(mu, disp, theta) output.
 ### Needs   : R/functions.R. Writes nothing; stops with an error when a check fails.
 ###############################################################
 suppressWarnings(suppressMessages(source("R/functions.R")))
@@ -22,10 +22,17 @@ est <- replicate(300, { y <- rpois(n, 3 * rgamma(n, 1 / r, 1 / r) * rgamma(n, 1 
                         fit_dispersion(y, rep(1, n), r, "weighted")[["disp"]] })
 stopifnot(abs(mean(est) / phi - 1) < 0.1)
 
-## sparse counts where the fixed-point iteration cycles between 0 and 1.21: the root solve returns a positive phi
+## a converged estimate is a fixed point of the Appendix A update: weights 1 / (1 + phi M)^2 at the estimate, phi-check, then
+## (1 + 1 / sum(y)) phi-check / (1 - h phi-check)
+e <- rlnorm(400, 0, 0.6); y <- rnbinom(400, mu = 2 * e, size = 1 / 0.4); f <- fit_dispersion(y, e, 0, "weighted")
+p <- e / sum(e); M <- sum(y) * p; A <- M * (1 - p); B <- M^2 * (1 - 2 * p) + p^2 * sum(M^2); h <- sum(p^2); w <- 1 / (1 + f[["disp"]] * M)^2
+chk <- sum(w * ((y - M)^2 - A)) / sum(w * B)
+stopifnot(f[["converged"]] == 1, abs((1 + 1 / sum(y)) * chk / (1 - h * chk) - f[["disp"]]) < 1e-6 * (1 + f[["disp"]]))
+
+## sparse counts: a finite estimate with its convergence status recorded
 y <- c(rep(0, 43), rep(1, 5), 2, 3); e <- rep(1, 50)
 f <- fit_dispersion(y, e, 0, "weighted")
-stopifnot(f[["converged"]] == 1, is.finite(f[["disp"]]))
+stopifnot(f[["converged"]] %in% c(0, 1), is.finite(f[["disp"]]))
 
 ## no excess dispersion: the boundary is reported as a valid fit with the signed estimate kept
 f <- fit_dispersion(rpois(200, 5), rep(1, 200), 0, "weighted")

@@ -350,6 +350,8 @@ neg_binom_fit_offset <- function(y, exposure, share_r = 0, share_sub = 0) {
 # boundary likelihood-ratio test rejects Poisson at level CLASS.ALPHA, and resolved near zero when the upper 95% bound on phi times the mean fitted count
 # is below CLASS.EPS (the extra-Poisson variance as a fraction of the Poisson variance). Both thresholds are provisional, so sensitivity runs set them here.
 LOG.THETA.RANGE <- c(-4, 15)
+WEIGHTED.MAXIT  <- 100     # iteration limit and relative tolerance of the Appendix A moment estimator (fit_dispersion(method = "weighted"))
+WEIGHTED.TOL    <- 1e-8
 CLASS.ALPHA     <- 0.05
 CLASS.EPS       <- 0.1
 
@@ -382,18 +384,19 @@ CLASS.EPS       <- 0.1
 # fit_dispersion: the shared dispersion-fitting interface. Both methods take the same exposure-weighted mean,
 # mu = sum(y) / sum(exposure), then estimate the dispersion phi of Var(y_i) = M_i + phi M_i^2 with M_i = mu * exposure_i.
 #   "NB": the maximizer of the Cox-Reid adjusted profile likelihood of phi (.fit_one()), with the boundary rule above.
-#   "weighted": a weighted method of moments that treats the NB only as a working model for the weights. With p_i = O_i / sum(O),
-#     r_i = y_i - M_i, A_i = M_i (1 - p_i) and B_i = M_i^2 (1 - 2 p_i) + p_i^2 sum(M^2), E[r_i^2] = A_i + phi B_i when mu is estimated
-#     from the same counts, so phi-hat = sum(w_i (r_i^2 - A_i)) / sum(w_i B_i). The working-NB weights
-#     w_i = 1 / [(1 + phi M_i)(1 + phi + phi M_i (1 + 3 phi))] (the inverse variance of (y_i - M_i)^2 - y_i under the working NB, up
-#     to the factor 2 M_i^2) enter through the root of the weighted moment equation sum(w(phi) (r_i^2 - A_i - phi B_i)) = 0 on
-#     [0, exp(-LOG.THETA.RANGE[1])], found with uniroot(), because the plain iteration phi <- f(w(phi)) can cycle between two
-#     values on sparse counts. No positive root gives phi = 0 and disp_raw keeps the signed unit-weight moment estimate.
+#   "weighted": the weighted method of moments of Methods Appendix A, which uses only the first two moments of the counts. With p_i = O_i / sum(O),
+#     r_i = y_i - M_i, A_i = M_i (1 - p_i), B_i = M_i^2 (1 - 2 p_i) + p_i^2 sum(M^2) and h = sum(p^2), E[r_i^2] = A_i + phi B_i when mu is estimated from
+#     the same counts. The intermediate estimate phi-check = sum(w_i (r_i^2 - A_i)) / sum(w_i B_i) uses the plug-in B_i, whose expectation is
+#     (1 + 1 / sum(M) + phi h) B_i, so the estimate divides by that factor and solves for phi: phi-hat = (1 + 1 / sum(y)) phi-check / (1 - h phi-check).
+#     The weights w_i = 1 / (1 + phi M_i)^2 minimize the variance of the moment estimate when the kurtosis is the same in every cell. Starting from
+#     phi = 0, the weights are evaluated at the current estimate, phi-hat is updated and restricted to [0, exp(-LOG.THETA.RANGE[1])], and the step is
+#     repeated until the change is below WEIGHTED.TOL (relative) or WEIGHTED.MAXIT steps. converged records which, iter the steps used, and disp_raw
+#     keeps the last unrestricted value (signed; the upper end of the range when 1 - h phi-check is not positive).
 # The transcriptome share correction (share_r, share_sub, see above) is applied after either fit. Returns a named numeric vector:
 #   mu, disp (the corrected phi, 0 at the boundary), theta = 1 / disp (Inf at 0),
 #   disp_app (the fitted phi before the share correction, 0 when the fit sits on the boundary),
 #   disp_raw (the corrected phi before the truncation at zero, signed),
-#   boundary (1 when disp = 0, a valid Poisson-limit estimate), converged (1 unless the fit failed), iter (weighted only) and
+#   boundary (1 when disp = 0, a valid Poisson-limit estimate), converged (NB: 1 unless the fit failed; weighted: 1 when the iteration met WEIGHTED.TOL), iter (weighted only) and
 #   hit_range (1 when the NB maximum lies within 1e-3 of either end of the search range, NB only).
 # NA mu and disp mean too few cells; mu = 0 and NA disp mean no counts; mu with NA disp is a failed fit.
 fit_dispersion <- function(counts, expo, share_r = 0, method = c("NB", "weighted"), share_sub = 0) {
@@ -430,26 +433,21 @@ fit_dispersion <- function(counts, expo, share_r = 0, method = c("NB", "weighted
     p  <- e / sum(e)
     A  <- mu_i * (1 - p)
     B  <- mu_i^2 * (1 - 2 * p) + p^2 * sum(mu_i^2)
+    h  <- sum(p^2)
     r2 <- (y - mu_i)^2
-    # g(phi) = sum w(phi) (r2 - A - phi B): the weighted moment equation with weights at phi, so its root is the fixed point
-    # phi = sum(w (r2 - A)) / sum(w B).
-    g <- function(phi) {
-      w <- 1 / ((1 + phi * mu_i) * (1 + phi + phi * mu_i * (1 + 3 * phi)))
-      sum(w * (r2 - A - phi * B))
-    }
-    g0 <- g(0)
     upper <- exp(-LOG.THETA.RANGE[[1]])          # the largest phi the NB search allows
-    if (!is.finite(g0)) { out[["converged"]] <- 0; return(out) }
-    out[["converged"]] <- 1
-    if (g0 <= 0) {
-      # no positive root: the estimate sits at the boundary; the signed moment estimate (unit weights) is kept as a diagnostic
-      phi_app <- 0; est <- sum(r2 - A) / sum(B); out[["iter"]] <- 0
-    } else if (g(upper) >= 0) {
-      phi_app <- upper; est <- upper; out[["iter"]] <- 0
-    } else {
-      rt <- uniroot(g, c(0, upper), tol = 1e-10 * (1 + upper))
-      phi_app <- rt$root; est <- rt$root; out[["iter"]] <- rt$iter
+    phi <- 0; raw <- NA_real_; conv <- 0
+    for (it in seq_len(WEIGHTED.MAXIT)) {
+      w <- 1 / (1 + phi * mu_i)^2
+      chk <- sum(w * (r2 - A)) / sum(w * B)
+      raw <- if (is.finite(chk) && h * chk < 1) (1 + 1 / sum(y)) * chk / (1 - h * chk) else upper
+      new <- min(max(raw, 0), upper)
+      if (abs(new - phi) <= WEIGHTED.TOL * (1 + phi)) { phi <- new; conv <- 1; break }
+      phi <- new
     }
+    if (!is.finite(raw)) { out[["converged"]] <- 0; return(out) }
+    out[c("converged", "iter")] <- c(conv, it)
+    phi_app <- phi; est <- min(raw, upper)
   }
   out[["disp_app"]] <- phi_app
   corrected <- (est - share_r) / (1 + share_r) - share_sub
