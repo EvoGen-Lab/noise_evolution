@@ -60,7 +60,7 @@ The correlation grows with μ and φ: at μ = 1, φ = 0.3 every family lies with
 | H2 | Done: `.mode_contrasts()` divides every allele mean by 2c̄̂ or 2(1 − c̄̂) (`.correct_means()`) before the mid and par contrasts average them. |
 | H3 | Done: route A, geometric mean of the corrected allele dispersions on the log₂ scale and arithmetic mean on the raw scale; δ̂ and δ̂_raw are reported only (`APPENDIX.B`). |
 | H4 | Done: contrasts are named mid and par. |
-| H5 | Not done. This is a full-pipeline simulation, beyond the synthetic harness used to test the code. |
+| H5 | Covered without a separate pipeline simulation. In the calibration array's equal designs every true contrast is zero, so block `CALMERGE` reports the mean estimate over genes of every quantity and mode as the bias of the full estimation chain (check H5), by family and stratum. The pilot estimate of f is the one step it does not include; C4 covers that step. |
 | H6 | Not done. The Oct 23 scripts are not in the repository or in this session. Checks A4_theory, A10, F2 and F3 cover the same ground with new code. |
 | H7 | Done in code (commit 4d53e03): `STRUCT.MEAN.KBAL` in Section 3.6. It needs the data. |
 | H8 | Not done. It needs a modeling choice (the dropout model) and the data. The suggesting reference stays uncited until its DOI is supplied. |

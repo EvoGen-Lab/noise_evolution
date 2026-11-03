@@ -370,6 +370,13 @@ if ("CALMERGE" %in% RUN.CHECKS) {
     D7 <- D1[grepl("^(bsize|kbal|kbalsup)_", D1$test) & D1$design == "equal", ]
     check_save("D7", D7, "run", headline = c(size_headline(D7[grepl("^kbal_", D7$test), ], "kappa, f_kappa partition (shared cells)"), size_headline(D7[grepl("^kbalsup_", D7$test), ], "kappa, supplementary f_mu and f_phi"),
                                              size_headline(D7[grepl("^bsize_", D7$test), ], "burst size")), mc_error = "binomial SE per test", script = CHECK.SCRIPT)
+    # H5: with every true contrast zero (equal design and its non-gamma and known-sigma_d variants), the mean estimate over genes is the bias of the full
+    # estimation chain, read against the spread of the estimates over genes.
+    H5 <- contrast_bias_summary(CAL[CAL$design %in% c("equal", "s2d_known"), ], strata = c("design", "family", "mean", "phi", "omega"))
+    H5$z <- H5$bias / H5$bias_se
+    SB <- summary_by(H5, "quantity", "bias_over_sd", z = "z", keys = c("mode", "family", "mean", "phi", "omega"))
+    check_save("H5", H5, "run", headline = sprintf("%s: |bias| > 2 MC SE in %d of %d cells, largest |bias| / SD %.3f at %s", SB$level, SB$n_z2, SB$n, SB$max_abs, SB$at),
+               mc_error = "bias_se per row (SD over genes / sqrt(genes))", script = CHECK.SCRIPT)
     D10 <- D1[grepl("^w", D1$test), ]
     check_save("D10", D10, "run", headline = c(size_headline(D10[D10$design == "equal", ], "weighted estimator, equal design"), size_headline(D10[D10$design == "means", ], "weighted estimator, means design")),
                mc_error = "binomial SE per test", script = CHECK.SCRIPT)

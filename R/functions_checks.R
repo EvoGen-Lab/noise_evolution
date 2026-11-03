@@ -666,6 +666,22 @@ size_headline <- function(tab, label) {
           tab$reject_0.05[j], tab$n[j], max(tab$reject_0.01), max(tab$reject_0.001))
 }
 
+## contrast_bias_summary: H5 from the calibration output. In a design where every group shares one per-genome mean and one dispersion, every true
+## contrast is zero, so the mean of the observed estimates over genes is the bias of the full estimation chain (offsets, share corrections, abundance
+## factors, route A per-genome hybrid, partitions). Rows of PR from those designs, grouped by strata; returns, per quantity and mode, the bias with its
+## Monte Carlo SE (SD over genes / sqrt(genes)), the SD over genes and bias / SD. Infinite log2 estimates (a fitted phi = 0) are left out and counted.
+contrast_bias_summary <- function(PR, strata, quantities = c("mean", "disp", "rdisp", "bsize", "kbal", "wdisp"), modes = .OUT_MODES) {
+  out <- list()
+  for (ix in split(seq_len(nrow(PR)), do.call(paste, c(PR[strata], sep = "|")))) for (q in quantities) for (md in modes) {
+    cn <- paste0(q, "_", md, "_obs"); if (!cn %in% names(PR)) next
+    x <- PR[ix, cn]; fin <- is.finite(x); if (sum(fin) < 3) next
+    b <- mean(x[fin]); sdv <- sd(x[fin])
+    out[[length(out) + 1]] <- data.frame(PR[ix[1], strata, drop = FALSE], quantity = q, mode = md, genes = sum(fin), infinite = sum(is.infinite(x)), bias = b,
+                                         bias_se = sdv / sqrt(sum(fin)), sd = sdv, bias_over_sd = b / sdv, row.names = NULL)
+  }
+  do.call(rbind, out)
+}
+
 ## ============================================================
 ## Data check helpers (checks_data.R)
 ## ============================================================
