@@ -222,6 +222,12 @@ if ("A4" %in% RUN.CHECKS) {
   SA <- summary_by(A4[A4$pair != "share_phi_zero" & (A4$scale == "raw" | A4$pair == "cis_dmu_dphi"), ], "pair", "cor", z = "z", keys = c("Mbar", "phi", "omega"))
   hl <- sprintf("%s: median cor %.3f, range %.3f to %.3f (largest |cor| at %s), |z| > 2 in %d of %d", SA$level, SA$median, SA$min, SA$max, SA$at, SA$n_z2, SA$n)
   check_save("A4_sim", A4[!grepl("^C7", A4$pair), ], "run", headline = hl[!grepl("^C7", hl)], mc_error = sprintf("Fisher SE 1/sqrt(n-3), n = %d", ceiling(1000 * CHECK.SIZE)), script = CHECK.SCRIPT)
+  # The first-order covariance of mean and dispersion errors on shared cells is mu (E[(a - 1)^3] - 2 phi^2) / N: zero for a gamma factor, not otherwise.
+  G <- expand.grid(family = c("gamma", "lognormal", "bimodal", "product"), mu = c(1, 5), phi = c(0.3, 1), stringsAsFactors = FALSE); S <- check_streams(nrow(G), SEED.CHECKS + 18)
+  A4M <- do.call(rbind, mclapply(seq_len(nrow(G)), a4_moment_row, grid = G, nrep = ceiling(4000 * CHECK.SIZE), N = 2000, streams = S, mc.cores = CORES))
+  check_save("A4_theory", A4M, "run", headline = sprintf("%s mu %g phi %g: E[(a-1)^3] %.2f (gamma %.2f), Cov formula %.2e, simulated %.2e (MC SE %.1e); cor moment %.3f, Cox-Reid %.3f",
+                                                         A4M$family, A4M$mu, A4M$phi, A4M$third_moment, A4M$third_moment_gamma, A4M$cov_formula, A4M$cov_simulated, A4M$cov_mc_se, A4M$cor_moment, A4M$cor_cox_reid),
+             mc_error = sprintf("cor SE %.3f", 1 / sqrt(ceiling(4000 * CHECK.SIZE) - 3)), script = CHECK.SCRIPT)
   check_save("C7_sim", A4[grepl("^C7", A4$pair), ], "run", headline = hl[grepl("^C7", hl)], mc_error = sprintf("Fisher SE 1/sqrt(n-3), n = %d", ceiling(1000 * CHECK.SIZE)), script = CHECK.SCRIPT)
 }
 

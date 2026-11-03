@@ -296,6 +296,20 @@ a4_row <- function(i, grid, nrep, pools, streams) with_stream(streams[[i]], {
         cor = mean(c(res[, "phi_c"], res[, "phi_e"]) == 0), se = binom_se(mean(c(res[, "phi_c"], res[, "phi_e"]) == 0), 2 * nrep), n = 2 * nrep, row.names = NULL))
 })
 
+## a4_moment_row: A4 theory check, grid row i (factor family, mu, phi). With equal offsets and the mean and the dispersion fitted on the same cells, the
+## first-order covariance of the ratio mean and the moment estimate (S^2 - Ybar) / Ybar^2 is mu (E[(a - 1)^3] - 2 phi^2) / N, zero only when the factor has
+## the gamma's third central moment. Compares that value (E[(a - 1)^3] from 4e6 latent draws) with the simulated covariance, and reports the correlations of
+## the mean with the moment estimate and with the Cox-Reid estimate. Family "product" is the shared-times-private gamma factor of the generator (Var d = phi / 4).
+a4_moment_row <- function(i, grid, nrep, N, streams) with_stream(streams[[i]], {
+  g <- grid[i, ]
+  fac <- function(n) if (g$family == "product") rgamma1(n, g$phi / 4) * rgamma1(n, (1 + g$phi) / (1 + g$phi / 4) - 1) else sim_pos_factor(n, as.character(g$family), 1, g$phi)
+  a3 <- mean((fac(4e6) - 1)^3)
+  X <- t(vapply(seq_len(nrep), function(r) { y <- rpois(N, g$mu * fac(N)); m <- mean(y); c(m, (var(y) - m) / m^2, fit_dispersion(y, rep(1, N))[["disp"]]) }, numeric(3)))
+  cp <- (X[, 1] - mean(X[, 1])) * (X[, 2] - mean(X[, 2]))
+  data.frame(g, N = N, third_moment = a3, third_moment_gamma = 2 * g$phi^2, cov_formula = g$mu * (a3 - 2 * g$phi^2) / N, cov_simulated = mean(cp) * nrep / (nrep - 1),
+             cov_mc_se = sd(cp) / sqrt(nrep), cor_moment = cor(X[, 1], X[, 2]), cor_cox_reid = cor(X[, 1], X[, 3]), cor_se = 1 / sqrt(nrep - 3), row.names = NULL)
+})
+
 ## e3_row: grid row i of the simulation arm of E3 (Mbar, phi, phi ratio). NREP experiments of two parental groups with known log2 contrasts of phi, burst
 ## size (log2 mu + log2 phi) and kinetic balance (-log2 mu - 2 log2 phi); each gets B bootstrap replicates (cells resampled within group, indices drawn
 ## first), refitted, with a zero phi mapped to -Inf on the log2 scale; the 95% percentile interval and SE come from .boot_summary(). Returns coverage of the

@@ -17,22 +17,53 @@ Covers `docs/methods.md` (revision 17945) and the validation handoff of Nov 3. T
 
 ## Code and document mismatches
 
-1. **Appendix A estimator.** The document's moment estimator has weights 1/(1 + φM)², the corrected denominator B̃ and the closed form φ̂ = (1 + 1/Σy) φ̌ / (1 − h φ̌). The code's `fit_dispersion(method = "weighted")` differs. Its weights are 1/[(1 + φM)(1 + φ + φM(1 + 3φ))]. It solves the weighted moment equation Σ w (r² − A − φB) = 0 with `uniroot()`, and it has no (1 + 1/Σy)/(1 − hφ̌) factor. The checks implement the documented estimator (`appendixA_phi()`) and report both: F1, B4 and D10 (the D10 nulls use the code's estimator).
+1. **Appendix A estimator (resolved in commit 1ffbccb).** The code's weighted estimator used other weights and had no bias-correction factor. `fit_dispersion(method = "weighted")` now follows Appendix A. It uses weights 1/(1 + φM)², φ̂ = (1 + 1/Σy) φ̌ / (1 − h φ̌), and iteration from φ = 0 with the convergence status recorded. It matches the reference implementation `appendixA_phi()` to 1.6e-13 on 2000 random genes, and 2 of 2000 reached the 100-step limit.
 2. **Upper likelihood bound.** The document says "upper 95% likelihood bound" and does not name the critical value. The code uses 2.71, the 0.90 quantile of χ²₁, which gives a one-sided 95% bound. A two-sided 95% bound would use 3.84. E1(b) reports the coverage of the code's bound.
 3. **CV in the variance cap.** N Σ O²/(Σ O)² = 1 + CV²(O) holds exactly only with the population CV (divisor N). The document does not state the divisor. G3 shows the identity at rounding error with the population CV and not with the sample CV. The difference is of order 1/N, so it is negligible at the observed group sizes.
 4. **Gene set for the quoted median dispersions.** The text quotes median φ of Hc 0.150 and He 0.152 without naming the genes. G1 reports both the class-1 median and the median of all fits.
 5. **Handoff B4, allele weight π.** For a single allele fit, the handoff's "allele weight π" is read as the allele's mean share, so t = c/π with η = σ²_c/π². This is an interpretation, not a statement of the document.
 6. **Numerical precision of `.cr_loglik()` (not a document mismatch).** The lgamma form takes the difference of two terms of size log Γ(1/φ). At φ = 1e-8 its finite-difference slope is dominated by rounding (A2). The fit searches φ ≥ 3.06e-7 and A2(b) checks the fitted maxima against a grid. The class LRT uses the same function.
-7. **C6 call stability** uses a Wald approximation, |estimate / bootstrap SE| > 1.96, instead of rerunning the permutation tests for each of the 50 random partitions.
+7. **Burst size standard errors.** The document says the burst size SEs treat Δ(μ) and Δ(φ) as uncorrelated. The code takes them from bootstrap replicates that resample the same cells for both partitions, so they include the covariance. The bsize and kbalsup nulls simulate the mean groups independently of the dispersion groups, so the nulls do treat them as uncorrelated. See the section on overlapping cell sets below.
+8. **C6 call stability** uses a Wald approximation, |estimate / bootstrap SE| > 1.96, instead of rerunning the permutation tests for each of the 50 random partitions.
+
+## Overlapping cell sets: the derivation in "Separate partitions for each quantity"
+
+**Claim in the document.** Within a group, fit the mean on cells A and the dispersion on cells B. To first order the covariance of the two errors is a sum over the shared cells of Cov[Y_i, s_i]. That covariance is zero because Σ_y y ∂Pr(y)/∂φ = ∂M_i/∂φ = 0. The conclusion is that overlapping or identical cell sets do not correlate the mean and dispersion errors.
+
+**Where it fails.** The identity Cov[Y_i, s_i] = ∂M_i/∂φ holds only when Pr(y) is the true distribution of the count. Here s_i is the slope of the NB log-likelihood, and Y_i follows the NB only when the expression factor is gamma. The document's own model gives a non-gamma factor to every hybrid allele: t·a with the share multiplier (Transcriptome share corrections), and d·q with shared and private parts (Appendix B). The Notes for revision raise the same point for the fits ("ML fit of non-gamma expression factors"). For any other factor the covariance is not zero. For the moment estimator the first-order term is exact and has a closed form. With equal offsets, φ̂ = (S² − Ȳ)/Ȳ² linearizes to δφ ≈ (δS² − δȲ)/μ² − 2(σ² − μ)δȲ/μ³. For a Poisson mixture with factor a (mean 1, variance φ), the third central moment of the count is κ₃ = μ + 3φμ² + μ³E[(a − 1)³]. Then
+
+Cov[μ̂_A, φ̂_B] = |A ∩ B| / (N_A N_B) · [κ₃ − σ² − 2φμσ²] / μ² = |A ∩ B| / (N_A N_B) · μ (E[(a − 1)³] − 2φ²),
+
+because σ² + 2φμσ² = μ + 3φμ² + 2φ²μ³ is the third central moment of the NB. The covariance is zero for disjoint sets, as the document says. For overlapping sets it is zero only when the factor has the gamma's third central moment 2φ². The correlation it implies does not shrink with N, because the covariance and the product of the SDs are both of order |A ∩ B|/(N_A N_B).
+
+**Numerical confirmation** (check A4_theory in `checks_sim.R`; 16 cells of family × μ {1, 5} × φ {0.3, 1}, N = 2000, equal offsets, 4000 replicates per cell). The formula matches the simulated covariance to within about 2 MC SE in every cell. The table shows μ = 5, φ = 1:
+
+| Factor | E[(a − 1)³] (gamma: 2) | Cov(μ̂, φ̂_mom), formula | simulated (MC SE) | cor, moment | cor, Cox–Reid |
+|---|---|---|---|---|---|
+| gamma | 1.98 | −4.0e-5 | 1.1e-4 (1.0e-4) | 0.017 | 0.015 |
+| lognormal | 3.91 | 4.8e-3 | 5.1e-3 (2.8e-4) | 0.327 | 0.377 |
+| bimodal | 0.94 | −2.7e-3 | −2.7e-3 (0.9e-4) | −0.541 | −0.362 |
+| product of shared and private gamma (Var d = φ/4) | 2.63 | 1.6e-3 | 1.5e-3 (1.4e-4) | 0.177 | 0.172 |
+
+The correlation grows with μ and φ: at μ = 1, φ = 0.3 every family lies within ±0.05. The product factor is the one the generator and `sim_alleles()` use. This explains the A4 simulation numbers (up to 0.13 within a group and 0.23 for the cis contrast on the same cells). The cross-allele term C7 stays near zero: cor(μ̂_Hc, φ̂_He) was 0.008 and 0.007 at shared variances of 0.25 and 0.75. The Cox–Reid estimator follows the same sign and size as the moment formula, but has no closed form here.
+
+**What this affects.**
+- **Bootstrap SEs and intervals:** not affected. They resample the observed cells, so they carry the data's covariance, including the shared cells of the mean, noise and kinetic partitions.
+- **The document's statements:** not supported. These are the sentence on uncorrelated errors and the statement that burst size SEs treat Δ(μ) and Δ(φ) as uncorrelated (mismatch 7).
+- **The burst size and κ nulls:** affected. They hold the fitted means fixed and simulate the dispersion groups, so within a null draw the mean and dispersion errors have the generator's third moment, not the data's. bsize and kbalsup also draw the mean groups independently of the dispersion groups. A positive covariance raises the variance of both burst size (Δμ + Δφ) and κ (−Δμ − 2Δφ), which makes the nulls too narrow, and a negative one makes them too wide. D4a (lognormal and bimodal truths) and D7 in the calibration array measure the resulting size. The data arms A4 and C7 (`checks_data.R`) measure the correlation in the data.
 
 ## Rerun note
 
-These commits change no code in `R/functions.R`, `analysis/analysis.R` or the pipeline's cluster scripts, so no section or pipeline cluster job needs a rerun. The checks run as follows:
+Commit 1ffbccb changes `fit_dispersion(method = "weighted")` (Appendix A). It needs a rerun of Section 2.3 (`SPLIT.FITS.W` and the weighted columns of `GENE.TABLE`) and of the weighted columns of `BOOT.CONTRASTS` and `PR` with every table read from them, and resubmission of `gene_boot` and `gene_perm`. `SPLIT.FITS.W` can be refitted locally; the bootstrap and null columns need the cluster. The NB results are unchanged. The other check commits change no code in `R/functions.R`, `analysis/analysis.R` or the pipeline's cluster scripts, so no section or pipeline cluster job needs a rerun. The checks run as follows:
 
 - `checks_sim.R` runs locally from the generator. It uses the observed design when the Section 2 checkpoint exists and stand-in offsets otherwise.
 - The calibration array needs one new cluster job, `null_calibration.sub` (16 array tasks). Its inputs come from `checks_sim.R` block `CAL`, and block `CALMERGE` reads its outputs.
 - `checks_data.R` needs the Section 1 and 2 checkpoints. Their cluster-dependent parts (C3, D9, E2, E3) read the `gene_boot` and `gene_perm` outputs already merged into the Section 2 checkpoint. A4, A6, C7 and D8 run a local bootstrap on a gene subsample instead of a cluster rerun.
 - `checks_text.R` G2 needs network access to api.crossref.org.
+
+## Open items
+
+- **Cox–Reid conclusions (A1, B4):** revisit when the Section 2 checkpoint is available, by rerunning `checks_sim.R` on the observed design and `checks_data.R`. The current conclusions rest on stand-in offsets.
 
 ## Not testable with these data
 
@@ -52,8 +83,9 @@ Rows marked **outside** have numbers outside the handoff's stated criterion.
 | E1 | (a) LRT size at φ = 0: median 0.044, range 0.029 to 0.059 over 36 cells. (b) Coverage of the upper bound: median 0.992, lowest 0.934 (N 800, M̄ 0.2, φ 0.5). (c) At φM̄ = 0.1, 5 to 6% of genes are called class 2 and 22 to 31% class 3. At φM̄ = 0.02, 11 to 13% are called class 1. | binomial SE 0.007 |
 | B2 sim | Bias of σ̂²_c is within 2 MC SE in all 8 cells. SD at σ²_c = 1.9e-5 is 1.7e-6 (N 800) and 1.2e-6 (N 1600). | per row |
 | B3 | Median \|bias\|/SD 0.033, max 0.61 (φ⁰ 0.005, M̄ 0.1). The correction truncates up to 7% of fits. Relative bias of the corrected means is at most 1.2%. | per row |
-| B4 | **outside** for Cox–Reid with non-gamma factors. Lognormal: median relative bias −6.3% (range −32% to +22%), median bias/SD −0.60. Bimodal: +4.2% (up to +37%), bias/SD 0.35. Gamma: −0.1%. The moment estimators (Appendix A and the code's) have median relative bias near 0 for all three families, max +29% at M̄ 0.5, φ 0.05. | per row |
-| F1 sim | Appendix A as documented: max \|bias\| 0.022 (relative 2.6%); \|bias\| > 2 MC SE in 4 of 48 cells; converged in every fit. | per row |
+| B4 | (Rerun after commit 1ffbccb; the code's weighted estimator now equals Appendix A.) **outside** for Cox–Reid with non-gamma factors. Lognormal: median relative bias −6.3% (range −32% to +22%), median bias/SD −0.60. Bimodal: +4.2% (up to +37%), bias/SD 0.35. Gamma: −0.1%. The moment estimators (Appendix A and the code's) have median relative bias near 0 for all three families, max +29% at M̄ 0.5, φ 0.05. | per row |
+| F1 sim | Appendix A (documented and code, identical after commit 1ffbccb): max \|bias\| 0.022 (relative 2.6%); \|bias\| > 2 MC SE in 4 of 48 cells; converged in every fit. | per row |
+| A4 theory | The first-order covariance μ(E[(a − 1)³] − 2φ²)/N matches simulation within about 2 MC SE in 16 cells. The correlation of μ̂ and Cox–Reid φ̂ on the same cells ranges from −0.36 (bimodal) to 0.38 (lognormal) at μ 5, φ 1, and is −0.02 to 0.03 for gamma. | Fisher SE 0.016 |
 | F2 | Star limits: error 0.0011 (σ²*_d) and 0.0012 (σ²*_q) against the target 0.0005. Corrected σ²_d and σ²_q: up to 0.0011 and 0.0012. These are within about 2 MC SE, and the MC SE (0.0006 to 0.0013 at 8e6 cells) exceeds the target, so this run cannot resolve 0.0005. Summed-factor variance against the formula: 6e-5 (target 0.0002). | MC SE 0.0006 to 0.0013 |
 | F3 | δ̂ bias/SD up to 0.58; \|bias\| > 2 MC SE in 9 of 30 cells. Up to 47% of σ̂²_q are truncated at zero (ω 0.1, φ 0.1, M̄ 0.5). | 300 genes per cell |
 | F4 | δ̂ error up to 0.014 (MC SE 0.005) at an intrinsic variance ratio of 4 (ω 0.75). The other ratios are within 2 MC SE. | per row |
