@@ -4151,16 +4151,16 @@ null_contrasts_one <- function(g, expos, fits, mats, perms, share_obs, n_sim, se
   for (md in .OUT_MODES) {
     smd <- .DISP_SOURCE[[md]]; kmd <- .KBAL_SOURCE[[md]]
     G <- .MODES[[smd]]; lam <- .MODE.WEIGHTS[[smd]]; ph <- unlist(gvbf[G])
-    two <- length(G) == 2
-    if (ok_gate("disp", md)) add(paste0("disp.", md), "disp", md, smd, G, setNames(null_phi_log2(ph, lam), G))
+    two <- length(G) == 2; pos <- all(is.finite(ph) & ph > 0)          # the log2 and kinetic projections need phi > 0 in every group (class 1)
+    if (ok_gate("disp", md) && pos) add(paste0("disp.", md), "disp", md, smd, G, setNames(null_phi_log2(ph, lam), G))
     if (ok_gate("rdisp", md) && !two && all(is.finite(ph) & ph >= 0)) add(paste0("rdisp.", md), "rdisp", md, smd, G, setNames(null_phi_raw(ph, lam), G))
-    if (ok_gate("rdisp", md) && two && !ok_gate("disp", md) && all(is.finite(ph) & ph >= 0)) add(paste0("rdisp.", md), "rdisp", md, smd, G, setNames(null_phi_raw(ph, lam), G))
-    if (ok_gate("bsize", md) && is.finite(oc[md, "mean"]))
+    if (ok_gate("rdisp", md) && two && !(ok_gate("disp", md) && pos) && all(is.finite(ph) & ph >= 0)) add(paste0("rdisp.", md), "rdisp", md, smd, G, setNames(null_phi_raw(ph, lam), G))
+    if (ok_gate("bsize", md) && pos && is.finite(oc[md, "mean"]))
       add(paste0("bsize.", md), "bsize", md, smd, G, setNames(null_phi_kinetic(ph, lam, oc[md, "mean"], 1, 1), G), gm = if (smd == md) NULL else .MODES[[md]])
-    if (ok_gate("kbalsup", md) && is.finite(oc[md, "mean"]))
+    if (ok_gate("kbalsup", md) && pos && is.finite(oc[md, "mean"]))
       add(paste0("kbalsup.", md), "kbalsup", md, smd, G, setNames(null_phi_kinetic(ph, lam, oc[md, "mean"], -1, -2), G), gm = if (smd == md) NULL else .MODES[[md]])
     K <- .MODES[[kmd]]; phk <- unlist(gvbf[K])
-    if (ok_gate("kbal", md) && is.finite(oc[kmd, "mean"]))
+    if (ok_gate("kbal", md) && all(is.finite(phk) & phk > 0) && is.finite(oc[kmd, "mean"]))
       add(paste0("kbal.", md), "kbal", md, kmd, K, setNames(null_phi_kinetic(phk, .MODE.WEIGHTS[[kmd]], oc[kmd, "mean"], -1, -2), K))
   }
   mid_mean <- ok_gate("mean", "mid") && is.finite(oc["mid", "mean"])

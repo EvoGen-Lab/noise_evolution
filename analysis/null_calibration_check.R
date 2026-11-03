@@ -41,7 +41,7 @@ FITS <- lapply(names(M), function(k) { f <- fit_counts_offset(M[[k]], E[[k]], sh
 names(FITS) <- names(M)
 share_obs <- list(cbar = st$cbar, r = SR, sigma_d = setNames(pc$sigma_d, gn))
 perms <- with_local_seed(2, lapply(seq_len(N.PERM), perm_label_draw, hyc = ix$MEAN$c, hyt = ix$MEAN$t, nHYB = NH, nSC = NP, nSE = NP))
-PR.CAL <- do.call(rbind, mclapply(gn, null_contrasts_one, mc.cores = CORES, expos = E, fits = FITS, mats = M, perms = perms, share_obs = share_obs, n_sim = N.SIM, seed = 3))
+PR.CAL <- do.call(rbind, mclapply(gn, null_contrasts_one, mc.cores = CORES, mc.preschedule = FALSE, expos = E, fits = FITS, mats = M, perms = perms, share_obs = share_obs, n_sim = N.SIM, seed = 3))
 PR.CAL$set <- vapply(design, `[[`, "", "set")
 ## the tests whose null is true in each design
 TRUE.NULLS <- list(equal = grep("^(mean|disp|rdisp|bsize|kbal|kbalsup)_(total|cis|trans|mid|par_sc|par_se)_p$", names(PR.CAL), value = TRUE),
