@@ -167,17 +167,21 @@ if ("F1" %in% RUN.CHECKS) {
 
 ##############################################################################
 ## F2. Appendix B asymptotics with the current corrections (Appendix B: Variance estimates; summed counts)
-# 8e6 cells, Poisson counts, shifted exponential deviations, true eta and mean rates. Three settings; sigma2_c is inflated (0.005, 0.01) so the share terms
-# are large enough to test, and the observed value is the third.
+# Poisson counts, shifted exponential deviations, true eta and mean rates. Each setting runs F2.REPS independent replicates of 8e6 cells, so the error of
+# every limit is read against its Monte Carlo SE (SD over replicates / sqrt(R)) instead of a fixed tolerance. Two settings inflate sigma2_c (0.005, 0.01)
+# so the share terms are large enough to resolve; the third uses the observed sigma2_c, where the share terms are far below any resolvable error. The
+# sampling SD of each estimator at the observed number of hybrid cells (N_H) says how large an unresolved error could be relative to the data's own noise.
 if ("F2" %in% RUN.CHECKS) {
   SET <- data.frame(cbar = c(0.5024, 0.45, 0.5024), var_c = c(0.005, 0.01, POOLS$var_c), s2d = c(0.1, 0.05, 0.15), s2q = c(0.2, 0.3, 0.1), mu_c = c(5, 2, 1), mu_e = c(3, 4, 1))
-  S <- check_streams(nrow(SET), SEED.CHECKS + 8)
-  F2 <- do.call(rbind, mclapply(seq_len(nrow(SET)), f2_setting, settings = SET, n = 8e6, streams = S, mc.cores = min(CORES, 3)))
-  check_save("F2", F2, "run",
-             headline = c(sprintf("star limits: max |error| d* %.5f, q* %.5f (target 0.0005)", max(abs(F2$d_star_err)), max(abs(F2$q_star_err))),
-                          sprintf("corrected: max |sigma2_d error| %.5f, |sigma2_q error| %.5f (target 0.0005)", max(abs(F2$sigma2_d_err)), max(abs(F2$sigma2_q_err))),
-                          sprintf("summed factor variance vs formula: max |error| %.5f (target 0.0002)", max(abs(F2$var_astar_err)))),
-             mc_error = sprintf("Monte Carlo SE of the star estimators up to %.5f (d*) and %.5f (q*), 8e6 cells per setting", max(F2$d_star_mc_se), max(F2$q_star_mc_se)), script = CHECK.SCRIPT)
+  F2.REPS <- max(2, ceiling(20 * CHECK.SIZE)); F2.N <- 8e6; N.H <- length(POOLS$S)
+  TASKS <- expand.grid(rep = seq_len(F2.REPS), setting = seq_len(nrow(SET))); S <- check_streams(nrow(TASKS), SEED.CHECKS + 8)
+  F2.REP <- do.call(rbind, mclapply(seq_len(nrow(TASKS)), f2_rep, tasks = TASKS, settings = SET, n = F2.N, streams = S, mc.cores = CORES))
+  F2 <- do.call(rbind, lapply(seq_len(nrow(SET)), f2_summary, settings = SET, reps = F2.REP, n = F2.N, n_obs = N.H))
+  check_save("F2", list(summary = F2, replicates = F2.REP), "run",
+             headline = c(sprintf("setting %d (sigma2_c %.2g) %s: share term %.2g, error %.2g (MC SE %.1g, z %.1f), sampling SD at N_H = %d: %.2g",
+                                  F2$setting, F2$var_c, F2$quantity, F2$share_term, F2$error, F2$mc_se, F2$z, N.H, F2$sd_at_n_obs),
+                          sprintf("|z| > 2 in %d of %d", sum(abs(F2$z) > 2), nrow(F2))),
+             mc_error = sprintf("%d replicates of %.0e cells per setting; MC SE per row", F2.REPS, F2.N), script = CHECK.SCRIPT)
 }
 
 ##############################################################################

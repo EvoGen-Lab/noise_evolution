@@ -348,14 +348,15 @@ f1_row <- function(i, grid, nrep, streams) with_stream(streams[[i]], {
         data.frame(g, estimator = "weighted_code", t(mc_stats(res[, "weighted_code"], g$phi)), converged = NA, boundary = NA, row.names = NULL))
 })
 
-## f2_setting: F2, the large-N limits of Appendix B. n cells with depth S_H = 1, Poisson counts, additive expression factors a_r = 1 + d + q_r with shifted
-## exponential deviations (d = sd_d (E - 1), E ~ Exp(1), and likewise q, so each has mean 0 and the stated variance), true shares c ~ beta(c-bar, sigma2_c)
-## and the true mean rates and eta in every estimator. Compares the star estimators with their stated limits, the corrected estimators with sigma2_d and
-## sigma2_q, and the variance of the summed factor a*_H with the formula for phi*_Sigma; the Monte Carlo SE of each star estimator is the SD of its
-## per-cell term over sqrt(n). Cells are processed in chunks to bound memory.
-f2_setting <- function(i, settings, n, chunk = 1e6, streams) with_stream(streams[[i]], {
-  s <- settings[i, ]; cb <- s$cbar; v <- s$var_c
+## f2_rep: one replicate of F2, the large-N limits of Appendix B, for task i (a setting and a replicate number). n cells with depth S_H = 1, Poisson counts,
+## additive expression factors a_r = 1 + d + q_r with shifted exponential deviations (d = sd_d (E - 1), E ~ Exp(1), and likewise q, each with mean 0 and
+## the stated variance), true shares c ~ beta(c-bar, sigma2_c), and the true mean rates and eta in every estimator. Returns the star estimators, the
+## corrected estimators, the variance of the summed factor a*_H, and the SDs of the per-cell terms of the two star estimators, from which the sampling SD
+## of each estimator at any number of cells follows (SD / sqrt(N)). Cells are processed in chunks to bound memory.
+f2_rep <- function(i, tasks, settings, n, chunk = 1e6, streams) with_stream(streams[[i]], {
+  s <- settings[tasks$setting[i], ]; cb <- s$cbar; v <- s$var_c
   eta_c <- v / cb^2; eta_e <- v / (1 - cb)^2; eta_ce <- v / (cb * (1 - cb)); eta_bar <- (eta_c + eta_e) / 2
+  pi_ <- cb * s$mu_c / (cb * s$mu_c + (1 - cb) * s$mu_e)
   acc <- c(dd = 0, qq = 0, a1 = 0, a2 = 0, n = 0, dd2 = 0, qq2 = 0)
   for (k in seq_len(ceiling(n / chunk))) {
     m <- min(chunk, n - (k - 1) * chunk)
@@ -363,24 +364,36 @@ f2_setting <- function(i, settings, n, chunk = 1e6, streams) with_stream(streams
     ac <- 1 + d + sqrt(s$s2q) * (rexp(m) - 1); ae <- 1 + d + sqrt(s$s2q) * (rexp(m) - 1)
     yc <- rpois(m, c_i * s$mu_c * ac); ye <- rpois(m, (1 - c_i) * s$mu_e * ae)
     xc <- yc / (cb * s$mu_c); xe <- ye / ((1 - cb) * s$mu_e)                   # scaled counts with the true rates (O mu* = S c-bar mu)
-    pi_ <- cb * s$mu_c / (cb * s$mu_c + (1 - cb) * s$mu_e)
-    astar <- pi_ * (c_i / cb) * ac + (1 - pi_) * ((1 - c_i) / (1 - cb)) * ae
     td <- xc * xe; tq <- 0.5 * (xc - xe)^2 - 0.5 * (yc / (cb * s$mu_c)^2 + ye / ((1 - cb) * s$mu_e)^2)
+    astar <- pi_ * (c_i / cb) * ac + (1 - pi_) * ((1 - c_i) / (1 - cb)) * ae
     acc <- acc + c(sum(td), sum(tq), sum(astar), sum(astar^2), m, sum(td^2), sum(tq^2))
   }
-  d_star <- acc[["dd"]] / acc[["n"]] - 1; q_star <- acc[["qq"]] / acc[["n"]]; var_astar <- acc[["a2"]] / acc[["n"]] - (acc[["a1"]] / acc[["n"]])^2
-  phiH <- s$s2d + s$s2q
+  d_star <- acc[["dd"]] / acc[["n"]] - 1; q_star <- acc[["qq"]] / acc[["n"]]
+  sd2 <- (1 + d_star) / (1 - eta_ce) - 1; sq2 <- (q_star - (eta_bar + eta_ce) * (1 + sd2)) / (1 + eta_bar)
+  c(setting = tasks$setting[i], d_star = d_star, q_star = q_star, sigma2_d = sd2, sigma2_q = sq2,
+    var_astar = acc[["a2"]] / acc[["n"]] - (acc[["a1"]] / acc[["n"]])^2,
+    sd_term_d = sqrt(acc[["dd2"]] / acc[["n"]] - (acc[["dd"]] / acc[["n"]])^2), sd_term_q = sqrt(acc[["qq2"]] / acc[["n"]] - q_star^2))
+})
+
+## f2_summary: F2 for one setting from its replicates (rows of f2_rep() output). For each quantity: its target (the stated limit of a star estimator, the
+## true variance for a corrected one, the formula for Var[a*_H]), the share term the correction removes (target minus the share-free value), the mean
+## estimate over replicates, its error with the Monte Carlo SE (SD over replicates / sqrt(R)) and z, and the sampling SD of the estimator at n_obs cells.
+## The error is resolved only when it exceeds about two Monte Carlo SEs; an error below that is also below the sampling SD at n_obs by sqrt(R n / n_obs).
+f2_summary <- function(k, settings, reps, n, n_obs) {
+  s <- settings[k, ]; x <- reps[reps[, "setting"] == k, , drop = FALSE]; cb <- s$cbar; v <- s$var_c
+  eta_c <- v / cb^2; eta_e <- v / (1 - cb)^2; eta_ce <- v / (cb * (1 - cb))
+  pi_ <- cb * s$mu_c / (cb * s$mu_c + (1 - cb) * s$mu_e); phiH <- s$s2d + s$s2q
   lim_d <- s$s2d - eta_ce * (1 + s$s2d)
   lim_q <- s$s2q + 0.5 * (1 + phiH) * v * (1 / cb^2 + 1 / (1 - cb)^2) + eta_ce * (1 + s$s2d)
-  sd2 <- (1 + d_star) / (1 - eta_ce) - 1; sq2 <- (q_star - (eta_bar + eta_ce) * (1 + sd2)) / (1 + eta_bar)
-  pi_ <- cb * s$mu_c / (cb * s$mu_c + (1 - cb) * s$mu_e)
   phiSig <- s$s2d + (pi_^2 + (1 - pi_)^2) * s$s2q
   form <- phiSig + (1 + s$s2d) * (pi_^2 * eta_c + (1 - pi_)^2 * eta_e - 2 * pi_ * (1 - pi_) * eta_ce) + s$s2q * (pi_^2 * eta_c + (1 - pi_)^2 * eta_e)
-  se_d <- sqrt((acc[["dd2"]] / acc[["n"]] - (acc[["dd"]] / acc[["n"]])^2) / acc[["n"]]); se_q <- sqrt((acc[["qq2"]] / acc[["n"]] - q_star^2) / acc[["n"]])
-  data.frame(s, n = n, d_star = d_star, d_star_limit = lim_d, d_star_err = d_star - lim_d, d_star_mc_se = se_d, q_star_mc_se = se_q, q_star = q_star, q_star_limit = lim_q, q_star_err = q_star - lim_q,
-             sigma2_d_hat = sd2, sigma2_d_err = sd2 - s$s2d, sigma2_q_hat = sq2, sigma2_q_err = sq2 - s$s2q,
-             var_astar = var_astar, var_astar_formula = form, var_astar_err = var_astar - form, row.names = NULL)
-})
+  tg <- data.frame(quantity = c("d_star", "q_star", "sigma2_d", "sigma2_q", "var_astar"), target = c(lim_d, lim_q, s$s2d, s$s2q, form),
+                   share_term = c(lim_d - s$s2d, lim_q - s$s2q, 0, 0, form - phiSig),
+                   sd_term = c(median(x[, "sd_term_d"]), median(x[, "sd_term_q"]), median(x[, "sd_term_d"]), median(x[, "sd_term_q"]), NA))
+  R <- nrow(x); est <- colMeans(x[, tg$quantity, drop = FALSE]); se <- apply(x[, tg$quantity, drop = FALSE], 2, sd) / sqrt(R)
+  data.frame(setting = k, s[rep(1, nrow(tg)), ], tg, replicates = R, cells_per_replicate = n, estimate = est, error = est - tg$target, mc_se = se,
+             z = (est - tg$target) / se, sd_at_n_obs = tg$sd_term / sqrt(n_obs), n_obs = n_obs, row.names = NULL)
+}
 
 ## f34_row: grid row i of F3 and F4 (omega, phi, Mbar, intrinsic variance ratio q_ratio). NREP genes on one design with the observed N, fitted means and the
 ## pipeline's ploidy_components() (share terms from the simulated observed shares). The truth: sigma2_d = s2d (the allele covariance), the mean
@@ -712,6 +725,37 @@ split_mean_calls <- function(s, genes, yc, ye, expo, depth, f, mu_pc, mu_pe, cba
 
 ## col_quartiles: the 25%, 50% and 75% quantiles across genes (rows) of the selected columns of a statistics matrix, one row per column.
 col_quartiles <- function(M, cols) t(apply(M[, cols, drop = FALSE], 2, quantile, c(0.25, 0.5, 0.75), na.rm = TRUE))
+
+## factor_moment_table: A9, the second and third moments of each gene's expression factor in one group, from factorial moments. For Y_i ~ Poisson(M_i a_i)
+## with M_i = O_i mu-hat, E[Y(Y - 1)] = M^2 E[a^2] and E[Y(Y - 1)(Y - 2)] = M^3 E[a^3], so the ratios of sums m2 = sum y(y - 1) / sum M^2 and
+## m3 = sum y(y - 1)(y - 2) / sum M^3 estimate E[a^2] and E[a^3] without any Poisson noise. phi_fm = m2 - 1 is the factor variance, k3 = m3 - 3 m2 + 2 its
+## third central moment, and excess = k3 - 2 phi_fm^2 its departure from a gamma factor of the same variance, the quantity that sets the covariance of
+## the mean and dispersion errors on shared cells (mu (E[(a - 1)^3] - 2 phi^2) / N). cols resamples cells (a bootstrap draw); genes are processed in blocks.
+factor_moment_table <- function(mat, expo, genes = rownames(mat), cols = seq_along(expo), block = 500) {
+  e <- expo[cols]; out <- vector("list", 0)
+  for (rows in split(genes, ceiling(seq_along(genes) / block))) {
+    y <- as.matrix(mat[rows, cols, drop = FALSE]); mu <- rowSums(y) / sum(e)
+    m2 <- rowSums(y * (y - 1)) / (mu^2 * sum(e^2)); m3 <- rowSums(y * (y - 1) * (y - 2)) / (mu^3 * sum(e^3))
+    phi <- m2 - 1; k3 <- m3 - 3 * m2 + 2
+    out[[length(out) + 1]] <- data.frame(gene = rows, mbar = mu * mean(e), phi_fm = phi, k3 = k3, k3_gamma = 2 * phi^2, excess = k3 - 2 * phi^2, row.names = NULL)
+  }
+  do.call(rbind, out)
+}
+
+## factor_excess_test: A9 test of one gene in one group against a gamma factor. The gene's counts are simulated B times as NB on the same offsets with its
+## fitted mean and factorial-moment dispersion (a gamma factor of the same variance), and the excess E[(a - 1)^3] - 2 phi^2 is re-estimated in each draw
+## (factor_moment_table()), so the null carries the estimator's own finite-sample bias and skew. Returns the observed excess, the mean of the null excess,
+## the observed and null ratios k3 / (2 phi^2), the standardized deviation z = (excess - null mean) / null SD, and the two-sided add-one p-value.
+factor_excess_test <- function(g, mat, expo, B) {
+  obs <- factor_moment_table(mat, expo, genes = g)
+  if (!is.finite(obs$excess) || obs$phi_fm <= 0) return(c(excess = NA, null_excess = NA, ratio = NA, null_ratio = NA, z = NA, p = NA))
+  M <- obs$mbar / mean(expo) * expo
+  sim <- matrix(rnbinom(B * length(expo), mu = rep(M, each = B), size = 1 / obs$phi_fm), B); rownames(sim) <- paste0("s", seq_len(B))
+  nul <- factor_moment_table(sim, expo)
+  c(excess = obs$excess, null_excess = mean(nul$excess, na.rm = TRUE), ratio = obs$k3 / obs$k3_gamma, null_ratio = mean(nul$k3 / nul$k3_gamma, na.rm = TRUE),
+    z = (obs$excess - mean(nul$excess, na.rm = TRUE)) / sd(nul$excess, na.rm = TRUE),
+    p = perm_pval(obs$excess - mean(nul$excess, na.rm = TRUE), nul$excess - mean(nul$excess, na.rm = TRUE)))
+}
 
 ## var_ratio_gene: A5 for one gene in one group, the variance ratio of the ratio mean mu-hat to the NB maximum likelihood mean mu-tilde at the fitted
 ## M_i and phi, sum M (1 + phi M) sum M / (1 + phi M) / (sum M)^2, and the document's cap 1 + CV^2(O) (population CV of the offsets).

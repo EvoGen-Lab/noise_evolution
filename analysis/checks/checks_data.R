@@ -104,6 +104,40 @@ if (have1) {
 } else check_save("A8", NULL, "not run", headline = "the Section 1 checkpoint (parental counts) is missing", script = CHECK.SCRIPT)
 
 ##############################################################################
+## A9. Third moment of the expression factor against the gamma (Methods: Separate partitions; Notes for revision: non-gamma expression factors)
+# The mean and dispersion errors of one group are uncorrelated on shared cells only when the factor's third central moment equals the gamma's 2 phi^2;
+# the excess E[(a - 1)^3] - 2 phi^2 sets their covariance and the bias of the NB fit under a non-gamma factor (B4). Factorial moments estimate it for
+# every class-1 gene (factor_moment_table()). Per-gene third moments are noisy and skewed at these cell numbers, so the subsample genes are tested
+# against NB data simulated at their own fitted mean and variance on the same offsets (factor_excess_test(), A9.SIM draws), which carries the
+# estimator's finite-sample bias into the null; the share of genes with p < 0.05 is read against 0.05, and the observed k3 / (2 phi^2) against its
+# null mean. One gene's test has little power (simulated lognormal factors with phi 0.5 and 2000 cells: p < 0.05 in about 13% of genes), so the group
+# statistic is the mean over the tested genes of z = (excess - null mean) / null SD, with SE 1 / sqrt(genes), which is near 0 for gamma factors and
+# positive (more skewed than gamma) or negative (less skewed) otherwise. The hybrid alleles' factor includes the transcriptome share multiplier.
+A9.GROUPS <- c("MIX.SC", "MIX.SE", "HYB.SC", "HYB.SE"); A9.SIM <- 200
+A9 <- list(table = list(), tests = list(), summary = list())
+for (k in A9.GROUPS) {
+  m <- if (k == "HYB.SC") HYB.SC else if (k == "HYB.SE") HYB.SE else if (have1) get(k, E1.ENV) else NULL
+  if (is.null(m)) next
+  e <- CONTRAST.EXPOS[[k]]; cls1 <- rownames(SPLIT.FITS[[k]])[SPLIT.FITS[[k]]$CLASS %in% 1]
+  tab <- factor_moment_table(m, e, genes = cls1)
+  tg <- intersect(SUB.GENES, cls1)
+  tst <- with_local_seed(SEED.CHECKS + 9, t(vapply(tg, factor_excess_test, numeric(6), mat = m, expo = e, B = A9.SIM)))
+  A9$table[[k]] <- data.frame(dataset = k, tab, row.names = NULL); A9$tests[[k]] <- data.frame(dataset = k, gene = tg, tst, row.names = NULL)
+  ok <- is.finite(tst[, "p"])
+  A9$summary[[k]] <- data.frame(dataset = k, genes = nrow(tab), pooled_k3_over_gamma = sum(tab$k3, na.rm = TRUE) / sum(tab$k3_gamma[is.finite(tab$k3)], na.rm = TRUE),
+                                tested = sum(ok), median_ratio = median(tst[ok, "ratio"]), median_null_ratio = median(tst[ok, "null_ratio"]),
+                                mean_z = mean(tst[ok, "z"]), mean_z_se = 1 / sqrt(sum(ok)), share_p05 = mean(tst[ok, "p"] < 0.05), share_p05_se = binom_se(0.05, sum(ok)),
+                                share_above = mean(tst[ok, "p"] < 0.05 & tst[ok, "excess"] > tst[ok, "null_excess"]),
+                                share_below = mean(tst[ok, "p"] < 0.05 & tst[ok, "excess"] < tst[ok, "null_excess"]), row.names = NULL)
+}
+A9 <- lapply(A9, function(x) do.call(rbind, x))
+if (is.null(A9$summary)) check_save("A9", NULL, "not run", headline = "count matrices missing", script = CHECK.SCRIPT) else
+  check_save("A9", A9, "run", headline = sprintf("%s: k3 / (2 phi^2) pooled over %d class-1 genes %.2f; tested %d genes: mean z %.2f (SE %.2f), median ratio %.2f against %.2f under a gamma factor, p < 0.05 in %.3f (above %.3f, below %.3f)",
+                                                 A9$summary$dataset, A9$summary$genes, A9$summary$pooled_k3_over_gamma, A9$summary$tested, A9$summary$mean_z, A9$summary$mean_z_se, A9$summary$median_ratio,
+                                                 A9$summary$median_null_ratio, A9$summary$share_p05, A9$summary$share_above, A9$summary$share_below),
+             mc_error = sprintf("%d null draws per gene; binomial SE of a 5%% share %.3f", A9.SIM, A9$summary$share_p05_se[1]), script = CHECK.SCRIPT)
+
+##############################################################################
 ## B1. Binomial sampling and independence of the observed share (Methods: Transcriptome share estimate)
 # Within a library bin Var(c-hat) = sigma2_c + E[c (1 - c) / L], so regressing the bin variance on 1 / L-bar gives slope c-bar (1 - c-bar) and intercept sigma2_c.
 B1 <- local({
