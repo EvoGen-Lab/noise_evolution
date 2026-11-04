@@ -728,9 +728,10 @@ leak_contrasts <- function(fits, arm, cbar, scale = c("log2", "raw")) {
 ## with M_i = O_i mu and mu fitted as sum(y) / sum(O), E[(y_i - M_i)^2] = (1 + a) A_i + phi B_i with A_i = M_i (1 - p_i), B_i = M_i^2 (1 - 2 p_i) + p_i^2 sum M^2
 ## and p_i = O_i / sum O (Appendix A). So z_i = (y_i - M_i)^2 - A_i has expectation a A_i + phi B_i, and a and phi follow from a regression of z on A and B
 ## without intercept, identified by the spread of the offsets. Weights 1 / [M_i (1 + phi0 M_i)]^2 with phi0 the Cox-Reid fit; SEs by the sandwich (HC0).
-## An NB gene has a = 0; a > 0 gives the NB fit phi-hat of about phi + a / M, a dispersion that falls with the mean. Returns a, its SE, phi_lin, mbar.
-linear_excess_gene <- function(g, mat, expo) {
-  y <- as.numeric(mat[g, ]); mu <- sum(y) / sum(expo)
+## An NB gene has a = 0; a > 0 gives the NB fit phi-hat of about phi + a / M, a dispersion that falls with the mean. beta (named by gene) replaces the
+## offsets by O^beta, the gene's own depth scaling (depth_slope_gene()). Returns a, its SE, phi_lin, mbar.
+linear_excess_gene <- function(g, mat, expo, beta = NULL) {
+  y <- as.numeric(mat[g, ]); if (!is.null(beta)) expo <- expo^beta[[g]]; mu <- sum(y) / sum(expo)
   if (!(mu > 0)) return(c(a = NA, a_se = NA, phi_lin = NA, mbar = NA))
   M <- mu * expo; p <- expo / sum(expo); A <- M * (1 - p); B <- M^2 * (1 - 2 * p) + p^2 * sum(M^2)
   phi0 <- max(fit_dispersion(y, expo)[["disp"]], 0); w <- 1 / (M * (1 + phi0 * M))^2; z <- (y - M)^2 - A
@@ -876,6 +877,35 @@ factor_excess_test <- function(g, mat, expo, B) {
   c(excess = obs$excess, null_excess = mean(nul$excess, na.rm = TRUE), ratio = obs$k3 / obs$k3_gamma, null_ratio = mean(nul$k3 / nul$k3_gamma, na.rm = TRUE),
     z = (obs$excess - mean(nul$excess, na.rm = TRUE)) / sd(nul$excess, na.rm = TRUE),
     p = perm_pval(obs$excess - mean(nul$excess, na.rm = TRUE), nul$excess - mean(nul$excess, na.rm = TRUE)))
+}
+
+## top_cell_tally: L7, for every cell of one group the number of genes for which it is among the top frac of cells, ranked by the upper-tail probability
+## P(Y >= y) of its count under the gene's fitted NB (mean mu O_i, dispersion phi; Poisson when phi = 0). The tail probability puts cells of every depth on
+## one scale, so under the model each cell is top for about frac x genes whatever its library; a cell top for many more genes carries counts that are
+## extreme across the transcriptome. mu and phi are named by gene. Genes are processed in blocks.
+top_cell_tally <- function(mat, expo, genes, frac, mu, phi, block = 200) {
+  k <- max(1, ceiling(frac * length(expo))); tally <- integer(length(expo))
+  for (rows in split(genes, ceiling(seq_along(genes) / block))) {
+    y <- as.matrix(mat[rows, , drop = FALSE]); M <- outer(mu[rows], expo); ph <- phi[rows]
+    lp <- matrix(NA_real_, nrow(y), ncol(y))
+    for (j in seq_along(rows)) lp[j, ] <- if (is.finite(ph[j]) && ph[j] > 0) pnbinom(y[j, ] - 1, size = 1 / ph[j], mu = M[j, ], lower.tail = FALSE, log.p = TRUE) else ppois(y[j, ] - 1, M[j, ], lower.tail = FALSE, log.p = TRUE)
+    top <- apply(lp, 1, function(v) order(v)[seq_len(k)])
+    tally <- tally + tabulate(as.vector(top), nbins = length(expo))
+  }
+  tally
+}
+
+## depth_slope_gene: L8, how one gene's counts scale with cell depth in one group: the slope beta of log E[y] = alpha + beta log O (quasi-Poisson fit). The
+## library-size offset assumes beta = 1, every gene a fixed share of the library; beta < 1 or > 1 means the gene's share falls or rises with depth, so the
+## offset leaves a depth-dependent misfit in the counts that the NB reads as extra variance. Returns beta, its SE and the mean count per cell.
+depth_slope_gene <- function(g, mat, expo) {
+  y <- as.numeric(mat[g, ]); lo <- log(expo)
+  if (sum(y) == 0) return(c(beta = NA, beta_se = NA, mbar = 0))
+  f <- tryCatch(suppressWarnings(glm.fit(cbind(1, lo), y, family = quasipoisson())), error = function(e) NULL)
+  if (is.null(f) || !f$converged) return(c(beta = NA, beta_se = NA, mbar = mean(y)))
+  disp <- sum(f$weights * f$residuals^2) / f$df.residual
+  V <- tryCatch(solve(crossprod(cbind(1, lo) * sqrt(f$weights))) * disp, error = function(e) NULL)
+  c(beta = unname(f$coefficients[2]), beta_se = if (is.null(V)) NA else sqrt(V[2, 2]), mbar = mean(y))
 }
 
 ## var_ratio_gene: A5 for one gene in one group, the variance ratio of the ratio mean mu-hat to the NB maximum likelihood mean mu-tilde at the fitted

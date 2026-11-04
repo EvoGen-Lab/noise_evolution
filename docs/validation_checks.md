@@ -117,6 +117,15 @@ Each estimator's own slope is not zero even for gamma factors (cis −0.03 to �
 - **Coupling:** the own trans slopes of Δlog₂φ̂ on Δlog₂μ̂ became −0.46 (Cox–Reid) and −0.39 (moment), with no change in any expression factor. The baseline gave about −0.01.
 - **Estimator gap:** duplication made Cox–Reid larger than the moment estimate in the parents (L1 +0.04 to +0.34) and gave a negative trans leak slope (−0.064). The data have the opposite sign on both.
 
+**Diagnostics L7 and L8** (added Nov 4). They were tested on synthetic data in two settings, the NB baseline and a set with both artefacts planted:
+- **L7, the cells that carry the extreme counts.** For each cell, it counts the genes for which the cell is among the top 0.5%, ranked by the upper-tail probability of its count under the gene's NB fit. The tally is read against the same tally on NB data simulated from the fits. Flagged cells are described, removed, and L1, L2 and L6 are refitted.
+  - On baseline NB data it flags 0 cells in every group.
+  - With 0.5% of cells per group carrying four-fold expression on half the genes, it flags 5 (Pc), 11 (Pe) and 10 (hybrid) against 5, 5 and 10 planted.
+  - Ranking by scaled count y/O instead missed the planted cells, because low-depth cells dominate that ranking under the NB itself (Spearman with library −0.8). L3 still trims by y/O, so read L3 against its NB baseline.
+- **L8, depth scaling.** It fits the slope β of log E[y] on log O per gene; the library-size offset assumes β = 1. L6 and the own Δφ/Δμ slopes are then refitted with O^β.
+  - **Detection:** with planted β ~ N(1, 0.15), 43 to 51% of genes are off 1 by 2 SE, against 6 to 14% on baseline data. Fitting with O^β removes the linear term (a > 2 SE in 0.1 to 0.2% of genes).
+  - **Signature:** depth mis-scaling gives L6 a two-sided linear term (12% of genes above +2 SE, 15 to 20% below −2 SE). That separates it from a one-sided positive a.
+
 ## Rerun note
 
 Commit 1ffbccb changes `fit_dispersion(method = "weighted")` (Appendix A). It needs a rerun of Section 2.3 (`SPLIT.FITS.W` and the weighted columns of `GENE.TABLE`) and of the weighted columns of `BOOT.CONTRASTS` and `PR` with every table read from them, and resubmission of `gene_boot` and `gene_perm`. `SPLIT.FITS.W` can be refitted locally; the bootstrap and null columns need the cluster. The NB results are unchanged. The other check commits change no code in `R/functions.R`, `analysis/analysis.R` or the pipeline's cluster scripts, so no section or pipeline cluster job needs a rerun. The checks run as follows:

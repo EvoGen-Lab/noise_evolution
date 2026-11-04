@@ -16,8 +16,12 @@
 ###   L3  the L1 gap and the L2 slopes with the top 0.5% of cells by scaled count left out of every fit (influence of a few cells);
 ###   L4  each group's expression-factor third moment against the gamma (check A11 on the Section 1 data);
 ###   L5  the leak test on raw dispersion contrasts (Delta phi);
-###   L6  a variance term linear in the mean that the NB lacks, Var(Y) = (1 + a) M + phi M^2, per gene and group, which makes the NB phi fall with the mean.
-### Results go to results/checks/L1.rds to L6.rds with rows in summary.csv; the figure goes to figures/extra/check_L2_leak.pdf.
+###   L6  a variance term linear in the mean that the NB lacks, Var(Y) = (1 + a) M + phi M^2, per gene and group, which makes the NB phi fall with the mean;
+###   L7  the cells that carry the extreme counts: per cell the number of genes for which it is among the top 0.5% (against the same tally on NB data
+###       simulated from the fits), a description of the cells far above that null, and L1, L2 and L6 refitted without them;
+###   L8  how each gene's counts scale with cell depth (slope beta of log E[y] on log O; the library-size offset assumes beta = 1), and L6 and the
+###       Delta phi / Delta mu slopes refitted with each gene's own scaling O^beta.
+### Results go to results/checks/L1.rds to L8.rds with rows in summary.csv; the figure goes to figures/extra/check_L2_leak.pdf.
 ###############################################################
 library(here); source(here("R", "setup.R")); source(here("R", "functions_checks.R"))
 library(parallel)
@@ -220,3 +224,109 @@ check_save("L6", list(summary = L6, genes = L6.GENE), "run",
            headline = c(sprintf("%s: a median %.3f, mean %.3f (SE %.3f); a > 2 SE in %.3f and < -2 SE in %.3f of %d genes; trend of log2 phi on log2 mu across genes: Cox-Reid %.3f, with the linear term removed %.3f",
                                 x$group, x$median_a, x$mean_a, x$mean_a_se, x$share_above, x$share_below, x$genes, x$trend_log2phi_cr_on_log2mu, x$trend_log2phi_lin_on_log2mu)),
            mc_error = "sandwich SE per gene; SE of the mean a over genes", script = CHECK.SCRIPT)
+
+##############################################################################
+## L7. Cells that carry the extreme counts, and the fits without them
+# For every cell, the number of genes for which it is among the top LEAK.TRIM fraction of cells, ranked by the upper-tail probability of its count under the
+# gene's NB fit (top_cell_tally()), which puts cells of every depth on one scale. The tally is read against the same tally on counts simulated from each
+# gene's NB fit (mean and Cox-Reid phi) on the same cells. Cells above the largest simulated tally of their group (one simulation) are described by library size, detected genes, allele share (hybrid)
+# and the share of their library in the group's 50 most expressed genes, and removed; the fits of L1, L2 and L6 are then repeated on the remaining cells.
+L7.TALLY <- list(); L7.SUMMARY <- list(); L7.OUT <- list()
+TOP50 <- lapply(LEAK.MATS, function(m) order(rowSums(m), decreasing = TRUE)[1:50])
+for (k in names(LEAK.MATS)) {
+  m <- LEAK.MATS[[k]]; e <- LEAK.EXPOS[[k]]; mu <- LEAK.FITS[, paste0("same.", k, ".mu")]; ph <- LEAK.FITS[, paste0("same.", k, ".phi_cr")]
+  sim <- with_local_seed(SEED.LEAK + 8, t(vapply(seq_along(LEAK.GENES), function(j) rnbinom(length(e), mu = mu[j] * e, size = if (ph[j] > 0) 1 / ph[j] else 1e8), numeric(length(e)))))
+  rownames(sim) <- LEAK.GENES
+  names(mu) <- names(ph) <- LEAK.GENES
+  obs <- top_cell_tally(m, e, LEAK.GENES, LEAK.TRIM, mu, ph); nul <- top_cell_tally(sim, e, LEAK.GENES, LEAK.TRIM, mu, ph)
+  lib <- colSums(m); det <- colSums(m > 0); top50 <- colSums(m[TOP50[[k]], , drop = FALSE]) / lib
+  out <- obs > max(nul); L7.OUT[[k]] <- which(out)
+  L7.TALLY[[k]] <- data.frame(group = k, cell = if (is.null(colnames(m))) seq_len(ncol(m)) else colnames(m), tally = obs, tally_null_sorted = sort(nul), library = lib, detected = det, top50_share = top50, outlier = out, row.names = NULL)
+  k1 <- max(1, ceiling(0.01 * length(e)))
+  L7.SUMMARY[[k]] <- data.frame(group = k, cells = length(e), genes = length(LEAK.GENES), expected_tally = length(LEAK.GENES) * max(1, ceiling(LEAK.TRIM * length(e))) / length(e),
+                                max_null = max(nul), outlier_cells = sum(out), share_trims_top1pct_cells = sum(sort(obs, TRUE)[1:k1]) / sum(obs),
+                                share_trims_top1pct_cells_null = sum(sort(nul, TRUE)[1:k1]) / sum(nul),
+                                spearman_tally_library = cor(obs, lib, method = "spearman"), spearman_tally_library_null = cor(nul, lib, method = "spearman"),
+                                outlier_library_quantile = if (any(out)) median(rank(lib)[out] / length(lib)) else NA_real_,
+                                outlier_detected_quantile = if (any(out)) median(rank(det)[out] / length(det)) else NA_real_,
+                                outlier_top50_share = if (any(out)) median(top50[out]) else NA_real_, other_top50_share = median(top50[!out]), outlier_chat_z = NA_real_, row.names = NULL)
+}
+## The hybrid alleles share their cells, so a cell flagged in either allele leaves both.
+L7.OUT$Hc <- L7.OUT$He <- sort(union(L7.OUT$Hc, L7.OUT$He))
+## The allele share of the flagged hybrid cells, as a z-score against all hybrid cells (C.HAT is in the cell order of the Section 1 matrices).
+if (length(C.HAT) == ncol(HYB.SC) && length(L7.OUT$Hc)) L7.SUMMARY$Hc$outlier_chat_z <- L7.SUMMARY$He$outlier_chat_z <- median((C.HAT[L7.OUT$Hc] - mean(C.HAT)) / sd(C.HAT))
+L7.SUMMARY <- do.call(rbind, L7.SUMMARY)
+print(L7.SUMMARY, digits = 3, row.names = FALSE)
+## Refit without the outlier cells
+L7.MATS <- lapply(setNames(names(LEAK.MATS), names(LEAK.MATS)), function(k) if (length(L7.OUT[[k]])) LEAK.MATS[[k]][, -L7.OUT[[k]], drop = FALSE] else LEAK.MATS[[k]])
+L7.EXPOS <- lapply(setNames(names(LEAK.EXPOS), names(LEAK.EXPOS)), function(k) if (length(L7.OUT[[k]])) LEAK.EXPOS[[k]][-L7.OUT[[k]]] else LEAK.EXPOS[[k]])
+L7.HALVES <- with_local_seed(SEED.LEAK + 9, local({
+  h <- sample.int(ncol(L7.MATS$Hc), floor(ncol(L7.MATS$Hc) / 2))
+  list(Pc = sample.int(ncol(L7.MATS$Pc), floor(ncol(L7.MATS$Pc) / 2)), Pe = sample.int(ncol(L7.MATS$Pe), floor(ncol(L7.MATS$Pe) / 2)), Hc = h, He = h)
+}))
+L7.FITS <- do.call(rbind, mclapply(LEAK.GENES, estimator_pair_gene, mats = L7.MATS, expos = L7.EXPOS, eta = LEAK.ETA, halves = L7.HALVES, mc.cores = CORES))
+rownames(L7.FITS) <- LEAK.GENES
+L7.GAP <- list(); L7.SLOPES <- list(); L7.A <- list()
+for (k in names(LEAK.MATS)) {
+  bp <- cut(LEAK.FITS[, paste0("same.", k, ".phi_cr")], PHI.BREAKS, right = FALSE)
+  for (fits in c("all cells", "outlier cells removed")) {
+    F <- if (fits == "all cells") LEAK.FITS else L7.FITS
+    cr <- F[, paste0("same.", k, ".phi_cr")]; mo <- F[, paste0("same.", k, ".phi_mom")]; ok <- cr > 0 & mo > 0
+    L7.GAP[[paste(k, fits)]] <- data.frame(group = k, fits = fits, phi_cr_bin = levels(bp), genes = as.vector(table(bp[ok])),
+                                           median_log2_ratio = vapply(levels(bp), function(l) median(log2(cr / mo)[ok & bp == l]), numeric(1)),
+                                           median_log2_phi_cr_change = vapply(levels(bp), function(l) median(log2(L7.FITS[, paste0("same.", k, ".phi_cr")] / LEAK.FITS[, paste0("same.", k, ".phi_cr")])[ok & bp == l]), numeric(1)),
+                                           row.names = NULL)
+  }
+  r <- t(vapply(LEAK.GENES, linear_excess_gene, numeric(4), mat = L7.MATS[[k]], expo = L7.EXPOS[[k]])); z <- r[, "a"] / r[, "a_se"]
+  L7.A[[k]] <- data.frame(group = k, removed_cells = length(L7.OUT[[k]]), median_a = median(r[, "a"], na.rm = TRUE), share_above = mean(z > 2, na.rm = TRUE), share_below = mean(z < -2, na.rm = TRUE), row.names = NULL)
+}
+L7.DATA <- leak_contrasts(L7.FITS, "disjoint", C.BAR)
+for (md in c("cis", "trans")) { d <- L7.DATA[L7.DATA$contrast == md, ]
+  L7.SLOPES[[md]] <- data.frame(arm = "disjoint, outlier cells removed", contrast = md, leak_regression(d$dlog2mu, d$diff, d$dphi_cr, d$dphi_mom, LEAK.BOOT, SEED.LEAK + 10)) }
+L7.GAP <- do.call(rbind, L7.GAP); L7.SLOPES <- do.call(rbind, L7.SLOPES); L7.A <- do.call(rbind, L7.A); rownames(L7.SLOPES) <- NULL
+print(L7.GAP[L7.GAP$genes >= 20, ], digits = 3, row.names = FALSE); print(L7.SLOPES, digits = 3, row.names = FALSE); print(L7.A, digits = 3, row.names = FALSE)
+check_save("L7", list(summary = L7.SUMMARY, cells = do.call(rbind, L7.TALLY), removed = L7.OUT, gap = L7.GAP, slopes = L7.SLOPES, linear_excess = L7.A, fits = L7.FITS), "run",
+           headline = c(sprintf("%s: %d cells above the largest simulated tally (%d; expected tally %.1f); top 1%% of cells hold %.3f of the trims (NB %.3f); Spearman(tally, library) %.2f (NB %.2f)",
+                                L7.SUMMARY$group, L7.SUMMARY$outlier_cells, L7.SUMMARY$max_null, L7.SUMMARY$expected_tally, L7.SUMMARY$share_trims_top1pct_cells,
+                                L7.SUMMARY$share_trims_top1pct_cells_null, L7.SUMMARY$spearman_tally_library, L7.SUMMARY$spearman_tally_library_null),
+                        sprintf("without them, %s: leak slope %.4f (95%% %.4f to %.4f); own slopes Cox-Reid %.3f, moment %.3f", L7.SLOPES$contrast, L7.SLOPES$slope, L7.SLOPES$boot_lo,
+                                L7.SLOPES$boot_hi, L7.SLOPES$slope_cr, L7.SLOPES$slope_mom),
+                        sprintf("without them, %s: a median %.3f, a > 2 SE in %.3f of genes", L7.A$group, L7.A$median_a, L7.A$share_above)),
+           mc_error = "one NB simulation per group for the tally null; gene bootstrap for the slopes", script = CHECK.SCRIPT)
+
+##############################################################################
+## L8. Depth scaling of each gene, and L6 and the Delta phi / Delta mu slopes with each gene's own scaling
+# The offset assumes every gene keeps a fixed share of the library (beta = 1). A gene whose share changes with depth (beta != 1) leaves a misfit that grows
+# with its mean, which L6 would read as a linear term rising with the mean. beta is reported by group and mean-count bin; L6 is then repeated with offsets
+# O^beta, and the own slopes of Delta log2 phi (Cox-Reid) on Delta log2 mu are refitted with those offsets (all cells).
+L8 <- list(); L8.BETA <- list(); L8.A <- list(); L8.FIT <- list()
+for (k in names(LEAK.MATS)) {
+  b <- t(vapply(LEAK.GENES, depth_slope_gene, numeric(3), mat = LEAK.MATS[[k]], expo = LEAK.EXPOS[[k]])); L8.BETA[[k]] <- b
+  zb <- (b[, "beta"] - 1) / b[, "beta_se"]; mb <- cut(LEAK.FITS[, paste0("same.", k, ".mbar")], MBAR.BREAKS, right = FALSE)
+  for (l in c("all", levels(mb))) { i <- is.finite(zb) & (l == "all" | mb == l)
+    if (sum(i) < 10) next
+    L8[[paste(k, l)]] <- data.frame(group = k, mean_count = l, genes = sum(i), median_beta = median(b[i, "beta"]), q25 = unname(quantile(b[i, "beta"], 0.25)), q75 = unname(quantile(b[i, "beta"], 0.75)),
+                                    share_below_1 = mean(zb[i] < -2), share_above_1 = mean(zb[i] > 2), row.names = NULL) }
+  beta <- setNames(ifelse(is.finite(b[, "beta"]), b[, "beta"], 1), LEAK.GENES)
+  r <- t(vapply(LEAK.GENES, linear_excess_gene, numeric(4), mat = LEAK.MATS[[k]], expo = LEAK.EXPOS[[k]], beta = beta)); z <- r[, "a"] / r[, "a_se"]
+  L8.FIT[[k]] <- t(vapply(LEAK.GENES, function(g) fit_dispersion(as.numeric(LEAK.MATS[[k]][g, ]), LEAK.EXPOS[[k]]^beta[[g]], LEAK.ETA[[k]])[c("mu", "disp")], numeric(2)))
+  ok <- L8.FIT[[k]][, "disp"] > 0
+  L8.A[[k]] <- data.frame(group = k, median_a = median(r[, "a"], na.rm = TRUE), share_above = mean(z > 2, na.rm = TRUE), share_below = mean(z < -2, na.rm = TRUE),
+                          trend_log2phi_on_log2mu = unname(coef(lm(log2(L8.FIT[[k]][ok, "disp"]) ~ log2(L8.FIT[[k]][ok, "mu"])))[2]), row.names = NULL)
+}
+L8 <- do.call(rbind, L8); L8.A <- do.call(rbind, L8.A)
+L8.OWN <- local({
+  lmu <- list(Pc = log2(L8.FIT$Pc[, "mu"]), Pe = log2(L8.FIT$Pe[, "mu"]), Hc = log2(L8.FIT$Hc[, "mu"] / (2 * C.BAR)), He = log2(L8.FIT$He[, "mu"] / (2 * (1 - C.BAR))))
+  lph <- lapply(L8.FIT, function(f) ifelse(f[, "disp"] > 0, log2(f[, "disp"]), NA_real_))
+  dx_cis <- lmu$Hc - lmu$He; dy_cis <- lph$Hc - lph$He; dx_tr <- (lmu$Pc - lmu$Pe) - dx_cis; dy_tr <- (lph$Pc - lph$Pe) - dy_cis     # lm() drops genes with an NA (phi = 0)
+  data.frame(contrast = c("cis", "trans"), own_slope_cox_reid_scaled = c(unname(coef(lm(dy_cis ~ dx_cis))[2]), unname(coef(lm(dy_tr ~ dx_tr))[2])),
+             own_slope_cox_reid_library_offset = L2$slope_cr[L2$arm == "same" & L2$genes_in == "all"])
+})
+print(L8, digits = 3, row.names = FALSE); print(L8.A, digits = 3, row.names = FALSE); print(L8.OWN, digits = 3, row.names = FALSE)
+x <- L8[L8$mean_count == "all", ]
+check_save("L8", list(beta = L8, beta_genes = L8.BETA, linear_excess_scaled = L8.A, own_slopes = L8.OWN, fits_scaled = L8.FIT), "run",
+           headline = c(sprintf("%s: beta median %.3f (IQR %.3f to %.3f); beta < 1 by 2 SE in %.3f, > 1 in %.3f of %d genes", x$group, x$median_beta, x$q25, x$q75, x$share_below_1, x$share_above_1, x$genes),
+                        sprintf("with O^beta, %s: a median %.3f, a > 2 SE in %.3f; trend of log2 phi on log2 mu %.3f", L8.A$group, L8.A$median_a, L8.A$share_above, L8.A$trend_log2phi_on_log2mu),
+                        sprintf("%s own slope of Delta log2 phi (Cox-Reid) on Delta log2 mu: %.3f with O^beta, %.3f with the library offset", L8.OWN$contrast, L8.OWN$own_slope_cox_reid_scaled,
+                                L8.OWN$own_slope_cox_reid_library_offset)),
+           mc_error = "quasi-Poisson SE of beta per gene", script = CHECK.SCRIPT)
