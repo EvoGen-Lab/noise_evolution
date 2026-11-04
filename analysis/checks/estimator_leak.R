@@ -13,7 +13,11 @@
 ### and the two estimators carry that covariance to different degrees, which alone can give the leak regression a slope. The test is therefore
 ### run in two arms: "same" (all cells for both) and "disjoint" (each group's cells split at random into halves, the mean from one half and both
 ### dispersions from the other). Only a slope in the disjoint arm reads as leakage of the mean into the dispersion.
-### Results go to results/checks/L1.rds and L2.rds with rows in summary.csv; the figure goes to figures/extra/check_L2_leak.pdf.
+###   L3  the L1 gap and the L2 slopes with the top 0.5% of cells by scaled count left out of every fit (influence of a few cells);
+###   L4  each group's expression-factor third moment against the gamma (check A11 on the Section 1 data);
+###   L5  the leak test on raw dispersion contrasts (Delta phi);
+###   L6  a variance term linear in the mean that the NB lacks, Var(Y) = (1 + a) M + phi M^2, per gene and group, which makes the NB phi fall with the mean.
+### Results go to results/checks/L1.rds to L6.rds with rows in summary.csv; the figure goes to figures/extra/check_L2_leak.pdf.
 ###############################################################
 library(here); source(here("R", "setup.R")); source(here("R", "functions_checks.R"))
 library(parallel)
@@ -87,25 +91,15 @@ check_save("L1", list(bins = L1, zero_shares = L1.PHI0, fits = LEAK.FITS), "run"
 ## L2. Leak test: [Delta log2 phi (Cox-Reid) - Delta log2 phi (moment)] on Delta log2 mu across genes, for cis and trans, in both arms
 # cis: Hc against He, means divided by their abundance factors. trans: the parental log2 ratio minus the allele log2 ratio. A gene enters a contrast
 # when all of its groups have both dispersion estimates positive. The fit is repeated within terciles of the genes' mean count per cell.
-L2.DATA <- list(); L2 <- list()
-for (arm in c("same", "disjoint")) {
-  F <- LEAK.FITS[, startsWith(colnames(LEAK.FITS), paste0(arm, ".")), drop = FALSE]; colnames(F) <- sub(paste0("^", arm, "\\."), "", colnames(F))
-  lmu <- list(Pc = log2(F[, "Pc.mu"]), Pe = log2(F[, "Pe.mu"]), Hc = log2(F[, "Hc.mu"] / (2 * C.BAR)), He = log2(F[, "He.mu"] / (2 * (1 - C.BAR))))
-  lcr <- lapply(setNames(names(LEAK.MATS), names(LEAK.MATS)), function(k) ifelse(F[, paste0(k, ".phi_cr")] > 0, log2(F[, paste0(k, ".phi_cr")]), NA_real_))
-  lmo <- lapply(setNames(names(LEAK.MATS), names(LEAK.MATS)), function(k) ifelse(F[, paste0(k, ".phi_mom")] > 0, log2(F[, paste0(k, ".phi_mom")]), NA_real_))
-  mbar <- rowMeans(F[, paste0(names(LEAK.MATS), ".mbar")])
-  terc <- cut(rank(mbar, ties.method = "first"), 3, labels = c("low", "mid", "high"))
-  for (md in c("cis", "trans")) {
-    if (md == "cis") { x <- lmu$Hc - lmu$He; ycr <- lcr$Hc - lcr$He; ymo <- lmo$Hc - lmo$He }
-    else { x <- (lmu$Pc - lmu$Pe) - (lmu$Hc - lmu$He); ycr <- (lcr$Pc - lcr$Pe) - (lcr$Hc - lcr$He); ymo <- (lmo$Pc - lmo$Pe) - (lmo$Hc - lmo$He) }
-    y <- ycr - ymo
-    L2.DATA[[paste(arm, md)]] <- data.frame(gene = LEAK.GENES, arm = arm, contrast = md, dlog2mu = x, diff = y, dlog2phi_cr = ycr, dlog2phi_mom = ymo, tercile = terc)
-    L2[[paste(arm, md, "all")]] <- data.frame(arm = arm, contrast = md, genes_in = "all", leak_regression(x, y, ycr, ymo, LEAK.BOOT, SEED.LEAK + 2))
-    for (t in levels(terc)) { i <- terc == t
-      L2[[paste(arm, md, t)]] <- data.frame(arm = arm, contrast = md, genes_in = paste("mean count tercile", t), leak_regression(x[i], y[i], ycr[i], ymo[i], LEAK.BOOT, SEED.LEAK + 3)) }
-  }
+L2.DATA <- rbind(leak_contrasts(LEAK.FITS, "same", C.BAR), leak_contrasts(LEAK.FITS, "disjoint", C.BAR))
+L2 <- list()
+for (arm in c("same", "disjoint")) for (md in c("cis", "trans")) {
+  d <- L2.DATA[L2.DATA$arm == arm & L2.DATA$contrast == md, ]
+  L2[[paste(arm, md, "all")]] <- data.frame(arm = arm, contrast = md, genes_in = "all", leak_regression(d$dlog2mu, d$diff, d$dphi_cr, d$dphi_mom, LEAK.BOOT, SEED.LEAK + 2))
+  for (t in levels(d$tercile)) { i <- d$tercile == t
+    L2[[paste(arm, md, t)]] <- data.frame(arm = arm, contrast = md, genes_in = paste("mean count tercile", t), leak_regression(d$dlog2mu[i], d$diff[i], d$dphi_cr[i], d$dphi_mom[i], LEAK.BOOT, SEED.LEAK + 3)) }
 }
-L2 <- do.call(rbind, L2); rownames(L2) <- NULL; L2.DATA <- do.call(rbind, L2.DATA)
+L2 <- do.call(rbind, L2); rownames(L2) <- NULL
 print(L2, digits = 3, row.names = FALSE)
 x <- L2[L2$genes_in == "all", ]
 check_save("L2", list(slopes = L2, data = L2.DATA), "run",
@@ -123,3 +117,106 @@ for (arm in c("same", "disjoint")) for (md in c("cis", "trans")) {
   abline(h = 0, lty = 2, col = COLOR.ACCENT); abline(lm(diff ~ dlog2mu, data = d), col = COLOR.ACCENT, lwd = 2)
 }
 dev.off()
+
+##############################################################################
+## L3. Influence of the cells with the largest counts: every fit repeated without the top LEAK.TRIM fraction of cells by scaled count y / O
+# The moment estimator weights the squared deviation of every cell, so a few cells with very large counts move it more than the NB likelihood. If the
+# Cox-Reid / moment gap of L1 and the leak slopes of L2 shrink once those cells are left out, a few cells carry them. Trimming lowers both estimates, so
+# the comparison is between the estimators on the same trimmed cells, next to the untrimmed values.
+LEAK.TRIM <- 0.005
+LEAK.FITS.TRIM <- do.call(rbind, mclapply(LEAK.GENES, estimator_pair_gene, mats = LEAK.MATS, expos = LEAK.EXPOS, eta = LEAK.ETA, halves = LEAK.HALVES, trim = LEAK.TRIM, mc.cores = CORES))
+rownames(LEAK.FITS.TRIM) <- LEAK.GENES
+L3.GAP <- list()
+for (k in names(LEAK.MATS)) {
+  bp <- cut(LEAK.FITS[, paste0("same.", k, ".phi_cr")], PHI.BREAKS, right = FALSE)
+  for (fits in c("all cells", "trimmed")) {
+    F <- if (fits == "all cells") LEAK.FITS else LEAK.FITS.TRIM
+    cr <- F[, paste0("same.", k, ".phi_cr")]; mo <- F[, paste0("same.", k, ".phi_mom")]; ok <- cr > 0 & mo > 0
+    L3.GAP[[paste(k, fits)]] <- data.frame(group = k, fits = fits, phi_cr_bin = levels(bp), genes = as.vector(table(bp[ok])),
+                                           median_log2_ratio = vapply(levels(bp), function(l) median(log2(cr / mo)[ok & bp == l]), numeric(1)),
+                                           median_log2_trim_over_all_cr = vapply(levels(bp), function(l) median(log2(LEAK.FITS.TRIM[, paste0("same.", k, ".phi_cr")] / LEAK.FITS[, paste0("same.", k, ".phi_cr")])[ok & bp == l]), numeric(1)),
+                                           median_log2_trim_over_all_mom = vapply(levels(bp), function(l) median(log2(LEAK.FITS.TRIM[, paste0("same.", k, ".phi_mom")] / LEAK.FITS[, paste0("same.", k, ".phi_mom")])[ok & bp == l]), numeric(1)),
+                                           row.names = NULL)
+  }
+}
+L3.GAP <- do.call(rbind, L3.GAP)
+L3.DATA <- leak_contrasts(LEAK.FITS.TRIM, "disjoint", C.BAR)
+L3.SLOPES <- list()
+for (md in c("cis", "trans")) {
+  d <- L3.DATA[L3.DATA$contrast == md, ]
+  L3.SLOPES[[md]] <- data.frame(arm = "disjoint, trimmed", contrast = md, leak_regression(d$dlog2mu, d$diff, d$dphi_cr, d$dphi_mom, LEAK.BOOT, SEED.LEAK + 4))
+}
+L3.SLOPES <- do.call(rbind, L3.SLOPES); rownames(L3.SLOPES) <- NULL
+print(L3.GAP[L3.GAP$genes >= 20, ], digits = 3, row.names = FALSE); print(L3.SLOPES, digits = 3, row.names = FALSE)
+x <- L3.GAP[L3.GAP$genes >= 20, ]
+check_save("L3", list(gap = L3.GAP, slopes = L3.SLOPES, fits = LEAK.FITS.TRIM, trim = LEAK.TRIM), "run",
+           headline = c(sprintf("%s phi %s, %s: median log2(CR / moment) %.3f", x$group, x$phi_cr_bin, x$fits, x$median_log2_ratio),
+                        sprintf("trimmed %s: leak slope %.4f (95%% %.4f to %.4f); own slopes Cox-Reid %.3f, moment %.3f", L3.SLOPES$contrast, L3.SLOPES$slope, L3.SLOPES$boot_lo,
+                                L3.SLOPES$boot_hi, L3.SLOPES$slope_cr, L3.SLOPES$slope_mom)),
+           mc_error = sprintf("top %.1f%% of cells by scaled count left out of every fit; gene bootstrap %d draws", 100 * LEAK.TRIM, LEAK.BOOT), script = CHECK.SCRIPT)
+
+##############################################################################
+## L4. Third moment of the expression factor against the gamma, per group (check A11 on the Section 1 data)
+# The NB fit is exact for a gamma factor; the excess E[(a - 1)^3] - 2 phi^2 measures the departure. Each tested gene is compared with NB data simulated at its
+# own mean and variance on the same offsets (factor_excess_test()); the group statistic is the mean standardized deviation z over the tested genes (0 for a
+# gamma factor, positive for a factor more right-skewed than the gamma). Genes are a random sample of those with phi > 0 in the group.
+L4.GENES.PER.GROUP <- 400; L4.SIM <- 200
+L4 <- list()
+for (k in names(LEAK.MATS)) {
+  gk <- LEAK.GENES[LEAK.FITS[, paste0("same.", k, ".phi_cr")] > 0]
+  gk <- with_local_seed(SEED.LEAK + 5, sample(gk, min(L4.GENES.PER.GROUP, length(gk))))
+  tst <- with_local_seed(SEED.LEAK + 6, t(vapply(gk, factor_excess_test, numeric(6), mat = LEAK.MATS[[k]], expo = LEAK.EXPOS[[k]], B = L4.SIM)))
+  mb <- cut(LEAK.FITS[gk, paste0("same.", k, ".mbar")], MBAR.BREAKS, right = FALSE); ok <- is.finite(tst[, "z"])
+  for (l in c("all", levels(mb))) { i <- ok & (l == "all" | mb == l)
+    if (sum(i) < 10) next
+    L4[[paste(k, l)]] <- data.frame(group = k, mean_count = l, genes = sum(i), mean_z = mean(tst[i, "z"]), mean_z_se = 1 / sqrt(sum(i)), median_ratio = median(tst[i, "ratio"]),
+                                    median_null_ratio = median(tst[i, "null_ratio"]), share_p05 = mean(tst[i, "p"] < 0.05), row.names = NULL) }
+}
+L4 <- do.call(rbind, L4)
+print(L4, digits = 3, row.names = FALSE)
+check_save("L4", L4, "run", headline = sprintf("%s mean count %s: mean z %.2f (SE %.2f), k3 / (2 phi^2) median %.2f against %.2f under a gamma factor, p < 0.05 in %.3f of %d genes",
+                                               L4$group, L4$mean_count, L4$mean_z, L4$mean_z_se, L4$median_ratio, L4$median_null_ratio, L4$share_p05, L4$genes),
+           mc_error = sprintf("%d null draws per gene; 0.05 expected at p < 0.05 under a gamma factor", L4.SIM), script = CHECK.SCRIPT)
+
+##############################################################################
+## L5. Leak test on the raw scale: the difference of the two estimators' raw dispersion contrasts (Delta phi) on Delta log2 mu, both arms
+# A slope on the log2 scale that vanishes on the raw scale comes from small phi, where a log2 contrast magnifies small differences.
+L5.DATA <- rbind(leak_contrasts(LEAK.FITS, "same", C.BAR, "raw"), leak_contrasts(LEAK.FITS, "disjoint", C.BAR, "raw"))
+L5 <- list()
+for (arm in c("same", "disjoint")) for (md in c("cis", "trans")) {
+  d <- L5.DATA[L5.DATA$arm == arm & L5.DATA$contrast == md, ]
+  L5[[paste(arm, md)]] <- data.frame(arm = arm, contrast = md, leak_regression(d$dlog2mu, d$diff, d$dphi_cr, d$dphi_mom, LEAK.BOOT, SEED.LEAK + 7))
+}
+L5 <- do.call(rbind, L5); rownames(L5) <- NULL
+print(L5, digits = 3, row.names = FALSE)
+check_save("L5", list(slopes = L5, data = L5.DATA), "run",
+           headline = sprintf("%s %s, raw Delta phi: slope %.4f (95%% %.4f to %.4f), %d genes; own slopes Cox-Reid %.4f, moment %.4f", L5$arm, L5$contrast, L5$slope, L5$boot_lo, L5$boot_hi,
+                              L5$genes, L5$slope_cr, L5$slope_mom),
+           mc_error = sprintf("gene bootstrap, %d draws", LEAK.BOOT), script = CHECK.SCRIPT)
+
+##############################################################################
+## L6. A variance term linear in the mean that the NB lacks: Var(Y) = (1 + a) M + phi M^2 (linear_excess_gene())
+# An NB gene has a = 0. A technical source of Poisson-like extra variance (for example counts duplicated in a fraction of molecules) gives a > 0, and the NB
+# fit then returns about phi + a / M, a dispersion that falls with the mean count. That alone makes Delta log2 phi fall with Delta log2 mu across genes
+# with no change in the expression factor, and it moves the moment estimator, whose weights favor low-count cells, more than the NB fit. a and phi are
+# separated within each gene by the spread of the offsets. Reported per group and mean-count bin: the median and mean of a with the share of genes beyond
+# two SEs on each side (0.025 each expected for NB genes), and the trend of log2 phi (Cox-Reid) on log2 mu across genes, with and without the a / M term.
+L6 <- list(); L6.GENE <- list()
+for (k in names(LEAK.MATS)) {
+  r <- t(vapply(LEAK.GENES, linear_excess_gene, numeric(4), mat = LEAK.MATS[[k]], expo = LEAK.EXPOS[[k]]))
+  z <- r[, "a"] / r[, "a_se"]; mb <- cut(r[, "mbar"], MBAR.BREAKS, right = FALSE)
+  L6.GENE[[k]] <- data.frame(group = k, gene = LEAK.GENES, r, z = z, phi_cr = LEAK.FITS[, paste0("same.", k, ".phi_cr")], row.names = NULL)
+  ph <- LEAK.FITS[, paste0("same.", k, ".phi_cr")]; mu <- LEAK.FITS[, paste0("same.", k, ".mu")]; ok <- ph > 0 & r[, "phi_lin"] > 0 & is.finite(r[, "phi_lin"])
+  trend_cr <- unname(coef(lm(log2(ph[ok]) ~ log2(mu[ok])))[2]); trend_lin <- unname(coef(lm(log2(r[ok, "phi_lin"]) ~ log2(mu[ok])))[2])
+  for (l in c("all", levels(mb))) { i <- is.finite(z) & (l == "all" | mb == l)
+    if (sum(i) < 10) next
+    L6[[paste(k, l)]] <- data.frame(group = k, mean_count = l, genes = sum(i), median_a = median(r[i, "a"]), mean_a = mean(r[i, "a"]), mean_a_se = sd(r[i, "a"]) / sqrt(sum(i)),
+                                    share_above = mean(z[i] > 2), share_below = mean(z[i] < -2), trend_log2phi_cr_on_log2mu = trend_cr, trend_log2phi_lin_on_log2mu = trend_lin, row.names = NULL) }
+}
+L6 <- do.call(rbind, L6); L6.GENE <- do.call(rbind, L6.GENE)
+print(L6, digits = 3, row.names = FALSE)
+x <- L6[L6$mean_count == "all", ]
+check_save("L6", list(summary = L6, genes = L6.GENE), "run",
+           headline = c(sprintf("%s: a median %.3f, mean %.3f (SE %.3f); a > 2 SE in %.3f and < -2 SE in %.3f of %d genes; trend of log2 phi on log2 mu across genes: Cox-Reid %.3f, with the linear term removed %.3f",
+                                x$group, x$median_a, x$mean_a, x$mean_a_se, x$share_above, x$share_below, x$genes, x$trend_log2phi_cr_on_log2mu, x$trend_log2phi_lin_on_log2mu)),
+           mc_error = "sandwich SE per gene; SE of the mean a over genes", script = CHECK.SCRIPT)

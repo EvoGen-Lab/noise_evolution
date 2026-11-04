@@ -104,6 +104,19 @@ For gamma factors, L1's median log₂ ratio is within ±0.03 in every bin with m
 
 Each estimator's own slope is not zero even for gamma factors (cis −0.03 to −0.06). Both estimators move together with the mean contrast, through the truncation at zero and the sparse-cell bias of A9. The difference cancels that common part, which is why the test reads the difference.
 
+**Diagnostics L3 to L6** (added Nov 4).
+- **L3:** the top 0.5% of cells by scaled count are left out of every fit.
+- **L4:** each group's factor third moment is tested against the gamma.
+- **L5:** the leak test on raw Δφ.
+- **L6:** a variance term linear in the mean, Var = (1 + a)M + φM², estimated per gene from the spread of the offsets. An NB gene has a = 0, and a > 0 makes the NB φ̂ ≈ φ + a/M fall with the mean.
+
+**Synthetic test of L6** (200 genes per cell, N 1000). For NB counts, a ≈ 0 (median −0.03 to 0.01) with 0.5 to 1.5% of genes beyond +2 SE. When half the molecules are counted twice (true a = 0.67), the estimate is 0.60 to 0.67.
+
+**Full-script synthetic comparison** (counts duplicated in the parents only, gamma factors, φ independent of μ):
+- **L6:** a = 0.70 in Pc and Pe, and 0.0 in the hybrid alleles.
+- **Coupling:** the own trans slopes of Δlog₂φ̂ on Δlog₂μ̂ became −0.46 (Cox–Reid) and −0.39 (moment), with no change in any expression factor. The baseline gave about −0.01.
+- **Estimator gap:** duplication made Cox–Reid larger than the moment estimate in the parents (L1 +0.04 to +0.34) and gave a negative trans leak slope (−0.064). The data have the opposite sign on both.
+
 ## Rerun note
 
 Commit 1ffbccb changes `fit_dispersion(method = "weighted")` (Appendix A). It needs a rerun of Section 2.3 (`SPLIT.FITS.W` and the weighted columns of `GENE.TABLE`) and of the weighted columns of `BOOT.CONTRASTS` and `PR` with every table read from them, and resubmission of `gene_boot` and `gene_perm`. `SPLIT.FITS.W` can be refitted locally; the bootstrap and null columns need the cluster. The NB results are unchanged. The other check commits change no code in `R/functions.R`, `analysis/analysis.R` or the pipeline's cluster scripts, so no section or pipeline cluster job needs a rerun. The checks run as follows:

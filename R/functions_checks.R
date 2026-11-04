@@ -685,19 +685,58 @@ contrast_bias_summary <- function(PR, strata, quantities = c("mean", "disp", "rd
 ## estimator_pair_gene: one gene's fits for the estimator comparison and leak test (analysis/checks/estimator_leak.R). For each group (Pc, Pe, Hc, He) the
 ## ratio mean and the dispersion by the Cox-Reid NB fit and by the Appendix A moment estimator, both with the group's share correction, in two arms:
 ## "same", mean and dispersions on all cells of the group, and "disjoint", the mean on half A and both dispersions on half B (halves: one index vector
-## per group), so the errors of the mean and of the dispersion share no cells. Returns a named vector arm.group.quantity (quantity mu, mbar, phi_cr, phi_mom).
-estimator_pair_gene <- function(g, mats, expos, eta, halves) {
+## per group), so the errors of the mean and of the dispersion share no cells. trim > 0 leaves out of every fit the cells with the largest scaled
+## counts y / O (the top trim fraction of the cells in that fit, at least one), which shows how much a few cells carry each estimate. Returns a named
+## vector arm.group.quantity (quantity mu, mbar, phi_cr, phi_mom).
+estimator_pair_gene <- function(g, mats, expos, eta, halves, trim = 0) {
   out <- c()
   for (k in names(mats)) {
     y <- as.numeric(mats[[k]][g, ]); e <- expos[[k]]; A <- halves[[k]]; B <- setdiff(seq_along(e), A)
     for (arm in c("same", "disjoint")) {
       im <- if (arm == "same") seq_along(e) else A; ip <- if (arm == "same") seq_along(e) else B
+      if (trim > 0) for (s in c("im", "ip")) {
+        ix <- get(s); drop <- ix[order(y[ix] / e[ix], decreasing = TRUE)][seq_len(max(1, ceiling(trim * length(ix))))]
+        assign(s, setdiff(ix, drop))
+      }
       mu <- sum(y[im]) / sum(e[im])
       out[paste(arm, k, c("mu", "mbar", "phi_cr", "phi_mom"), sep = ".")] <-
         c(mu, mu * mean(e[ip]), fit_dispersion(y[ip], e[ip], eta[[k]], "NB")[["disp"]], fit_dispersion(y[ip], e[ip], eta[[k]], "weighted")[["disp"]])
     }
   }
   out
+}
+
+## leak_contrasts: the cis and trans contrasts of one arm of estimator_pair_gene() output (fits, genes x columns), as a long data frame: x = Delta log2 mu
+## (allele means divided by their abundance factors 2 cbar and 2 (1 - cbar); trans = parental log2 ratio minus allele log2 ratio) and, for each estimator,
+## the dispersion contrast on the log2 scale (scale "log2", a group with phi = 0 gives NA) or the raw difference of phi (scale "raw", phi = 0 included);
+## diff = Cox-Reid minus moment. tercile splits the genes by their mean count per cell averaged over the four groups.
+leak_contrasts <- function(fits, arm, cbar, scale = c("log2", "raw")) {
+  scale <- match.arg(scale)
+  F <- fits[, startsWith(colnames(fits), paste0(arm, ".")), drop = FALSE]; colnames(F) <- sub(paste0("^", arm, "\\."), "", colnames(F))
+  lmu <- list(Pc = log2(F[, "Pc.mu"]), Pe = log2(F[, "Pe.mu"]), Hc = log2(F[, "Hc.mu"] / (2 * cbar)), He = log2(F[, "He.mu"] / (2 * (1 - cbar))))
+  tr <- function(v) if (scale == "log2") ifelse(v > 0, log2(v), NA_real_) else v
+  ph <- lapply(c(cr = "phi_cr", mom = "phi_mom"), function(q) lapply(c(Pc = "Pc", Pe = "Pe", Hc = "Hc", He = "He"), function(k) tr(F[, paste0(k, ".", q)])))
+  terc <- cut(rank(rowMeans(F[, paste0(c("Pc", "Pe", "Hc", "He"), ".mbar")]), ties.method = "first"), 3, labels = c("low", "mid", "high"))
+  do.call(rbind, lapply(c("cis", "trans"), function(md) {
+    d <- function(l) if (md == "cis") l$Hc - l$He else (l$Pc - l$Pe) - (l$Hc - l$He)
+    data.frame(gene = rownames(F), arm = arm, scale = scale, contrast = md, dlog2mu = d(lmu), dphi_cr = d(ph$cr), dphi_mom = d(ph$mom),
+               diff = d(ph$cr) - d(ph$mom), tercile = terc, row.names = NULL)
+  }))
+}
+
+## linear_excess_gene: L6 for one gene in one group, a test for a variance term linear in the mean that the NB lacks. Under Var(Y_i) = (1 + a) M_i + phi M_i^2
+## with M_i = O_i mu and mu fitted as sum(y) / sum(O), E[(y_i - M_i)^2] = (1 + a) A_i + phi B_i with A_i = M_i (1 - p_i), B_i = M_i^2 (1 - 2 p_i) + p_i^2 sum M^2
+## and p_i = O_i / sum O (Appendix A). So z_i = (y_i - M_i)^2 - A_i has expectation a A_i + phi B_i, and a and phi follow from a regression of z on A and B
+## without intercept, identified by the spread of the offsets. Weights 1 / [M_i (1 + phi0 M_i)]^2 with phi0 the Cox-Reid fit; SEs by the sandwich (HC0).
+## An NB gene has a = 0; a > 0 gives the NB fit phi-hat of about phi + a / M, a dispersion that falls with the mean. Returns a, its SE, phi_lin, mbar.
+linear_excess_gene <- function(g, mat, expo) {
+  y <- as.numeric(mat[g, ]); mu <- sum(y) / sum(expo)
+  if (!(mu > 0)) return(c(a = NA, a_se = NA, phi_lin = NA, mbar = NA))
+  M <- mu * expo; p <- expo / sum(expo); A <- M * (1 - p); B <- M^2 * (1 - 2 * p) + p^2 * sum(M^2)
+  phi0 <- max(fit_dispersion(y, expo)[["disp"]], 0); w <- 1 / (M * (1 + phi0 * M))^2; z <- (y - M)^2 - A
+  X <- cbind(A, B); XtWX <- crossprod(X * w, X); bhat <- solve(XtWX, crossprod(X * w, z)); r <- as.vector(z - X %*% bhat)
+  V <- solve(XtWX) %*% crossprod(X * (w * r)) %*% solve(XtWX)
+  c(a = bhat[1], a_se = sqrt(V[1, 1]), phi_lin = bhat[2], mbar = mu * mean(expo))
 }
 
 ## leak_regression: the leak test for one contrast. y = Delta log2 phi (Cox-Reid) - Delta log2 phi (moment) regressed across genes on x = Delta log2 mu.
