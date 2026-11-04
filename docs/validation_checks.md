@@ -84,6 +84,26 @@ The correlation grows with μ and φ: at μ = 1, φ = 0.3 every family lies with
   - **Observed offset spread:** the ML and Cox–Reid covariances stay near zero for gamma and become 0.64 (lognormal) and −0.38 (bimodal) at overlap 1. The Appendix A estimator gives −0.47 (cor −0.11) for gamma at overlap 1, and −0.27 at overlap 0.5. With unequal offsets its error is correlated with the mean even for NB counts, a case the formula does not cover.
 - **B4 addendum** (relative bias, mean count and φ of (1, 0.3), (1, 1), (5, 0.3), (5, 1)). At 20,000 cells with equal offsets, Cox–Reid gives −3.7%, −16.7%, −8.9% and −27.7% for lognormal factors and +3.6%, +19.6%, +4.1% and +40.3% for bimodal. This reproduces the Nov 3 values (−4.5, −16.1, −8.9, −28.1; +3.1, +19.8, +4.2, +40.3) within about 1 point. Appendix A stays within 1.3%, and gamma within 0.3% for both. At the observed hybrid depths: Cox–Reid −2.7% to −27.9% (lognormal) and +3.6% to +38.3% (bimodal); Appendix A within 1.4%.
 
+## Estimator comparison and leak test (`analysis/checks/estimator_leak.R`)
+
+This runs from the Section 1 checkpoint alone and recomputes the Section 2 offsets, share corrections and abundance factors.
+- **L1** reports log₂(φ̂ Cox–Reid / φ̂ moment) per group in bins of the mean count per cell and of φ̂.
+- **L2** regresses [Δlog₂φ̂ (Cox–Reid) − Δlog₂φ̂ (moment)] on Δlog₂μ̂ across genes, for cis and for trans. Each estimator's own slope is reported beside it.
+- **Two arms.** In "same", the mean and the dispersions come from all cells. In "disjoint", each group's cells are split at random into halves: the mean comes from one half and both dispersions from the other. Mean and dispersion errors on shared cells covary unless the counts are NB (A10), so only a slope in the disjoint arm reads as leakage.
+
+**Synthetic test.** 1500 genes; 1000 cells per parent, 2000 hybrid; random cis and trans mean effects; one φ per gene in every group.
+
+| Factor | Arm | cis slope (95% gene bootstrap) | trans slope (95% gene bootstrap) |
+|---|---|---|---|
+| gamma | same | −0.005 (−0.011 to 0.0004) | −0.001 (−0.013 to 0.010) |
+| gamma | disjoint | −0.006 (−0.014 to 0.003) | −0.011 (−0.025 to 0.002) |
+| lognormal | same | −0.041 (−0.049 to −0.033) | −0.028 (−0.041 to −0.014) |
+| lognormal | disjoint | −0.044 (−0.055 to −0.033) | −0.032 (−0.048 to −0.016) |
+
+For gamma factors, L1's median log₂ ratio is within ±0.03 in every bin with mean count ≥ 0.1. For lognormal factors it falls with the mean count and φ, reaching −0.51 at mean count ≥ 10 and φ 0.5 to 1. This is the B4 bias, appearing here as a dependence on the mean.
+
+Each estimator's own slope is not zero even for gamma factors (cis −0.03 to −0.06). Both estimators move together with the mean contrast, through the truncation at zero and the sparse-cell bias of A9. The difference cancels that common part, which is why the test reads the difference.
+
 ## Rerun note
 
 Commit 1ffbccb changes `fit_dispersion(method = "weighted")` (Appendix A). It needs a rerun of Section 2.3 (`SPLIT.FITS.W` and the weighted columns of `GENE.TABLE`) and of the weighted columns of `BOOT.CONTRASTS` and `PR` with every table read from them, and resubmission of `gene_boot` and `gene_perm`. `SPLIT.FITS.W` can be refitted locally; the bootstrap and null columns need the cluster. The NB results are unchanged. The other check commits change no code in `R/functions.R`, `analysis/analysis.R` or the pipeline's cluster scripts, so no section or pipeline cluster job needs a rerun. The checks run as follows:

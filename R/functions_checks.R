@@ -682,6 +682,37 @@ contrast_bias_summary <- function(PR, strata, quantities = c("mean", "disp", "rd
   do.call(rbind, out)
 }
 
+## estimator_pair_gene: one gene's fits for the estimator comparison and leak test (analysis/checks/estimator_leak.R). For each group (Pc, Pe, Hc, He) the
+## ratio mean and the dispersion by the Cox-Reid NB fit and by the Appendix A moment estimator, both with the group's share correction, in two arms:
+## "same", mean and dispersions on all cells of the group, and "disjoint", the mean on half A and both dispersions on half B (halves: one index vector
+## per group), so the errors of the mean and of the dispersion share no cells. Returns a named vector arm.group.quantity (quantity mu, mbar, phi_cr, phi_mom).
+estimator_pair_gene <- function(g, mats, expos, eta, halves) {
+  out <- c()
+  for (k in names(mats)) {
+    y <- as.numeric(mats[[k]][g, ]); e <- expos[[k]]; A <- halves[[k]]; B <- setdiff(seq_along(e), A)
+    for (arm in c("same", "disjoint")) {
+      im <- if (arm == "same") seq_along(e) else A; ip <- if (arm == "same") seq_along(e) else B
+      mu <- sum(y[im]) / sum(e[im])
+      out[paste(arm, k, c("mu", "mbar", "phi_cr", "phi_mom"), sep = ".")] <-
+        c(mu, mu * mean(e[ip]), fit_dispersion(y[ip], e[ip], eta[[k]], "NB")[["disp"]], fit_dispersion(y[ip], e[ip], eta[[k]], "weighted")[["disp"]])
+    }
+  }
+  out
+}
+
+## leak_regression: the leak test for one contrast. y = Delta log2 phi (Cox-Reid) - Delta log2 phi (moment) regressed across genes on x = Delta log2 mu.
+## Returns the OLS slope with its SE, a 95% interval from B gene-resampling draws (indices drawn first), the Spearman correlation, the slopes of each
+## estimator's own Delta log2 phi on x, and the number of genes.
+leak_regression <- function(x, y, y_cr, y_mom, B = 1000, seed = 1) {
+  ok <- is.finite(x) & is.finite(y); x <- x[ok]; y <- y[ok]; y_cr <- y_cr[ok]; y_mom <- y_mom[ok]; n <- length(x)
+  if (n < 10) return(data.frame(genes = n, slope = NA, slope_se = NA, boot_lo = NA, boot_hi = NA, spearman = NA, slope_cr = NA, slope_mom = NA))
+  f <- summary(lm(y ~ x))$coefficients
+  idx <- with_local_seed(seed, lapply(seq_len(B), function(b) sample.int(n, n, TRUE)))
+  bs <- vapply(idx, function(i) unname(coef(lm(y[i] ~ x[i]))[2]), numeric(1))
+  data.frame(genes = n, slope = f[2, 1], slope_se = f[2, 2], boot_lo = unname(quantile(bs, 0.025)), boot_hi = unname(quantile(bs, 0.975)),
+             spearman = cor(x, y, method = "spearman"), slope_cr = unname(coef(lm(y_cr ~ x))[2]), slope_mom = unname(coef(lm(y_mom ~ x))[2]))
+}
+
 ## ============================================================
 ## Data check helpers (checks_data.R)
 ## ============================================================
