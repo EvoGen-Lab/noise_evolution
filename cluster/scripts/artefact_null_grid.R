@@ -37,7 +37,7 @@ ART.PART <- list(); t0 <- Sys.time()
 for (i in MY.TASKS) {
   tk <- ART.TASKS[i, ]
   ART.PART[[as.character(i)]] <- if (tk$kind == "T0") {
-    sub <- split(ART.CHUNKS[[tk$index]], cut(seq_along(ART.CHUNKS[[tk$index]]), min(NUM.CORES, length(ART.CHUNKS[[tk$index]])), labels = FALSE))
+    sub <- split(ART.CHUNKS[[tk$index]], (seq_along(ART.CHUNKS[[tk$index]]) - 1) %% NUM.CORES)     # one sub-chunk per core, round-robin
     mclapply(sub, art_null_chunk, mats = ART.MATS, expos = ART.EXPOS, eta = ART.ETA, frac = ART.CFG$frac, terc = ART.TERC, R = ART.CFG$R, R4 = ART.CFG$R4,
              R11 = ART.CFG$R11, thin_p = ART.CFG$thin_p, streams = ART.STREAMS.GENE, mc.cores = NUM.CORES, mc.preschedule = FALSE)
   } else {

@@ -106,7 +106,7 @@ ART.FITS <- ART.CORE[, paste0(rep(ART.GROUPS, each = 2), c(".mu", ".phi"))]
 ##############################################################################
 ## Inputs of the simulation array (T0, T8, T12), and its results
 ART.CFG <- list(frac = ART.FRAC, R = ART.R, R4 = ART.R4, R11 = ART.R11, thin_p = ART.THIN, cbar = C.BAR, mbar_breaks = MBAR.BREAKS)
-ART.CHUNKS <- split(ART.GENES, cut(seq_along(ART.GENES), ART.N.CHUNKS, labels = FALSE))
+ART.CHUNKS <- split(ART.GENES, (seq_along(ART.GENES) - 1) %% min(ART.N.CHUNKS, length(ART.GENES)))     # genes dealt round-robin into chunks
 ART.SCEN.GRID <- rbind(data.frame(scenario = "A", par1 = NA, par2 = NA, rep = seq_len(ART.SCEN.REPS)), data.frame(scenario = "B", par1 = NA, par2 = NA, rep = seq_len(ART.SCEN.REPS)),
                        data.frame(scenario = "S1", par1 = c(0.05, 0.1, 0.2), par2 = NA, rep = 1), data.frame(scenario = "S2", par1 = c(0.8, 0.9, 1.1), par2 = NA, rep = 1),
                        data.frame(scenario = "S3", par1 = c(0.005, 0.005, 0.01, 0.01), par2 = c(5, 10, 5, 10), rep = 1), data.frame(scenario = "S4", par1 = c(0.05, 0.1, 0.2), par2 = NA, rep = 1),
@@ -127,7 +127,7 @@ if (length(ART.FILES)) {
 } else if (ART.LOCAL) {
   ART.STATUS <- "reduced"
   LOCAL.GENES <- with_local_seed(SEED.ART + 6, sample(ART.GENES, min(ART.LOCAL.GENES, length(ART.GENES))))
-  T0.PARTS <- mclapply(split(LOCAL.GENES, cut(seq_along(LOCAL.GENES), CORES, labels = FALSE)), art_null_chunk, mats = ART.MATS, expos = ART.EXPOS, eta = ART.ETA, frac = ART.FRAC,
+  T0.PARTS <- mclapply(split(LOCAL.GENES, (seq_along(LOCAL.GENES) - 1) %% CORES), art_null_chunk, mats = ART.MATS, expos = ART.EXPOS, eta = ART.ETA, frac = ART.FRAC,
                        terc = ART.TERC, R = ART.LOCAL.R, R4 = 3, R11 = 2, thin_p = ART.THIN, streams = ART.STREAMS.GENE, mc.cores = CORES, mc.preschedule = FALSE)
   SCEN.RES <- lapply(seq_len(nrow(ART.SCEN.GRID)), art_scenario_task, grid = ART.SCEN.GRID, fits = ART.FITS, expos = ART.EXPOS, eta = ART.ETA, halves = ART.HALVES,
                      genes = LOCAL.GENES, frac = ART.FRAC, cbar = C.BAR, mbar_breaks = MBAR.BREAKS, streams = ART.STREAMS.SCEN, cores = CORES)
