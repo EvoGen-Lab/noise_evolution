@@ -15,8 +15,9 @@
 ###               own slope on the same genes;
 ###   a           the coefficient of A_i = M_i (1 - p_i) in E[(y - M)^2 - A_i] = a A_i + phi B_i (linear_excess_gene()), a variance term linear in the mean.
 ### Rules fixed before any result:
-###   T2  a cell is removed when its excess trimming burden has z = (observed - null mean) / null SD above qnorm(1 - T2.FWER / cells of its group), with
-###       T2.FWER = 0.01 (a familywise 1% rate per group under the T0 null); a hybrid cell flagged in either allele leaves both;
+###   T2  a cell is removed when its burden z = (observed - null mean) / null SD exceeds the (1 - T2.FWER) quantile, over the T0 replicates, of the largest
+###       z among the group's cells in a replicate, with T2.FWER = 0.01: a familywise 1% rate per group that the null itself calibrates, because the
+###       burden is discrete and skewed (a normal tail removed 4 to 7 cells per group from pure NB data); a hybrid cell flagged in either allele leaves both;
 ###   T7a every UMI is kept with probability 0.5; T7b parental UMIs are kept with the ratio of the median hybrid allele library to the median parental
 ###       library (UMIs, because reads are not in the project);
 ###   T10 gene sets from GO through org.Sc.sgd.db: cytosolic ribosome GO:0022626, ribosome biogenesis GO:0042254, nucleosome GO:0000786, cellular response
@@ -184,10 +185,12 @@ if (is.null(T0.PARTS)) check_save("T1", NULL, "not run", headline = NOT.RUN, scr
   DBL <- if (requireNamespace("scDblFinder", quietly = TRUE) && requireNamespace("SingleCellExperiment", quietly = TRUE)) "available" else "scDblFinder not installed"
   CK7 <- if (file.exists(ckpt_path(7))) { e7 <- new.env(); load(ckpt_path(7), envir = e7); e7 } else NULL
   DS7 <- c(Pc = "MIX.SC", Pe = "MIX.SE", Hc = "HYB.SC", He = "HYB.SE")
-  T1 <- list(); T1.COR <- list(); T1.TOP <- list()
+  T1 <- list(); T1.COR <- list(); T1.TOP <- list(); ZMAX <- list(); Z3.NULL <- list()
   for (k in ART.GROUPS) {
     m <- FULL[[k]]; obs <- T0.OBS.BURDEN[[k]]; nb <- T0.BURDEN[[k]]
-    mu0 <- colMeans(nb); sd0 <- apply(nb, 2, sd); z <- ifelse(sd0 > 0, (obs - mu0) / sd0, NA_real_);     # a cell never trimmed in the null has no z
+    mu0 <- colMeans(nb); sd0 <- apply(nb, 2, sd); z <- ifelse(sd0 > 0, (obs - mu0) / sd0, NA_real_)     # a cell never trimmed in the null has no z
+    znull <- sweep(sweep(nb, 2, mu0), 2, ifelse(sd0 > 0, sd0, NA_real_), "/")                                # the same z for every null replicate
+    ZMAX[[k]] <- apply(znull, 1, max, na.rm = TRUE); Z3.NULL[[k]] <- mean(rowSums(znull > 3, na.rm = TRUE))
     p <- (1 + rowSums(t(nb) >= obs)) / (1 + nrow(nb))
     cells <- colnames(m); if (is.null(cells)) cells <- as.character(seq_len(ncol(m)))
     covs <- data.frame(library = LIB[[k]], detected = colSums(m > 0),
@@ -208,13 +211,13 @@ if (is.null(T0.PARTS)) check_save("T1", NULL, "not run", headline = NOT.RUN, scr
   T1.CELLS <- do.call(rbind, T1); T1.COR <- do.call(rbind, T1.COR); rownames(T1.COR) <- NULL
   T1.SUM <- list()
   for (k in ART.GROUPS) { x <- T1.CELLS[T1.CELLS$group == k, ]
-    T1.SUM[[k]] <- data.frame(group = k, cells = nrow(x), expected_mean_burden = mean(x$null_mean), z_above_3 = sum(x$z > 3, na.rm = TRUE), expected_z_above_3 = round(nrow(x) * pnorm(3, lower.tail = FALSE), 1),
+    T1.SUM[[k]] <- data.frame(group = k, cells = nrow(x), expected_mean_burden = mean(x$null_mean), z_above_3 = sum(x$z > 3, na.rm = TRUE), expected_z_above_3 = round(Z3.NULL[[k]], 1), threshold_T2 = unname(quantile(ZMAX[[k]], 1 - T2.FWER)),
                               top1pct_share_of_excess = sum(sort(pmax(x$excess, 0), TRUE)[1:ceiling(0.01 * nrow(x))]) / sum(pmax(x$excess, 0))) }
   T1.SUM <- do.call(rbind, T1.SUM)
   x <- T1.COR[is.finite(T1.COR$rho) & !grepl("Kruskal", T1.COR$covariate), ]
   check_save("T1", list(cells = T1.CELLS, correlations = T1.COR, top50 = T1.TOP, summary = T1.SUM, blocked = c(scDblFinder = DBL, ribosomal = if (length(RP.GENES)) "GO:0022626" else "org.Sc.sgd.db not installed",
                                                                                                           cell_state = if (is.null(CK7)) "Section 7 checkpoint missing" else "used")), ART.STATUS,
-             headline = c(sprintf("%s: cells with burden z > 3: %d (NB expectation %.1f); top 1%% of cells hold %.3f of the positive excess", T1.SUM$group, T1.SUM$z_above_3, T1.SUM$expected_z_above_3,
+             headline = c(sprintf("%s: cells with burden z > 3: %d (mean over NB replicates %.1f); top 1%% of cells hold %.3f of the positive excess", T1.SUM$group, T1.SUM$z_above_3, T1.SUM$expected_z_above_3,
                                   T1.SUM$top1pct_share_of_excess),
                           sprintf("%s excess burden vs %s: Spearman %.3f (95%% %.3f to %.3f)", x$group, x$covariate, x$rho, x$lo, x$hi),
                           sprintf("not available: %s", paste(c(if (DBL != "available") "scDblFinder", if (!length(RP.GENES)) "ribosomal share (org.Sc.sgd.db)", if (is.null(CK7)) "cell cycle and metabolic state (Section 7 checkpoint)",
@@ -230,7 +233,7 @@ if (is.null(T0.PARTS)) check_save("T1", NULL, "not run", headline = NOT.RUN, scr
 ##############################################################################
 ## T2. Cell-level QC sensitivity: the fits on the cells left by the T2 rule (header), against all cells
 if (is.null(T1.CELLS)) check_save("T2", NULL, "not run", headline = NOT.RUN, script = CHECK.SCRIPT) else {
-  RM <- lapply(setNames(ART.GROUPS, ART.GROUPS), function(k) { x <- T1.CELLS[T1.CELLS$group == k, ]; which(x$z > qnorm(1 - T2.FWER / nrow(x))) })
+  RM <- lapply(setNames(ART.GROUPS, ART.GROUPS), function(k) which(T1.CELLS$z[T1.CELLS$group == k] > T1.SUM$threshold_T2[T1.SUM$group == k]))
   RM$Hc <- RM$He <- sort(union(RM$Hc, RM$He))
   KEEP.MATS <- lapply(setNames(ART.GROUPS, ART.GROUPS), function(k) if (length(RM[[k]])) ART.MATS[[k]][, -RM[[k]], drop = FALSE] else ART.MATS[[k]])
   KEEP.EXPOS <- lapply(setNames(ART.GROUPS, ART.GROUPS), function(k) if (length(RM[[k]])) ART.EXPOS[[k]][-RM[[k]]] else ART.EXPOS[[k]])
@@ -258,7 +261,7 @@ if (is.null(T1.CELLS)) check_save("T2", NULL, "not run", headline = NOT.RUN, scr
                                                leak_regression(dd$dlog2mu, dd$diff, dd$dphi_cr, dd$dphi_mom, 500, SEED.ART + 9)[c("slope", "boot_lo", "boot_hi", "slope_cr", "slope_mom")], row.names = NULL) } }
   }
   T2.BINS <- do.call(rbind, T2[!grepl("cis$|trans$", names(T2))]); T2.SLOPES <- do.call(rbind, T2[grepl("cis$|trans$", names(T2))]); rownames(T2.BINS) <- rownames(T2.SLOPES) <- NULL
-  check_save("T2", list(removed = RM, bins = T2.BINS, slopes = T2.SLOPES, rule = sprintf("z > qnorm(1 - %g / cells)", T2.FWER)), ART.STATUS,
+  check_save("T2", list(removed = RM, bins = T2.BINS, slopes = T2.SLOPES, rule = sprintf("z above the %g quantile of the per-replicate maximum z (T1 threshold_T2)", 1 - T2.FWER)), ART.STATUS,
              headline = c(sprintf("removed cells: %s", paste(sprintf("%s %d", ART.GROUPS, vapply(RM, length, integer(1))), collapse = ", ")),
                           sprintf("%s, %s: leak slope %.4f (%.4f to %.4f); own slopes Cox-Reid %.3f, moment %.3f", T2.SLOPES$cells, T2.SLOPES$group, T2.SLOPES$slope, T2.SLOPES$boot_lo, T2.SLOPES$boot_hi,
                                   T2.SLOPES$slope_cr, T2.SLOPES$slope_mom),
