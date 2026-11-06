@@ -393,6 +393,7 @@ check_save("T7b", T7B, "run",
 if (is.null(SCEN.RES)) { check_save("T8", NULL, "not run", headline = NOT.RUN, script = CHECK.SCRIPT); check_save("T12", NULL, "not run", headline = NOT.RUN, script = CHECK.SCRIPT) } else {
   SC.SLOPES <- do.call(rbind, lapply(SCEN.RES, `[[`, "slopes")); SC.GROUPS <- do.call(rbind, lapply(SCEN.RES, `[[`, "groups")); SC.BINS <- do.call(rbind, lapply(SCEN.RES, `[[`, "bins"))
   T8.AB <- aggregate(cbind(slope, lo, hi, genes) ~ scenario + arm + contrast, SC.SLOPES[SC.SLOPES$scenario %in% c("A", "B"), ], mean)
+  T8.AB$genes <- round(T8.AB$genes)     # the mean gene count over the replicate datasets, as a whole number for the table and the headline
   T8.AB$source <- paste("scenario", T8.AB$scenario, "(mean of", ART.SCEN.REPS, "datasets)")
   T8 <- rbind(cbind(source = "data", DATA.SIG$slopes[, c("arm", "contrast", "genes", "slope", "lo", "hi")]), T8.AB[, c("source", "arm", "contrast", "genes", "slope", "lo", "hi")])
   T8.MC <- aggregate(slope ~ scenario + arm + contrast, SC.SLOPES[SC.SLOPES$scenario %in% c("A", "B"), ], function(v) sd(v) / sqrt(length(v)))
