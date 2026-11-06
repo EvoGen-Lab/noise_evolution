@@ -220,8 +220,9 @@ if (is.null(T0.PARTS)) check_save("T1", NULL, "not run", headline = NOT.RUN, scr
              headline = c(sprintf("%s: cells with burden z > 3: %d (mean over NB replicates %.1f); top 1%% of cells hold %.3f of the positive excess", T1.SUM$group, T1.SUM$z_above_3, T1.SUM$expected_z_above_3,
                                   T1.SUM$top1pct_share_of_excess),
                           sprintf("%s excess burden vs %s: Spearman %.3f (95%% %.3f to %.3f)", x$group, x$covariate, x$rho, x$lo, x$hi),
-                          sprintf("not available: %s", paste(c(if (DBL != "available") "scDblFinder", if (!length(RP.GENES)) "ribosomal share (org.Sc.sgd.db)", if (is.null(CK7)) "cell cycle and metabolic state (Section 7 checkpoint)",
-                                                                if (!exists("MITO.QC")) "mitochondrial share and doublet score (rerun Section 1 to save MITO.QC and MULTIPLET.SCORE)"), collapse = ", "))),
+                          local({ na <- c(if (DBL != "available") "scDblFinder", if (!length(RP.GENES)) "ribosomal share (org.Sc.sgd.db)", if (is.null(CK7)) "cell cycle and metabolic state (Section 7 checkpoint)",
+                                          if (!exists("MITO.QC")) "mitochondrial share and doublet score (rerun Section 1 to save MITO.QC and MULTIPLET.SCORE)")
+                            if (length(na)) sprintf("not available: %s", paste(na, collapse = ", ")) })),
              mc_error = "burden null from the T0 replicates; Spearman intervals from 500 cell resamples", script = CHECK.SCRIPT)
   fig_pdf("extra/check_T1_burden_library.pdf", 10, 3)
   par(mfrow = c(1, 4), mar = c(4, 4, 2, 1))

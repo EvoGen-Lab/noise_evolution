@@ -142,6 +142,26 @@ Each estimator's own slope is not zero even for gamma factors (cis −0.03 to �
   - It falls below 1 by 2 SE in 24 to 30% of genes and lies above 1 in 9 to 17%. In the hybrid alleles 58% of genes with mean count ≥ 10 lie above 1.
   - With O^β, a is 0.20, 0.18 and 0.10, the trends are −0.13 to −0.45, and the own slopes are −0.51 (cis) and −0.60 (trans).
 
+## Real-data results of the artefact tests T0 to T12 (local reduced run, Nov 6)
+
+`analysis/checks/artefact_tests.R` with `ART.LOCAL = TRUE` (300 genes, 50 NB replicates per gene). Results marked "reduced" rest on that subset; T6, T7b, T9 and T10 use every gene. T5 is blocked (no empty-droplet barcodes in the inputs).
+
+- **Outlier cells (H1, H6).**
+  - T1: the number of cells with burden z > 3 matches the NB (Pc 16 against 15.5, Pe 17 against 22.3, Hc 70 against 66.2, He 69 against 67.6). Excess burden rises with library (Spearman 0.42 to 0.49) and with the doublet scores (0.27 to 0.46). L7 (NB tail probabilities, every gene) found the opposite sign with library; the two statistics differ and the full array should settle it.
+  - T0: trimmed φ falls below the gene's NB 5th percentile in 0.33 (Pc) and 0.17 (Pe) of 30 genes, against 0.03 to 0.07 in the hybrid alleles (nominal 0.05).
+  - T2 removes 3 Pc, 2 Pe and 4 hybrid cells. The trans leak slope falls from 0.114 to 0.038 (same cells) and from 0.122 to 0.052 (disjoint); cis stays at 0.002 to 0.010. The parental Cox–Reid/moment gap at φ̂ ≥ 1 falls from −1.04 to −0.54 (Pc) and from −1.18 to −0.96 (Pe). Own slopes change little (−0.46 to −0.59).
+  - T11: in parental genes with mean count ≥ 3 the top 5 cells carry more of φ than under the NB (Pc 0.154 against 0.100 at mean 3 to 10, 0.091 against 0.057 at ≥ 10; Pe 0.160 against 0.107 at 3 to 10). Hybrid bins with a null do not exceed it.
+- **Depth dependence (H2, H3).**
+  - T3: φ in the lowest depth tercile exceeds φ on all cells by log2 0.82 (Pc), 1.28 (Pe), 0.43 (Hc) and 0.45 (He); the highest tercile lies below by 0.27 to 0.55. The NB null gives −0.08 to 0.01.
+  - T4: β median 0.97 to 0.98 and ρ = λ/μ median 0.024 (Pc), 0.027 (Pe), 0.008 to 0.009 (hybrids); LR > 3.84 in 21 to 40% of genes against 0 to 8% under the NB. Neither model changes φ by more than 0.023 in log2, so non-proportional mean scaling does not absorb the depth gradient of T3.
+  - T6: scran size factors (Spearman 0.96 to 0.99 with library) lower φ by log2 0.23 (parents) and 0.08 (hybrids), halve the median a and flatten the parental trend of log2 φ on log2 μ (Pc −0.23 to −0.11, Pe −0.38 to −0.24). Dropping the 50 most expressed genes from the library changes φ by −0.03 to −0.08.
+  - T7a: binomial thinning to p = 0.5 leaves an NB φ unchanged (null within ±0.05 except one bin). The data raise φ at mean count < 1 (+0.06 to +0.25) and lower it at ≥ 3 (−0.03 to −0.18).
+- **Coordinated cells (H4).** T10: the cells trimmed in nucleosome genes overlap far beyond mean-matched random gene sets in every group (Jaccard 0.23 against 0.027 in Pc, 0.17 against 0.018 in Pe, 0.04 against 0.007 in the hybrid alleles; p = 0.001). Ribosomal and ribosome-biogenesis sets overlap beyond random in the hybrid alleles (and ribosomal in Pe). The cell-cycle axis was not found in the Section 7 checkpoint.
+- **Coupling (H5).**
+  - T7b: thinning the parents to the hybrid allele depth leaves the own slopes at −0.61 (cis) and −0.63 to −0.70 (trans).
+  - T9: on class 1 genes with mean count ≥ 3 in every group the own slopes are −0.37 (cis) and −0.70 (trans). By mean tercile the cis slope stays at −0.47 to −0.68, the trans slope is −0.27 to −0.31 in the low tercile and −0.68 to −0.73 above it.
+  - T8 and T12: the local scenario datasets keep 16 to 23 genes after gating, and their intervals span about −0.8 to +1. They cannot separate the scenarios; this needs `artefact_null.sub`.
+
 ## Rerun note
 
 Commit 1ffbccb changes `fit_dispersion(method = "weighted")` (Appendix A). It needs a rerun of Section 2.3 (`SPLIT.FITS.W` and the weighted columns of `GENE.TABLE`) and of the weighted columns of `BOOT.CONTRASTS` and `PR` with every table read from them, and resubmission of `gene_boot` and `gene_perm`. `SPLIT.FITS.W` can be refitted locally; the bootstrap and null columns need the cluster. The NB results are unchanged. The other check commits change no code in `R/functions.R`, `analysis/analysis.R` or the pipeline's cluster scripts, so no section or pipeline cluster job needs a rerun. The checks run as follows:
