@@ -151,6 +151,7 @@ Each estimator's own slope is not zero even for gamma factors (cis −0.03 to �
   - T0: trimmed φ falls below the gene's NB 5th percentile in 0.33 (Pc) and 0.17 (Pe) of 30 genes, against 0.03 to 0.07 in the hybrid alleles (nominal 0.05).
   - T2 removes 3 Pc, 2 Pe and 4 hybrid cells. The trans leak slope falls from 0.114 to 0.038 (same cells) and from 0.122 to 0.052 (disjoint); cis stays at 0.002 to 0.010. The parental Cox–Reid/moment gap at φ̂ ≥ 1 falls from −1.04 to −0.54 (Pc) and from −1.18 to −0.96 (Pe). Own slopes change little (−0.46 to −0.59).
     - The local T2 rule is not calibrated: with 50 replicates the 0.99 quantile of the maximum z is the largest null z, 6.93, which is the z of a cell trimmed once when the null trims it in 1 of 50 replicates. The removed cells have burdens of 2 to 6 of 300 genes, against null means of 0.04 to 0.28. They are mid-library cells (library quantile 0.15 to 0.82), with mitochondrial shares of 0.1 to 0.6%. The full array (200 replicates, every gene) is needed for a calibrated rule; T2 now marks a run with fewer than 1 / T2.FWER replicates as not calibrated.
+    - 11 of the 13 removed group-cells are L7 outliers (all 5 parental cells, 3 of the 4 hybrid cells). Doublet-score quantiles within the group are 0.19 to 0.83 (no doublet signature). Leaving out one parental cell at a time moves the same-cells trans leak from 0.114 to 0.099 to 0.105 (Pc) and 0.114 (Pe); the three Pc effects sum to about 0.038, half of the joint drop to 0.038. The four hybrid cells, also removed by T2, are not yet tested on their own.
   - T11: in parental genes with mean count ≥ 3 the top 5 cells carry more of φ than under the NB (Pc 0.154 against 0.100 at mean 3 to 10, 0.091 against 0.057 at ≥ 10; Pe 0.160 against 0.107 at 3 to 10). Hybrid bins with a null do not exceed it.
 - **Depth dependence (H2, H3).**
   - T3: φ in the lowest depth tercile exceeds φ on all cells by log2 0.82 (Pc), 1.28 (Pe), 0.43 (Hc) and 0.45 (He); the highest tercile lies below by 0.27 to 0.55. The NB null gives −0.08 to 0.01.
@@ -162,6 +163,22 @@ Each estimator's own slope is not zero even for gamma factors (cis −0.03 to �
   - T7b: thinning the parents to the hybrid allele depth leaves the own slopes at −0.61 (cis) and −0.63 to −0.70 (trans).
   - T9: on class 1 genes with mean count ≥ 3 in every group the own slopes are −0.37 (cis) and −0.70 (trans). By mean tercile the cis slope stays at −0.47 to −0.68, the trans slope is −0.27 to −0.31 in the low tercile and −0.68 to −0.73 above it.
   - T8 and T12: the local scenario datasets keep 16 to 23 genes after gating, and their intervals span about −0.8 to +1. They cannot separate the scenarios; this needs `artefact_null.sub`.
+
+## Status of the hypotheses (Nov 6)
+
+Findings to explain: (F1) Cox–Reid below the moment estimate in the parents' high-φ̂ bins; (F2) a variance term linear in the mean (a > 0) that grows with the mean; (F3) a trans leak slope of 0.12 in the disjoint arm; (F4) the negative own slopes of Δlog₂φ̂ on Δlog₂μ̂ (−0.5 to −0.6); and, new in T3, (F5) a higher φ̂ in low-depth cells.
+
+| Hypothesis | Tests | Status |
+|---|---|---|
+| E1. The NB shape carries mean differences into the dispersion | L2 (disjoint arm), L5 | cis: no (0.005, interval spans 0). trans: yes, 0.12 (disjoint), and 0.29 on raw Δφ (L5). Explained in part by H6. |
+| E2. Correlated mean and dispersion errors on shared cells (A10) | L2 same against disjoint arm | Not the source: same and disjoint slopes agree (trans 0.114 and 0.122). |
+| E3. A non-gamma expression factor biases Cox–Reid (B4) | L4 (A11) | Third moment below the gamma in every group (mean z −0.12 Pc, −0.71 Pe, −0.43 Hc). That is the bimodal-like direction in simulation, not lognormal. Contributes to F1 at an unknown size. |
+| H1. A few low-quality cells carry counts beyond the NB | L7, T0, T1, T2 | Partly. L7 finds 90 Pc, 91 Pe and 252 hybrid cells above the NB tally, with lower libraries. T1 finds no excess of cells with z > 3 on 300 genes. The flagged cells have low mitochondrial share and median doublet scores. Calibrated T0 to T2 need the array. |
+| H2. An additive component outside the offset (ambient RNA) | T4 (ρ), T3, T5, T12 (S1, S5) | Not supported as a source of φ̂: ρ is 0.008 to 0.027 and changes log₂φ̂ by at most 0.016. T5 is blocked (no empty droplets). T12 needs the array. F5 fits this hypothesis but does not single it out. |
+| H3. Counts scale non-proportionally with depth | L8, T4 (β), T6, T7a | Mean scaling: no; β is 0.97 to 0.98 and changes log₂φ̂ by at most 0.023. Offsets: open. scran lowers parental φ̂ by 0.23 log₂, a by 41 to 56%, and halves the parental trend. T7a departs from NB thinning in both directions. |
+| H4. The high-count cells are real expression states | T10, T1 cell state | Supported for nucleosome genes in every group (Jaccard 6 to 9 times random), and ribosome, ribosome biogenesis and heat response in the hybrids. The cell-cycle covariate was not read from the Section 7 checkpoint. |
+| H5. The negative Δφ/Δμ coupling is biology | T7b, T9, T8 | Not explained by any artefact tested. It survives depth matching (trans −0.63 to −0.70) and is strongest in class 1 genes with mean ≥ 3 (trans −0.70). T8 cannot yet compare it with artefact scenarios (16 to 23 genes locally). |
+| H6. Outlier cells cause the estimator differences | L3, L7, T2, T11, leave-one-out | Supported as a diffuse effect: removing the L7 cells cuts F1 by about 70% and F3 to 0.040. No single parental cell moves F3 by more than 0.015. |
 
 ## Rerun note
 
