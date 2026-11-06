@@ -234,6 +234,9 @@ if (is.null(T0.PARTS)) check_save("T1", NULL, "not run", headline = NOT.RUN, scr
 ##############################################################################
 ## T2. Cell-level QC sensitivity: the fits on the cells left by the T2 rule (header), against all cells
 if (is.null(T1.CELLS)) check_save("T2", NULL, "not run", headline = NOT.RUN, script = CHECK.SCRIPT) else {
+  # The rule resolves a familywise rate T2.FWER only when the null has at least 1 / T2.FWER replicates; with fewer, the threshold is the largest null z,
+  # which a cell trimmed in one replicate already sets ((1 - 1/R) / SD of one hit in R), so the rule then flags cells trimmed in one or two genes.
+  T2.R <- nrow(T0.BURDEN[[1]]); T2.CALIBRATED <- T2.R * T2.FWER >= 1
   RM <- lapply(setNames(ART.GROUPS, ART.GROUPS), function(k) which(T1.CELLS$z[T1.CELLS$group == k] > T1.SUM$threshold_T2[T1.SUM$group == k]))
   RM$Hc <- RM$He <- sort(union(RM$Hc, RM$He))
   KEEP.MATS <- lapply(setNames(ART.GROUPS, ART.GROUPS), function(k) if (length(RM[[k]])) ART.MATS[[k]][, -RM[[k]], drop = FALSE] else ART.MATS[[k]])
@@ -263,7 +266,8 @@ if (is.null(T1.CELLS)) check_save("T2", NULL, "not run", headline = NOT.RUN, scr
   }
   T2.BINS <- do.call(rbind, T2[!grepl("cis$|trans$", names(T2))]); T2.SLOPES <- do.call(rbind, T2[grepl("cis$|trans$", names(T2))]); rownames(T2.BINS) <- rownames(T2.SLOPES) <- NULL
   check_save("T2", list(removed = RM, bins = T2.BINS, slopes = T2.SLOPES, rule = sprintf("z above the %g quantile of the per-replicate maximum z (T1 threshold_T2)", 1 - T2.FWER)), ART.STATUS,
-             headline = c(sprintf("removed cells: %s", paste(sprintf("%s %d", ART.GROUPS, vapply(RM, length, integer(1))), collapse = ", ")),
+             headline = c(if (!T2.CALIBRATED) sprintf("not calibrated: %d null replicates, below 1 / T2.FWER = %g; the removed cells are those trimmed in a few genes that the null rarely trims", T2.R, 1 / T2.FWER),
+                          sprintf("removed cells: %s", paste(sprintf("%s %d", ART.GROUPS, vapply(RM, length, integer(1))), collapse = ", ")),
                           sprintf("%s, %s: leak slope %.4f (%.4f to %.4f); own slopes Cox-Reid %.3f, moment %.3f", T2.SLOPES$cells, T2.SLOPES$group, T2.SLOPES$slope, T2.SLOPES$boot_lo, T2.SLOPES$boot_hi,
                                   T2.SLOPES$slope_cr, T2.SLOPES$slope_mom),
                           sprintf("%s %s phi %s: log2(CR / moment) %.3f, trimming %.3f, a %.3f (a > 2 SE %.3f)", T2.BINS$cells, T2.BINS$group, T2.BINS$phi_cr, T2.BINS$median_log2_cr_over_mom,
