@@ -2643,10 +2643,16 @@ COV.DS   <- c("MIX.SC", "MIX.SE", "HYB.SC", "HYB.SE")
 YSC[COV.DS] <- Map(score_cell_cycle_by_cluster, YSC[COV.DS], DS.LABELS[COV.DS],
                    file.path(FIGURE.DIR, sprintf("extra/S_cell_cycle_scoring_%s.pdf", COV.DS)))
 
+# NonFerm is the glucose-repressed program of non-fermentative carbon use (glyoxylate cycle and fatty-acid beta-oxidation). A few cells far up this
+# program carry the parental trans leak in the estimator checks (docs/validation_checks.md), so the covariate diagnostic and the composition bound
+# below cover it alongside the three modules of fermentative growth.
 METABOLIC.GENE.SETS <- list(
   Glycolysis = go_gene_set("GO:0006096"),  # glycolytic process
   OXPHOS     = go_gene_set("GO:0006119"),  # oxidative phosphorylation
-  RiBi       = go_gene_set("GO:0042254"))  # ribosome biogenesis
+  RiBi       = go_gene_set("GO:0042254"),  # ribosome biogenesis
+  NonFerm    = union(go_gene_set("GO:0006097"), go_gene_set("GO:0006635")))  # glyoxylate cycle, fatty acid beta-oxidation
+stopifnot("every metabolic module needs at least 5 annotated genes" = all(lengths(METABOLIC.GENE.SETS) >= 5))
+MET.SCORE.NAMES <- paste0(names(METABOLIC.GENE.SETS), "1")   # AddModuleScore() appends 1 to each module name
 
 YSC[COV.DS] <- Map(score_modules_by_cluster, YSC[COV.DS], label = DS.LABELS[COV.DS],
                    pdf_path = file.path(FIGURE.DIR, sprintf("extra/S_metabolic_scoring_%s.pdf", COV.DS)),
@@ -2659,7 +2665,7 @@ YSC[COV.DS] <- Map(score_modules_by_cluster, YSC[COV.DS], label = DS.LABELS[COV.
 # state (discrete, joint k-means on the three metabolic module scores).
 # Run on the four datasets that feed CONTRAST.MATS directly.
 CC.AXIS   <- lapply(YSC[COV.DS], cell_cycle_continuum)
-MET.STATE <- lapply(YSC[COV.DS], metabolic_state_cluster)
+MET.STATE <- lapply(YSC[COV.DS], metabolic_state_cluster, score_names = MET.SCORE.NAMES)
 
 COV.DIAG <- Map(covariate_noise_diagnostic, CONTRAST.MATS[COV.DS], CONTRAST.EXPOS[COV.DS], CONTRAST.FITS[COV.DS],
                 CC.AXIS, MET.STATE, DS.LABELS[COV.DS])
@@ -2675,8 +2681,9 @@ dev.off()
 # composition difference by the matching 7.7 noise-association effect size to bound the
 # expected noise shift, in residual-SD units (bound_sd = |d| x effect size, about rho x d), that a
 # composition difference of that size could produce. The bound, not the p-value, is the informative
-# output: with thousands of cells any test rejects.
-MET.SCORE <- lapply(YSC[COV.DS], function(o) as.matrix(o[[c("Glycolysis1", "OXPHOS1", "RiBi1")]]))
+# output: with thousands of cells any test rejects. Each genome is also compared between its parent and its hybrid allele
+# (COMP.BOUND.TRANS), the composition difference that the trans contrast carries.
+MET.SCORE <- lapply(YSC[COV.DS], function(o) as.matrix(o[[MET.SCORE.NAMES]]))
 
 CC.SHARED.PARENT <- cell_cycle_continuum_shared(YSC$MIX.SC, YSC$MIX.SE)
 CC.SHARED.HYBRID <- cell_cycle_continuum_shared(YSC$HYB.SC, YSC$HYB.SE)
@@ -2684,16 +2691,27 @@ CC.SHARED.HYBRID <- cell_cycle_continuum_shared(YSC$HYB.SC, YSC$HYB.SE)
 COMP.BOUND.PARENT <- species_composition_report(CC.SHARED.PARENT$x1, CC.SHARED.PARENT$x2, MET.SCORE$MIX.SC, MET.SCORE$MIX.SE, COV.DIAG$MIX.SC, COV.DIAG$MIX.SE, "Sc vs Se parent")
 COMP.BOUND.HYBRID <- species_composition_report(CC.SHARED.HYBRID$x1, CC.SHARED.HYBRID$x2, MET.SCORE$HYB.SC, MET.SCORE$HYB.SE, COV.DIAG$HYB.SC, COV.DIAG$HYB.SE, "Hybrid, Sc vs Se allele", paired = TRUE)
 
-fig_pdf("extra/S_species_composition_bound.pdf", 8, 5)
-par(mfrow = c(1, 2), mar = c(8, 4.5, 3, 1))
+# Parent against hybrid, one genome at a time. The trans contrast compares the parental cultures with the hybrid culture, so a difference in cell-state
+# composition between the cultures enters trans directly, while the cis contrast compares two alleles in the same cells and shares their state. Each
+# genome is compared in its parent and in its hybrid allele (different cells, so the rank-sum test). Module scores come from each object's own
+# AddModuleScore() control genes, so a shift between objects is approximate, as in the Sc against Se comparison of the parents.
+CC.SHARED.GENOME <- list(SC = cell_cycle_continuum_shared(YSC$MIX.SC, YSC$HYB.SC), SE = cell_cycle_continuum_shared(YSC$MIX.SE, YSC$HYB.SE))
+COMP.BOUND.TRANS <- rbind(
+  species_composition_report(CC.SHARED.GENOME$SC$x1, CC.SHARED.GENOME$SC$x2, MET.SCORE$MIX.SC, MET.SCORE$HYB.SC, COV.DIAG$MIX.SC, COV.DIAG$HYB.SC, "Sc parent vs hybrid Sc allele"),
+  species_composition_report(CC.SHARED.GENOME$SE$x1, CC.SHARED.GENOME$SE$x2, MET.SCORE$MIX.SE, MET.SCORE$HYB.SE, COV.DIAG$MIX.SE, COV.DIAG$HYB.SE, "Se parent vs hybrid Se allele"))
+
+fig_pdf("extra/S_species_composition_bound.pdf", 8, 9)
+par(mfrow = c(2, 2), mar = c(8, 4.5, 3, 1))
 barplot(setNames(COMP.BOUND.PARENT$bound_sd, COMP.BOUND.PARENT$axis), las = 2, col = COLOR.GREY[["mid"]], border = NA,
         ylab = "bound on expected noise shift (residual SD units)", main = "Sc vs Se parent")
 barplot(setNames(COMP.BOUND.HYBRID$bound_sd, COMP.BOUND.HYBRID$axis), las = 2, col = COLOR.GREY[["mid"]], border = NA,
         ylab = "bound on expected noise shift (residual SD units)", main = "Hybrid, Sc vs Se allele")
+for (lb in unique(COMP.BOUND.TRANS$label)) { x <- COMP.BOUND.TRANS[COMP.BOUND.TRANS$label == lb, ]
+  barplot(setNames(x$bound_sd, x$axis), las = 2, col = COLOR.GREY[["mid"]], border = NA, ylab = "bound on expected noise shift (residual SD units)", main = lb) }
 dev.off()
 
 # Checkpoint
-save(CC.AXIS, MET.STATE, COV.DIAG, CC.SHARED.PARENT, CC.SHARED.HYBRID, COMP.BOUND.PARENT, COMP.BOUND.HYBRID,
+save(CC.AXIS, MET.STATE, MET.SCORE, COV.DIAG, CC.SHARED.PARENT, CC.SHARED.HYBRID, CC.SHARED.GENOME, COMP.BOUND.PARENT, COMP.BOUND.HYBRID, COMP.BOUND.TRANS,
      file = ckpt_path(7))
 
 console_start(8)
