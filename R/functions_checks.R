@@ -945,3 +945,65 @@ reference_match <- function(cit, rec) {
              title_word_share = if (length(tw)) mean(tw %in% rw) else NA_real_, record_title = rec$title, record_journal = rec$journal, record_year = rec$year,
              record_volume = rec$volume, record_page = rec$page, record_authors = rec$authors, error = rec$error)
 }
+
+## ============================================================
+## State-conditioned dispersion (state_conditioned.R)
+## ============================================================
+
+## state_cr_glm: the NB dispersion of counts y with log E[y] = off + X b, phi the maximizer over log(phi) of the Cox-Reid adjusted profile likelihood
+## sum NB loglik(y; m(b_phi), phi) - 1/2 log det(X' W X), W = m / (1 + phi m), with b_phi from IRLS at each phi (warm-started from the previous phi). With X a
+## single column of ones this is the pipeline's Cox-Reid fit, except that the mean is the NB maximum likelihood value instead of the ratio sum(y) /
+## sum(exp(off)); state_conditioned.R fits both models with this function so that the covariates are the only difference. phi = 0 (the Poisson limit)
+## when the adjusted likelihood at 0 is at least its interior maximum. Returns phi, the adjusted log likelihood at phi and the coefficients.
+state_cr_glm <- function(y, off, X, lrange = -rev(LOG.THETA.RANGE), maxit = 50, tol = 1e-8) {
+  stopifnot(is.numeric(y), all(y >= 0), length(off) == length(y), is.matrix(X), nrow(X) == length(y))
+  b <- c(log(sum(y) / sum(exp(off))), rep(0, ncol(X) - 1)); lfy <- lgamma(y + 1)
+  irls <- function(phi) {
+    for (it in seq_len(maxit)) {
+      lp <- off + drop(X %*% b); m <- exp(lp); w <- m / (1 + phi * m)
+      bn <- tryCatch(drop(solve(crossprod(X, w * X), crossprod(X, w * (lp - off + (y - m) / m)))), error = function(e) NULL)
+      if (is.null(bn) || any(!is.finite(bn))) return(FALSE)
+      done <- max(abs(bn - b)) < tol; b <<- bn
+      if (done) break
+    }
+    TRUE
+  }
+  adj_ll <- function(phi) {
+    if (!irls(phi)) return(-Inf)
+    m <- exp(off + drop(X %*% b)); w <- m / (1 + phi * m)
+    ll <- if (phi == 0) sum(y * log(m) - m - lfy) else { k <- 1 / phi; sum(lgamma(y + k) - lgamma(k) - lfy + k * log(k / (k + m)) + y * log(m / (k + m))) }
+    ld <- determinant(crossprod(X, w * X), logarithm = TRUE)$modulus
+    ll - 0.5 * as.numeric(ld)
+  }
+  if (sum(y) == 0) return(list(phi = NA_real_, adj_ll = NA_real_, coef = rep(NA_real_, ncol(X))))
+  ll0 <- adj_ll(0); b0 <- b
+  opt <- optimize(function(lp) adj_ll(exp(lp)), lrange, maximum = TRUE, tol = 1e-4)
+  if (!is.finite(opt$objective) || ll0 >= opt$objective) { b <- b0; return(list(phi = 0, adj_ll = ll0, coef = b0)) }
+  phi <- exp(opt$maximum); val <- adj_ll(phi)                 # refit at the maximum, so b belongs to it
+  list(phi = phi, adj_ll = val, coef = b)
+}
+
+## state_gene: one gene in every group, its dispersion without and with the cell-state covariates. totals[[k]] is a cells x modules matrix of each module's
+## summed counts per cell (in the hybrid cells both alleles together, so the state is the cell's and the two alleles share it); members[[s]] holds the
+## genes of module s. The gene's own counts are left out of every module it belongs to, so its own variance never defines its state. Each covariate is
+## log2((module counts + 0.5) / offset), standardized within the group; a constant covariate is dropped. Both fits take the group's share correction,
+## (phi - eta) / (1 + eta) truncated at zero, as the pipeline does. Returns, per group, mu (ratio estimate), mbar, phi_pipe (fit_dispersion(), the
+## pipeline fit), phi0 (state_cr_glm(), intercept only), phiZ (with the covariates), lr (twice the gain in adjusted log likelihood) and one coefficient
+## per module (change in log mean per SD of the state score).
+state_gene <- function(g, mats, expos, eta, totals, members) {
+  out <- c()
+  for (k in names(mats)) {
+    y <- as.numeric(mats[[k]][g, ]); e <- expos[[k]]
+    own <- if (k %in% c("Hc", "He")) as.numeric(mats$Hc[g, ]) + as.numeric(mats$He[g, ]) else y
+    Z <- vapply(names(members), function(s) log2(totals[[k]][, s] - (if (g %in% members[[s]]) own else 0) + 0.5) - log2(e), numeric(length(e)))
+    Z <- scale(Z); keep <- apply(Z, 2, function(v) all(is.finite(v)))
+    f0 <- state_cr_glm(y, log(e), matrix(1, length(y), 1))
+    fz <- state_cr_glm(y, log(e), cbind(1, Z[, keep, drop = FALSE]))
+    corr <- function(p) if (is.finite(p)) max(0, (p - eta[[k]]) / (1 + eta[[k]])) else NA_real_
+    beta <- setNames(rep(NA_real_, length(members)), names(members)); beta[keep] <- fz$coef[-1]
+    mu <- sum(y) / sum(e)
+    out[paste(k, c("mu", "mbar", "phi_pipe", "phi0", "phiZ", "lr", paste0("beta_", names(members))), sep = ".")] <-
+      c(mu, mu * mean(e), fit_dispersion(y, e, eta[[k]], "NB")[["disp"]], corr(f0$phi), corr(fz$phi), 2 * (fz$adj_ll - f0$adj_ll), beta)
+  }
+  out
+}
