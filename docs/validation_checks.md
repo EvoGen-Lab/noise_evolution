@@ -190,6 +190,23 @@ Clustering cells on expression and then measuring expression variance within the
   - Synthetic test (400 genes; one module of 30 genes loaded on a planted state, factor exp(0.6 s) in Pc): the module's genes fall by median log₂ −1.48, their coefficient is 0.54 (planted 0.6, attenuated by the noisy score), and every other gene and group moves by at most 0.02 in median.
   - Single-gene test: with intrinsic φ 0.2 and the state planted, φ₀ is 0.58 and φ_Z 0.22. With no state effect, the median log₂(φ_Z / φ₀) is 0.001. The intercept-only fit agrees with the pipeline fit to a median of 0.0002 in log₂.
 
+## Methods revision 18037 in the code (Nov 10)
+
+The code now follows the methods artifact at revision 18037 (the repository copy `docs/methods.md` is still revision 17945).
+
+- **Resolution gate.** The three LRT classes (`CLASS.ALPHA`, `CLASS.EPS`) are gone. A group is resolved when at most `RESOLVED.ZERO.MAX` = 2.5% of its bootstrap replicates refit to zero (`zero_<dataset>` from `gene_boot`). Before the jobs, `GATES` say only which contrasts the fits define. After the bootstrap, a defined contrast whose groups are not all resolved keeps its estimate and interval and loses its p-value before BH (`.QUANTITY.RESOLVE`). The matched set `GENES` is set after the bootstrap. `FIT.COUNTS`, `RESOLUTION.COUNTS` and `RESOLUTION.SENSITIVITY` replace `CLASS.COUNTS` and `CLASS.SENSITIVITY`, and the flags `BOOT.ZERO.FLAG` / `_zeroflag` are gone.
+- **Likelihood bounds.** `dispersion_bound_stats()` gives the lower and upper one-sided 95% bounds at 2.71 (`DISP_LOWER`, `DISP_UPPER`). `BOUNDS.CALLS` and `BOUNDS.SEPARATION` record, for total and cis with one resolved group, whether the resolved group's lower bound exceeds the other's upper bound.
+- **Shifted bootstrap nulls.** Every dispersion, burst size and kinetic balance null resamples the parents and the undivided hybrid cells (`NULL.DRAWS`, `N.SIM` draws, seed `SEED.NULL`). It refits every group with the share terms refit per draw, and multiplies each refitted dispersion by its null-to-fitted ratio. The mean nulls are unchanged.
+- **Burst size partition.** A fourth partition at `f_bsize` (HYC.Z / HYT.Z; 21 datasets) fits the burst size mean and dispersion on the same cells. Its gamma is pooled over genes resolved in the pilot (`PILOT.RESOLVED`), as is kinetic balance's. `kbalsup` is removed.
+- **Draws.** `make_draws()` resamples the undivided hybrid cells once, and each copy keeps its partition memberships. It no longer stratifies by partition, for the bootstrap and the nulls alike.
+- **Checks.** These ran locally and passed:
+  - `analysis/contrast_functions_check.R`, which now includes the identity that the shifted log2 null equals the bootstrap draws minus the estimate;
+  - `cox_reid_check.R`, where the bounds cover at about 95% each;
+  - `share_ploidy_check.R` and `fit_dispersion_check.R`;
+  - a synthetic run of the new Section 2.3 code with the real jobs' functions.
+  - One local calibration task also ran. `calib_dataset()` now masks unresolved p-values and keeps the unmasked ones in `_p_all`, and checks_sim reports them as D1_boundary.
+- **Not changed.** The power analysis (Section 10) still builds its own permutation nulls for the dispersion contrasts (`R/functions_power.R`), not the shifted bootstrap.
+
 ## Rerun note
 
 Commit 1ffbccb changes `fit_dispersion(method = "weighted")` (Appendix A). It needs a rerun of Section 2.3 (`SPLIT.FITS.W` and the weighted columns of `GENE.TABLE`) and of the weighted columns of `BOOT.CONTRASTS` and `PR` with every table read from them, and resubmission of `gene_boot` and `gene_perm`. `SPLIT.FITS.W` can be refitted locally; the bootstrap and null columns need the cluster. The NB results are unchanged. The other check commits change no code in `R/functions.R`, `analysis/analysis.R` or the pipeline's cluster scripts, so no section or pipeline cluster job needs a rerun. The checks run as follows:

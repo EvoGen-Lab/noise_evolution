@@ -147,16 +147,17 @@ art_sim_dataset <- function(fits, expos, genes, scenario, par1 = NA, par2 = NA, 
 })
 
 ## art_gene_core: the per-gene fits that the signature of a dataset is built from, for one gene: in every group the all-cells Cox-Reid fit (mu, mbar, phi)
-## with its dispersion class, the trimming statistic and excess share (art_gene_stats() without strata or thinning), the linear term a of L6 with its SE,
+## with bound_pos (1 when the lower likelihood bound on phi is above zero: phi > 0 and the boundary LRT above BOUND.CRIT, dispersion_bound_stats(); this
+## needs no bootstrap and stands in for the pipeline's resolution, which these Section 1 checks cannot run), the trimming statistic and excess share (art_gene_stats() without strata or thinning), the linear term a of L6 with its SE,
 ## and the disjoint arm (mean on half A, phi on half B). Returns a named vector group.quantity.
 art_gene_core <- function(g, mats, expos, eta, halves, frac) {
   out <- c()
   for (k in ART.GROUPS) {
     y <- as.numeric(mats[[k]][g, ]); e <- expos[[k]]; A <- halves[[k]]; B <- setdiff(seq_along(e), A)
     st <- art_gene_stats(y, e, eta[[k]], frac, rep(1:3, length.out = length(e)))
-    cl <- dispersion_class_stats(y, e, eta[[k]])[["class"]]
+    cl <- as.numeric(dispersion_bound_stats(y, e, eta[[k]])[["disp_lower"]] > 0)
     le <- linear_excess_gene(1, matrix(y, 1), e)
-    out[paste(k, c("mu", "mbar", "phi", "class", "log2_trim", "excess_frac", "a", "a_se", "mu_A", "phi_B"), sep = ".")] <-
+    out[paste(k, c("mu", "mbar", "phi", "bound_pos", "log2_trim", "excess_frac", "a", "a_se", "mu_A", "phi_B"), sep = ".")] <-
       c(st[c("mu", "mbar", "phi")], cl, st[c("log2_trim", "excess_frac")], le[c("a", "a_se")], sum(y[A]) / sum(e[A]), fit_dispersion(y[B], e[B], eta[[k]])[["disp"]])
   }
   out
@@ -165,7 +166,7 @@ art_gene_core <- function(g, mats, expos, eta, halves, frac) {
 ## art_signature: the signature of one dataset (observed or simulated) from art_gene_core() rows (core, genes x columns): by group and mean-count bin the
 ## median trimming statistic and excess share and the median a; per group the Spearman correlation of a with the mean and the trend of log2 phi on log2 mu
 ## across genes (phi > 0); and the own slopes of Delta log2 phi on Delta log2 mu for cis and trans in the same-cell and disjoint arms, on genes whose groups
-## all have phi > 0 and dispersion class 1 (the pipeline's gate for log2 contrasts), with a gene-bootstrap interval (B draws, indices drawn first).
+## all have phi > 0 and a lower likelihood bound above zero (bound_pos, the bootstrap-free stand-in for the pipeline's resolution), with a gene-bootstrap interval (B draws, indices drawn first).
 art_signature <- function(core, cbar, mbar_breaks, B = 200, seed = 1) {
   bins <- list(); grp <- list()
   for (k in ART.GROUPS) {
@@ -184,7 +185,7 @@ art_signature <- function(core, cbar, mbar_breaks, B = 200, seed = 1) {
   for (arm in c("same", "disjoint")) {
     qm <- if (arm == "same") "mu" else "mu_A"; qp <- if (arm == "same") "phi" else "phi_B"
     L <- lapply(setNames(ART.GROUPS, ART.GROUPS), function(k) log2(lmu(k, qm)))
-    P <- lapply(setNames(ART.GROUPS, ART.GROUPS), function(k) ifelse(core[, paste0(k, ".", qp)] > 0 & core[, paste0(k, ".class")] %in% 1, log2(core[, paste0(k, ".", qp)]), NA_real_))
+    P <- lapply(setNames(ART.GROUPS, ART.GROUPS), function(k) ifelse(core[, paste0(k, ".", qp)] > 0 & core[, paste0(k, ".bound_pos")] %in% 1, log2(core[, paste0(k, ".", qp)]), NA_real_))
     for (md in c("cis", "trans")) {
       x <- if (md == "cis") L$Hc - L$He else (L$Pc - L$Pe) - (L$Hc - L$He); y <- if (md == "cis") P$Hc - P$He else (P$Pc - P$Pe) - (P$Hc - P$He)
       ok <- is.finite(x) & is.finite(y); x <- x[ok]; y <- y[ok]

@@ -10,7 +10,7 @@
 ### Definitions, fixed before any result (checked against estimator_leak.R; see results/checks/T0_audit.md):
 ###   trimming    the top ceiling(0.005 n) cells of a fit by scaled count y / O are left out (5 of 834 Pc, 7 of 1240 Pe, 15 of 2804 hybrid cells);
 ###   own slope   the OLS slope of Delta log2 phi (Cox-Reid) on Delta log2 mu across genes; T8, T9 and T12 keep genes whose groups all have phi > 0 and
-###               dispersion class 1 (the pipeline's gate for log2 contrasts);
+###               a lower likelihood bound on phi above zero (bound_pos, the bootstrap-free stand-in for the pipeline's resolution);
 ###   leak slope  the slope of [Delta log2 phi (Cox-Reid) - Delta log2 phi (moment)] on Delta log2 mu, equal to the Cox-Reid own slope minus the moment
 ###               own slope on the same genes;
 ###   a           the coefficient of A_i = M_i (1 - p_i) in E[(y - M)^2 - A_i] = a A_i + phi B_i (linear_excess_gene()), a variance term linear in the mean.
@@ -77,7 +77,7 @@ writeLines(c("# T0 audit: definitions and the earlier NB baseline", "",
   "Definitions in estimator_leak.R (checked in the code):", "",
   sprintf("- Trimming (L3): `estimator_pair_gene(trim = 0.005)` leaves out the top `ceiling(0.005 n)` cells by scaled count y/O within each fit's cells, at least one. On these data that is %s cells (the handoff inferred 4, 6 and 14). Mean and dispersion are both refitted without them.",
           paste(sprintf("%d of %d %s", ceiling(ART.FRAC * NCELLS), NCELLS, names(NCELLS)), collapse = ", ")),
-  "- Own slope: `leak_regression()` returns `slope_cr` and `slope_mom`, the OLS slopes of Delta log2 phi on Delta log2 mu for each estimator, on genes with phi > 0 in every group of the contrast. L2 applied no class gate.",
+  "- Own slope: `leak_regression()` returns `slope_cr` and `slope_mom`, the OLS slopes of Delta log2 phi on Delta log2 mu for each estimator, on genes with phi > 0 in every group of the contrast. L2 applied no resolution gate.",
   "- Leak slope: the OLS slope of [Delta log2 phi (Cox-Reid) - Delta log2 phi (moment)] on Delta log2 mu. On the same genes it equals slope_cr - slope_mom exactly, because OLS is linear in the response.",
   "- a (L6): the coefficient of A_i = M_i (1 - p_i) in the weighted regression of z_i = (y_i - M_i)^2 - A_i on A_i and B_i (`linear_excess_gene()`), so Var(y) = (1 + a) M + phi M^2.", "",
   "The NB baseline that the console comparison used (L3 against synthetic data in this session):", "",
@@ -415,14 +415,14 @@ if (is.null(SCEN.RES)) { check_save("T8", NULL, "not run", headline = NOT.RUN, s
 }
 
 ##############################################################################
-## T9. Coupling by information: own slopes by mean-count tercile and on class-1 genes with mean count >= 3 in every group; frequency-driven share
+## T9. Coupling by information: own slopes by mean-count tercile and on genes with a positive lower bound and mean count >= 3 in every group; frequency-driven share
 # Delta log2 phi = -Delta log2 mu for a change in burst frequency at fixed burst size and 0 for a change in burst size at fixed frequency, so -slope reads
 # roughly as the frequency-driven share. This is a rough reading: it assumes the two kinds of change are uncorrelated with each other across genes.
 MB.GENE <- rowMeans(ART.CORE[, paste0(ART.GROUPS, ".mbar")]); TERC.G <- cut(rank(MB.GENE, ties.method = "first"), 3, labels = c("low", "mid", "high"))
-HI <- Reduce(`&`, lapply(ART.GROUPS, function(k) ART.CORE[, paste0(k, ".mbar")] >= 3 & ART.CORE[, paste0(k, ".class")] %in% 1))
+HI <- Reduce(`&`, lapply(ART.GROUPS, function(k) ART.CORE[, paste0(k, ".mbar")] >= 3 & ART.CORE[, paste0(k, ".bound_pos")] %in% 1))
 T9 <- rbind(cbind(genes_in = "all", DATA.SIG$slopes),
             do.call(rbind, lapply(levels(TERC.G), function(t) cbind(genes_in = paste("mean-count tercile", t), art_signature(ART.CORE[TERC.G == t, ], C.BAR, MBAR.BREAKS, seed = SEED.ART + 17)$slopes))),
-            cbind(genes_in = "class 1, mean count >= 3 in every group", art_signature(ART.CORE[HI, , drop = FALSE], C.BAR, MBAR.BREAKS, seed = SEED.ART + 18)$slopes),
+            cbind(genes_in = "lower bound above zero, mean count >= 3 in every group", art_signature(ART.CORE[HI, , drop = FALSE], C.BAR, MBAR.BREAKS, seed = SEED.ART + 18)$slopes),
             cbind(genes_in = "parents thinned to hybrid depth (T7b)", TH.SIG$slopes))
 T9$frequency_share_rough <- pmin(pmax(-T9$slope, 0), 1)
 check_save("T9", T9, "run", headline = sprintf("%s, %s %s: own slope %.3f (%.3f to %.3f), %d genes; rough frequency-driven share %.2f", T9$genes_in, T9$arm, T9$contrast, T9$slope, T9$lo, T9$hi, T9$genes,

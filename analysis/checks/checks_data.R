@@ -13,7 +13,7 @@ library(parallel)
 CHECK.SCRIPT  <- "analysis/checks/checks_data.R"
 CORES         <- if (.Platform$OS.type == "windows") 1 else max(1, detectCores() - 1)
 SEED.CHECKS   <- 3026
-N.CHECK.GENES <- 300      # genes in the local bootstrap and refit subsamples (random class-1 genes of the matched set)
+N.CHECK.GENES <- 300      # genes in the local bootstrap and refit subsamples (random genes of the matched set, resolved in every dataset)
 N.CHECK.BOOT  <- 200      # bootstrap replicates per gene in the local bootstrap
 set.seed(SEED.SECTION + 21)
 
@@ -107,7 +107,7 @@ if (have1) {
 ## A11. Third moment of the expression factor against the gamma (Methods: Separate partitions; Notes for revision: non-gamma expression factors)
 # The mean and dispersion errors of one group are uncorrelated on shared cells only when the factor's third central moment equals the gamma's 2 phi^2;
 # the excess E[(a - 1)^3] - 2 phi^2 sets their covariance and the bias of the NB fit under a non-gamma factor (B4). Factorial moments estimate it for
-# every class-1 gene (factor_moment_table()). Per-gene third moments are noisy and skewed at these cell numbers, so the subsample genes are tested
+# every gene resolved in the dataset (factor_moment_table()). Per-gene third moments are noisy and skewed at these cell numbers, so the subsample genes are tested
 # against NB data simulated at their own fitted mean and variance on the same offsets (factor_excess_test(), A11.SIM draws), which carries the
 # estimator's finite-sample bias into the null; the share of genes with p < 0.05 is read against 0.05, and the observed k3 / (2 phi^2) against its
 # null mean. One gene's test has little power (simulated lognormal factors with phi 0.5 and 2000 cells: p < 0.05 in about 13% of genes), so the group
@@ -118,7 +118,7 @@ A11 <- list(table = list(), tests = list(), summary = list())
 for (k in A11.GROUPS) {
   m <- if (k == "HYB.SC") HYB.SC else if (k == "HYB.SE") HYB.SE else if (have1) get(k, E1.ENV) else NULL
   if (is.null(m)) next
-  e <- CONTRAST.EXPOS[[k]]; cls1 <- rownames(SPLIT.FITS[[k]])[SPLIT.FITS[[k]]$CLASS %in% 1]
+  e <- CONTRAST.EXPOS[[k]]; cls1 <- GENE.TABLE$gene[GENE.TABLE[[paste0(k, ".resolved")]] %in% TRUE]     # genes whose dispersion is resolved in this dataset
   tab <- factor_moment_table(m, e, genes = cls1)
   tg <- intersect(SUB.GENES, cls1)
   tst <- with_local_seed(SEED.CHECKS + 9, t(vapply(tg, factor_excess_test, numeric(6), mat = m, expo = e, B = A11.SIM)))
@@ -132,7 +132,7 @@ for (k in A11.GROUPS) {
 }
 A11 <- lapply(A11, function(x) do.call(rbind, x))
 if (is.null(A11$summary)) check_save("A11", NULL, "not run", headline = "count matrices missing", script = CHECK.SCRIPT) else
-  check_save("A11", A11, "run", headline = sprintf("%s: k3 / (2 phi^2) pooled over %d class-1 genes %.2f; tested %d genes: mean z %.2f (SE %.2f), median ratio %.2f against %.2f under a gamma factor, p < 0.05 in %.3f (above %.3f, below %.3f)",
+  check_save("A11", A11, "run", headline = sprintf("%s: k3 / (2 phi^2) pooled over %d resolved genes %.2f; tested %d genes: mean z %.2f (SE %.2f), median ratio %.2f against %.2f under a gamma factor, p < 0.05 in %.3f (above %.3f, below %.3f)",
                                                  A11$summary$dataset, A11$summary$genes, A11$summary$pooled_k3_over_gamma, A11$summary$tested, A11$summary$mean_z, A11$summary$mean_z_se, A11$summary$median_ratio,
                                                  A11$summary$median_null_ratio, A11$summary$share_p05, A11$summary$share_above, A11$summary$share_below),
              mc_error = sprintf("%d null draws per gene; binomial SE of a 5%% share %.3f", A11.SIM, A11$summary$share_p05_se[1]), script = CHECK.SCRIPT)
@@ -190,15 +190,14 @@ check_save("B5", B5, "run", headline = sprintf("%d genes: max |log2 difference| 
            mc_error = "exact", script = CHECK.SCRIPT)
 
 ##############################################################################
-## B6. Genes whose class or truncation the share correction changes
+## B6. Genes whose fit the share correction truncates at zero
 B6 <- list()
 for (k in FIT.GROUPS) {
   f <- SPLIT.FITS[[k]]
-  B6[[k]] <- data.frame(dataset = k, class_changed = sum(f$CLASS != f$CLASS_UNCORRECTED, na.rm = TRUE), truncated_by_correction = sum(f$DISP %in% 0 & f$DISP_APP > 0, na.rm = TRUE),
-                        from_class1 = sum(f$CLASS_UNCORRECTED %in% 1 & !(f$CLASS %in% 1)), row.names = NULL)
+  B6[[k]] <- data.frame(dataset = k, truncated_by_correction = sum(f$DISP %in% 0 & f$DISP_APP > 0, na.rm = TRUE), row.names = NULL)
 }
 B6 <- do.call(rbind, B6)
-check_save("B6", B6, "run", headline = sprintf("%s: class changed %d, truncated to zero by the correction %d", B6$dataset, B6$class_changed, B6$truncated_by_correction),
+check_save("B6", B6, "run", headline = sprintf("%s: truncated to zero by the correction %d", B6$dataset, B6$truncated_by_correction),
            mc_error = "exact counts", script = CHECK.SCRIPT)
 
 ##############################################################################
@@ -228,7 +227,7 @@ check_save("C2", C2, "run", headline = sprintf("slope of log variance on log n: 
 ##############################################################################
 ## C3. Equal precision of cis and trans at the pooled f: per-gene var_cis / var_trans from the bootstrap SEs, and gene-specific against pooled gamma
 C3 <- list()
-for (q in c("mean", "disp", "kbal")) {
+for (q in c("mean", "disp", "kbal", "bsize")) {
   r <- (BOOT.CONTRASTS[[paste0(q, "_cis_se")]] / BOOT.CONTRASTS[[paste0(q, "_trans_se")]])^2; r <- r[is.finite(r) & r > 0]
   C3[[q]] <- data.frame(quantity = q, genes = length(r), median_ratio = median(r), q25 = quantile(r, 0.25), q75 = quantile(r, 0.75), median_log2_ratio = median(log2(r)), row.names = NULL)
 }
@@ -239,8 +238,8 @@ check_save("C3", C3, "run", headline = sprintf("%s: var_cis/var_trans median %.3
 ##############################################################################
 ## C6. Depth balance of the cis and trans subsets, and stability of calls over 50 random partitions
 C6 <- local({
-  ks <- data.frame(partition = c("mean", "dispersion", "kinetic balance"),
-                   ks_p = vapply(list(SPLIT.IDX.MEAN, SPLIT.IDX.DISP, SPLIT.IDX.KBAL), function(s) suppressWarnings(ks.test(EXPO.HYB[s$c], EXPO.HYB[s$t])$p.value), numeric(1)))
+  ks <- data.frame(partition = c("mean", "dispersion", "kinetic balance", "burst size"),
+                   ks_p = vapply(list(SPLIT.IDX.MEAN, SPLIT.IDX.DISP, SPLIT.IDX.KBAL, SPLIT.IDX.BSIZE), function(s) suppressWarnings(ks.test(EXPO.HYB[s$c], EXPO.HYB[s$t])$p.value), numeric(1)))
   g <- intersect(GENES, BOOT.CONTRASTS$gene); bc <- BOOT.CONTRASTS[match(g, BOOT.CONTRASTS$gene), ]
   S <- check_streams(50, SEED.CHECKS + 16)
   calls <- mclapply(seq_len(50), split_mean_calls, genes = g, yc = HYB.SC, ye = HYB.SE, expo = EXPO.HYB.SC, depth = EXPO.HYB, f = SPLIT.FRAC$f_mean,
@@ -270,37 +269,41 @@ check_save("D9", D9, "run", headline = sprintf("%s: %d of %d at the floor %.2g; 
            mc_error = "exact counts", script = CHECK.SCRIPT)
 
 ##############################################################################
-## E2. Class counts and significant contrasts across the informativeness thresholds (Notes for revision: Informativeness thresholds)
-# Classes are re-derived from the stored statistics (dispersion_class()); a contrast counts as significant at BH q < 0.05 computed over the genes whose
-# groups all qualify under the setting. The upper bound was found at the analysis alpha, so other alphas move the class 2 boundary approximately.
+## E2. Tested and significant dispersion contrasts across resolution thresholds (Methods: Informative estimates)
+# A group is resolved when at most t of its bootstrap replicates refit to zero (RESOLVED.ZERO.MAX = 0.025 in the analysis). The zero fractions are stored per gene
+# and dataset in GENE.TABLE, and the unmasked null p-values in PERM.RESULTS, so every threshold is recomputed exactly: a contrast is tested when its fits define it
+# and every group is resolved at t, and significant at BH q < 0.05 over the genes tested at t.
 E2 <- list(counts = list(), significant = list())
-E2.SETTINGS <- expand.grid(alpha = c(0.01, 0.05, 0.10), eps = c(0.05, 0.1, 0.2))
-for (i in seq_len(nrow(E2.SETTINGS))) {
-  al <- E2.SETTINGS$alpha[i]; ep <- E2.SETTINGS$eps[i]
-  cls <- sapply(FIT.GROUPS, function(k) dispersion_class(SPLIT.FITS[[k]]$LRT, SPLIT.FITS[[k]]$DISP, SPLIT.FITS[[k]]$DISP_UPPER, SPLIT.FITS[[k]]$MBAR, al, ep))
-  rownames(cls) <- rownames(SPLIT.FITS[[1]])
-  E2$counts[[i]] <- data.frame(alpha = al, eps = ep, dataset = FIT.GROUPS, class1 = colSums(cls == 1, na.rm = TRUE), class2 = colSums(cls == 2, na.rm = TRUE),
-                               class3 = colSums(cls == 3, na.rm = TRUE), row.names = NULL)
+E2.T <- c(0.01, 0.025, 0.05, 0.10)
+PR.ALL <- PERM.RESULTS[match(GENE.TABLE$gene, PERM.RESULTS$gene), ]
+for (t in E2.T) {
+  res <- sapply(.CONTRAST.GROUPS, function(k) (GENE.TABLE[[paste0(k, ".zero_frac")]] <= t) %in% TRUE & (GENE.TABLE[[paste0(k, ".disp")]] > 0) %in% TRUE)
+  E2$counts[[as.character(t)]] <- data.frame(zero_frac_max = t, dataset = .CONTRAST.GROUPS, resolved = colSums(res), row.names = NULL)
   for (md in .OUT_MODES) {
-    gr <- .MODES[[.DISP_SOURCE[[md]]]]; cg <- cls[PR$gene, gr, drop = FALSE]
-    qual_log <- rowSums(cg == 1, na.rm = TRUE) == length(gr); qual_raw <- rowSums(cg == 1 | cg == 2, na.rm = TRUE) == length(gr)
-    pl <- PR[[paste0("disp_", md, "_p")]]; pr <- PR[[paste0("rdisp_", md, "_p")]]
-    E2$significant[[paste(i, md)]] <- data.frame(alpha = al, eps = ep, mode = md, log2_genes = sum(qual_log & is.finite(pl)), log2_sig = sum(p.adjust(pl[qual_log & is.finite(pl)], "BH") < 0.05),
-                                                 raw_genes = sum(qual_raw & is.finite(pr)), raw_sig = sum(p.adjust(pr[qual_raw & is.finite(pr)], "BH") < 0.05), row.names = NULL)
+    gr <- .MODES[[.DISP_SOURCE[[md]]]]; ok <- rowSums(res[, gr, drop = FALSE]) == length(gr)
+    pl <- PR.ALL[[paste0("disp_", md, "_p")]]; pr <- PR.ALL[[paste0("rdisp_", md, "_p")]]
+    tl <- ok & GENE.TABLE[[paste0("log_", md, "_valid")]] & is.finite(pl); tr <- ok & GENE.TABLE[[paste0("raw_", md, "_valid")]] & is.finite(pr)
+    E2$significant[[paste(t, md)]] <- data.frame(zero_frac_max = t, mode = md, log2_tested = sum(tl), log2_sig = sum(p.adjust(pl[tl], "BH") < 0.05),
+                                                 raw_tested = sum(tr), raw_sig = sum(p.adjust(pr[tr], "BH") < 0.05), row.names = NULL)
   }
 }
 E2 <- lapply(E2, function(x) do.call(rbind, x))
-x <- aggregate(cbind(log2_sig, raw_sig) ~ alpha + eps, E2$significant, sum)
-check_save("E2", E2, "run", headline = sprintf("alpha %g, eps %g: significant log2 dispersion contrasts %d, raw %d (all modes)", x$alpha, x$eps, x$log2_sig, x$raw_sig),
-           mc_error = "exact counts; genes outside the analysis gates carry no p-value, so only stricter settings are fully recomputed", script = CHECK.SCRIPT)
+x <- aggregate(cbind(log2_tested, log2_sig, raw_sig) ~ zero_frac_max, E2$significant, sum)
+check_save("E2", E2, "run", headline = sprintf("zero fraction at most %g: tested log2 dispersion contrasts %d, significant log2 %d, raw %d (all modes)", x$zero_frac_max, x$log2_tested, x$log2_sig, x$raw_sig),
+           mc_error = "exact counts from the stored zero fractions and null p-values", script = CHECK.SCRIPT)
 
 ##############################################################################
-## E3 (data arm) and E4. Genes above 2.5% zero replicates with a significant contrast; gene sets and exclusions per contrast and scale
-check_save("E3_data", BOOT.ZERO.FLAGGED, "run", headline = sprintf("%d flagged gene-contrasts, %d with q < 0.05", nrow(BOOT.ZERO.FLAGGED), sum(BOOT.ZERO.FLAGGED$q < 0.05, na.rm = TRUE)),
+## E3 (data arm) and E4. Defined contrasts left untested because a group is unresolved, likelihood-bound calls for one resolved group; gene sets and exclusions
+## per contrast and scale
+E3D <- list(unresolved = EXCLUDED.COUNTS[EXCLUDED.COUNTS$scale != "mean", c("contrast", "scale", "eligible", "tested", "unresolved")], bounds = BOUNDS.SEPARATION)
+check_save("E3_data", E3D, "run", headline = c(sprintf("%s %s: %d defined, %d tested, %d unresolved", E3D$unresolved$contrast, E3D$unresolved$scale, E3D$unresolved$eligible,
+                                                       E3D$unresolved$tested, E3D$unresolved$unresolved),
+                                               sprintf("%s: one group resolved in %d genes, likelihood bounds separate in %d", BOUNDS.SEPARATION$contrast,
+                                                       BOUNDS.SEPARATION$one_group_resolved, BOUNDS.SEPARATION$bounds_separate)),
            mc_error = "from gene_boot", script = CHECK.SCRIPT)
 write.csv(EXCLUDED.COUNTS, file.path(CHECK.DIR, "E4_excluded_counts.csv"), row.names = FALSE)
 write.csv(GENE.SET.SIZES, file.path(CHECK.DIR, "E4_gene_set_sizes.csv"), row.names = FALSE)
-write.csv(GENE.TABLE[, c("gene", grep("_valid$|^poisson_like_|^in_matched_set$|^inference_set$", names(GENE.TABLE), value = TRUE))], file.path(CHECK.DIR, "E4_gene_sets.csv"), row.names = FALSE)
+write.csv(GENE.TABLE[, c("gene", grep("_valid$|^resolved_|^in_matched_set$|^inference_set$", names(GENE.TABLE), value = TRUE))], file.path(CHECK.DIR, "E4_gene_sets.csv"), row.names = FALSE)
 check_save("E4", list(excluded = EXCLUDED.COUNTS, sizes = GENE.SET.SIZES), "code", headline = sprintf("tables written: E4_excluded_counts.csv, E4_gene_set_sizes.csv, E4_gene_sets.csv; matched set %d genes",
                                                                                                      sum(GENE.TABLE$in_matched_set)), script = CHECK.SCRIPT)
 
@@ -331,10 +334,10 @@ check_save("F5", F5, "run", headline = sprintf("observed on predicted: slope %.3
 ##############################################################################
 ## G1. Every number the text quotes, regenerated from the pipeline
 G1 <- local({
-  med_c <- median(SPLIT.FITS$HYB.SC$DISP[SPLIT.FITS$HYB.SC$CLASS %in% 1]); med_e <- median(SPLIT.FITS$HYB.SE$DISP[SPLIT.FITS$HYB.SE$CLASS %in% 1])
+  med_c <- median(GENE.TABLE$HYB.SC.disp[GENE.TABLE$HYB.SC.resolved]); med_e <- median(GENE.TABLE$HYB.SE.disp[GENE.TABLE$HYB.SE.resolved])
   med_c_all <- median(SPLIT.FITS$HYB.SC$DISP, na.rm = TRUE); med_e_all <- median(SPLIT.FITS$HYB.SE$DISP, na.rm = TRUE)
   nmin <- min(c(vapply(CONTRAST.EXPOS[c("MIX.SC", "MIX.SE", "HYB.SC")], length, integer(1)), PARTITION.REPORT$n_cis, PARTITION.REPORT$n_trans))
-  data.frame(quantity = c("c-bar-hat", "eta_Hc", "eta_He", "median phi Hc (class 1)", "median phi He (class 1)", "median phi Hc (all fits)", "median phi He (all fits)",
+  data.frame(quantity = c("c-bar-hat", "eta_Hc", "eta_He", "median phi Hc (resolved)", "median phi He (resolved)", "median phi Hc (all fits)", "median phi He (all fits)",
                           "correction term Hc (1 + phi) eta", "correction term He (1 + phi) eta", "phi below which (1 + phi) eta / phi > 1% (Hc)", "smallest group or partition (cells)"),
              text = c(0.5024, 7.4e-5, 7.5e-5, 0.150, 0.152, 0.150, 0.152, 8.5e-5, 8.6e-5, 0.0075, 800),
              pipeline = c(C.BAR, R.C, R.E, med_c, med_e, med_c_all, med_e_all, (1 + med_c) * R.C, (1 + med_e) * R.E, R.C / (0.01 - R.C), nmin), row.names = NULL)
@@ -345,10 +348,11 @@ check_save("G1", G1, "run", headline = sprintf("%s: text %g, pipeline %.4g", G1$
 
 ##############################################################################
 ## Local bootstrap of a gene subsample: A4 (data), A6, C7 (data) and D8
-# The indices are drawn first for every replicate (make_draws(), the same strata as gene_boot), so the hybrid partitions share their resampled cells.
+# The indices are drawn first for every replicate (make_draws(), as in gene_boot: the undivided hybrid cells resampled once, each copy keeping its partition
+# memberships), so the hybrid partitions share their resampled cells.
 # D8 refits each replicate twice from the same draws: with the share terms re-estimated on the resampled cells (the pipeline) and with the observed ones.
 NCELLS.CK <- vapply(CONTRAST.EXPOS[names(.DRAW.KEY)], length, integer(1))
-DRAWS.CK <- make_draws(NCELLS.CK, N.CHECK.BOOT, SEED.CHECKS + 30, hyc = SPLIT.IDX.MEAN$c, hyc_n = SPLIT.IDX.DISP$c, hyc_k = SPLIT.IDX.KBAL$c)
+DRAWS.CK <- make_draws(NCELLS.CK, N.CHECK.BOOT, SEED.CHECKS + 30, splits = list(HYC = SPLIT.IDX.MEAN$c, HYC.N = SPLIT.IDX.DISP$c, HYC.K = SPLIT.IDX.KBAL$c, HYC.Z = SPLIT.IDX.BSIZE$c))
 CK.GROUPS <- c(.CONTRAST.GROUPS, "HYB.COMB")
 MATS.CK <- lapply(setNames(CK.GROUPS, CK.GROUPS), function(k) as.matrix(CONTRAST.MATS[[k]][SUB.GENES, , drop = FALSE]))
 BOOT.CK <- mclapply(SUB.GENES, data_boot_gene, mats = MATS.CK, expos = CONTRAST.EXPOS, eta = SHARE.R, draws = DRAWS.CK, refit_share = TRUE, share_cells = SHARE.CELLS,
@@ -365,7 +369,7 @@ check_save("A4_data", A4D, "run",
 A6 <- col_quartiles(STATS.CK, grep("^(cor_zeta_theta|cor_kappa_mu|se_ratio_kappa_theta|se_ratio_logphi_logmu)\\.(MIX|HYB)\\.", colnames(STATS.CK)))
 check_save("A6", A6, "run", headline = sprintf("%s: median %.3f (IQR %.3f to %.3f)", rownames(A6), A6[, 2], A6[, 1], A6[, 3]),
            mc_error = sprintf("%d genes, %d replicates", length(SUB.GENES), N.CHECK.BOOT), script = CHECK.SCRIPT)
-C7D <- col_quartiles(STATS.CK, c("cor_mu_Hc_phi_He_kbal", "cor_mu_He_phi_Hc_kbal"))
+C7D <- col_quartiles(STATS.CK, c("cor_mu_Hc_phi_He_kbal", "cor_mu_He_phi_Hc_kbal", "cor_mu_Hc_phi_He_bsize", "cor_mu_He_phi_Hc_bsize"))
 check_save("C7_data", C7D, "run", headline = sprintf("%s: median %.3f (IQR %.3f to %.3f)", rownames(C7D), C7D[, 2], C7D[, 1], C7D[, 3]),
            mc_error = sprintf("SE of one gene's correlation about %.3f", 1 / sqrt(N.CHECK.BOOT - 3)), script = CHECK.SCRIPT)
 D8 <- local({

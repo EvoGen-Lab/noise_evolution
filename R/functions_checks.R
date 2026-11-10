@@ -205,18 +205,18 @@ a2_one <- function(i, streams, h = 1e-8, n_grid = 2000, tol = 1e-7) with_stream(
              grid_interior = j > 1 && j < n_grid)
 })
 
-## e1_row: grid row i of E1 (N, Mbar, offset CV, phi). NREP genes simulated as NB with that phi; dispersion_class_stats() gives the boundary LRT, the upper
-## likelihood bound and the class. Returns the rejection rate of the LRT (the size when phi = 0), the coverage of the upper bound (phi <= bound) and the
-## class shares, each with its binomial SE.
+## e1_row: grid row i of E1 (N, Mbar, offset CV, phi). NREP genes simulated as NB with that phi; dispersion_bound_stats() gives the boundary LRT and the
+## lower and upper likelihood bounds at BOUND.CRIT. Returns the rejection rate of the LRT at BOUND.CRIT (the size when phi = 0), the coverage of each one-sided
+## bound (phi <= upper, phi >= lower) and the share of genes whose lower bound is above zero, each with its binomial SE.
 e1_row <- function(i, grid, nrep, streams) with_stream(streams[[i]], {
   g <- grid[i, ]; s <- sqrt(log(1 + g$cv^2))
   st <- t(vapply(seq_len(nrep), function(r) {
-    O <- exp(rnorm(g$N, -s^2 / 2, s)); dispersion_class_stats(rpois(g$N, O * g$Mbar * sim_pos_factor(g$N, "gamma", 1, g$phi)), O)
-  }, numeric(5)))
-  ok <- is.finite(st[, "lrt"]); n <- sum(ok); rj <- mean(st[ok, "lrt"] > qchisq(1 - 2 * CLASS.ALPHA, 1)); cv_ <- mean(g$phi <= st[ok, "disp_upper"])
-  cls <- vapply(1:3, function(k) mean(st[ok, "class"] == k), numeric(1))
-  data.frame(g, n = n, reject = rj, reject_se = binom_se(rj, n), cover_upper = cv_, cover_se = binom_se(cv_, n),
-             class1 = cls[1], class2 = cls[2], class3 = cls[3], class_se_max = max(binom_se(cls, n)), phiMbar = g$phi * g$Mbar, row.names = NULL)
+    O <- exp(rnorm(g$N, -s^2 / 2, s)); dispersion_bound_stats(rpois(g$N, O * g$Mbar * sim_pos_factor(g$N, "gamma", 1, g$phi)), O)
+  }, numeric(4)))
+  ok <- is.finite(st[, "lrt"]); n <- sum(ok); rj <- mean(st[ok, "lrt"] > BOUND.CRIT); cv_ <- mean(g$phi <= st[ok, "disp_upper"]); cl_ <- mean(g$phi >= st[ok, "disp_lower"])
+  lp <- mean(st[ok, "disp_lower"] > 0)
+  data.frame(g, n = n, reject = rj, reject_se = binom_se(rj, n), cover_upper = cv_, cover_se = binom_se(cv_, n), cover_lower = cl_, cover_lower_se = binom_se(cl_, n),
+             lower_above_zero = lp, lower_above_zero_se = binom_se(lp, n), phiMbar = g$phi * g$Mbar, row.names = NULL)
 })
 
 ## b2_row: grid row i of B2 (sigma2_c, N). NREP sets of N hybrid cells with libraries resampled from the pool, true shares drawn as beta with variance
@@ -542,7 +542,7 @@ summary_by <- function(df, by, col, z = NULL, keys = NULL) {
 ## size_table: rejection rates of a vector of null p-values at each level, with binomial SEs and the Kolmogorov-Smirnov p-value of uniformity.
 size_table <- function(p, levels = c(0.05, 0.01, 0.001)) {
   p <- p[is.finite(p)]; n <- length(p)
-  if (n == 0) return(data.frame(n = 0))
+  if (n == 0) return(data.frame(n = 0, t(setNames(rep(NA_real_, length(levels)), paste0("reject_", levels))), t(setNames(rep(NA_real_, length(levels)), paste0("se_", levels))), ks_p = NA_real_))
   r <- vapply(levels, function(a) mean(p <= a), numeric(1))
   data.frame(n = n, t(setNames(r, paste0("reject_", levels))), t(setNames(binom_se(r, n), paste0("se_", levels))),
              ks_p = suppressWarnings(ks.test(p, "punif")$p.value))
@@ -572,9 +572,12 @@ calib_task_grid <- function() {
 ## calib_dataset: one task of the calibration array. G synthetic genes share one design (observed group sizes and offsets); each gene's per-genome mean is
 ## the grid mean times a lognormal spread (SD 0.3 on the log scale) and its dispersion the grid phi times the same spread, then the design's effects are
 ## applied. The datasets mirror analysis.R Section 2: share terms from the observed shares, ploidy_components() for sigma2_d and the summed-count
-## correction, three hybrid partitions at f, the NB fits of every dataset with the share corrections, permutation draws, and null_contrasts_one() with both
-## estimators. D3's pairing-preserving arm B of the trans mean null (perm_trans_pool_paired()) is evaluated on the same genes. D4c's private-variance
-## truncation is recorded per gene: the null simulation of an allele sets its private variance to zero when 1 + phi(1 + eta) + eta < 1 + sigma2_d.
+## correction, four hybrid partitions at f, the NB fits of every dataset with the share corrections, permutation draws, resampling draws (make_draws()) for the
+## shifted bootstrap nulls, and null_contrasts_one() with both estimators. Each p-value of a dispersion, burst size or kinetic balance contrast is kept, as in
+## analysis.R, only when every group of the contrast is resolved, here from the zero fractions of the null resamples (nzero_<dataset>, at most
+## RESOLVED.ZERO.MAX); the unmasked p-value stays in <quantity>_<mode>_p_all, so the departure near the zero boundary can be reported. D3's pairing-preserving
+## arm B of the trans mean null (perm_trans_pool_paired()) is evaluated on the same genes. D4c's private-variance truncation is recorded per gene: the mid mean
+## null simulation of an allele sets its private variance to zero when 1 + phi(1 + eta) + eta < 1 + sigma2_d.
 calib_dataset <- function(task, grid, G, n_sim, n_perm, pools, f = 0.4, streams, cores = 1) with_stream(streams[[task]], {
   tk <- grid[task, ]; ds <- sim_design(pools); nH <- length(ds$S)
   spread <- exp(rnorm(G, 0, 0.3)); spread2 <- exp(rnorm(G, 0, 0.3))
@@ -589,27 +592,37 @@ calib_dataset <- function(task, grid, G, n_sim, n_perm, pools, f = 0.4, streams,
   Hsc <- mat("Hc"); Hse <- mat("He")
   st <- share_terms(ds$chat, ds$L); SR <- share_r_groups(st$r_c, st$r_e); eH <- ds$S / 2
   pc <- ploidy_components(Hsc, Hse, eH, st)
-  ix <- list(MEAN = split_indices_by_depth(nH, f), DISP = split_indices_by_depth(nH, f), KBAL = split_indices_by_depth(nH, f))
+  ix <- list(MEAN = split_indices_by_depth(nH, f), DISP = split_indices_by_depth(nH, f), KBAL = split_indices_by_depth(nH, f), BSIZE = split_indices_by_depth(nH, f))
   M <- list(MIX.SC = mat("Pc"), MIX.SE = mat("Pe"), HYB.SC = Hsc, HYB.SE = Hse, HYB.COMB = Hsc + Hse)
   E <- list(MIX.SC = ds$O_Pc, MIX.SE = ds$O_Pe, HYB.SC = eH, HYB.SE = eH, HYB.COMB = ds$S)
   for (sp in names(ix)) for (side in c("c", "t")) for (al in c("SC", "SE")) {
-    nm <- paste0("HY", toupper(side), ".", al, switch(sp, MEAN = "", DISP = ".N", KBAL = ".K"))
+    nm <- paste0("HY", toupper(side), ".", al, switch(sp, MEAN = "", DISP = ".N", KBAL = ".K", BSIZE = ".Z"))
     M[[nm]] <- (if (al == "SC") Hsc else Hse)[, ix[[sp]][[side]], drop = FALSE]; E[[nm]] <- eH[ix[[sp]][[side]]]
   }
   FITS <- lapply(setNames(names(M), names(M)), function(k) {
     fr <- fit_counts_offset(M[[k]], E[[k]], share_r = SR[[k]], share_sub = if (k == "HYB.COMB") pc$share_sub else 0)
-    data.frame(MU = fr$MU, DISP = fr$DISP, CLASS = fr$CLASS, row.names = rownames(fr))
+    data.frame(MU = fr$MU, DISP = fr$DISP, row.names = rownames(fr))
   })
   s2d_true <- vapply(sims, `[[`, numeric(1), "s2d")
   share_obs <- list(cbar = st$cbar, r = SR, sigma_d = setNames(if (tk$design == "s2d_known") s2d_true else pc$sigma_d, gn))
   perms <- lapply(seq_len(n_perm), perm_label_draw, hyc = ix$MEAN$c, hyt = ix$MEAN$t, nHYB = nH, nSC = length(ds$O_Pc), nSE = length(ds$O_Pe))
-  run <- function(g) null_contrasts_one(g, expos = E, fits = FITS, mats = M, perms = perms, share_obs = share_obs, n_sim = n_sim, seed = 1e6 * task, methods = c("NB", "weighted"))
+  draws <- make_draws(c(MIX.SC = length(ds$O_Pc), MIX.SE = length(ds$O_Pe), HYB.COMB = nH), n_sim, 1e6 * task + 1,
+                      splits = list(HYC = ix$MEAN$c, HYC.N = ix$DISP$c, HYC.K = ix$KBAL$c, HYC.Z = ix$BSIZE$c))
+  run <- function(g) null_contrasts_one(g, expos = E, fits = FITS, mats = M, perms = perms, draws = draws, share_cells = list(chat = ds$chat, lib = ds$L),
+                                        share_obs = share_obs, n_sim = n_sim, seed = 1e6 * task, methods = c("NB", "weighted"))
   PR <- do.call(rbind, if (cores > 1) parallel::mclapply(gn, run, mc.cores = cores, mc.preschedule = FALSE) else lapply(gn, run))
+  ## The resolution gate of analysis.R, from the null resamples: a dispersion, burst size or kinetic balance p-value is kept when every group is resolved
+  for (q in names(.QUANTITY.RESOLVE)) for (md in .OUT_MODES) {
+    pc_ <- paste0(q, "_", md, "_p"); if (!pc_ %in% names(PR)) next
+    grp <- .MODES[[.RESOLVE.SOURCE[[.QUANTITY.RESOLVE[[q]]]][[md]]]]
+    res <- Reduce(`&`, lapply(grp, function(k) (PR[[paste0("nzero_", k)]] <= RESOLVED.ZERO.MAX) %in% TRUE & (FITS[[k]][gn, "DISP"] > 0) %in% TRUE))
+    PR[[paste0(pc_, "_all")]] <- PR[[pc_]]; PR[[pc_]][!res] <- NA_real_
+  }
   ## D3 arm B: the trans mean null with hybrid cells kept in pairs (the same hybrid cells move to the pseudo-parent side of both pools)
   pB <- vapply(gn, trans_null_paired_p, numeric(1), M = M, E = E, cb = st$cbar, n_perm = n_perm)
-  ## D4c: genes whose null simulation of a cis-partition allele truncates the private variance at zero
-  vq_trunc <- vapply(gn, function(g) any(1 + FITS$HYC.SC.N[g, "DISP"] * (1 + SR[["HYC.SC.N"]]) + SR[["HYC.SC.N"]] < 1 + share_obs$sigma_d[[g]],
-                                          1 + FITS$HYC.SE.N[g, "DISP"] * (1 + SR[["HYC.SE.N"]]) + SR[["HYC.SE.N"]] < 1 + share_obs$sigma_d[[g]], na.rm = TRUE), logical(1))
+  ## D4c: genes whose mid mean null simulation of an allele (all hybrid cells) truncates the private variance at zero
+  vq_trunc <- vapply(gn, function(g) any(1 + FITS$HYB.SC[g, "DISP"] * (1 + SR[["HYB.SC"]]) + SR[["HYB.SC"]] < 1 + share_obs$sigma_d[[g]],
+                                          1 + FITS$HYB.SE[g, "DISP"] * (1 + SR[["HYB.SE"]]) + SR[["HYB.SE"]] < 1 + share_obs$sigma_d[[g]], na.rm = TRUE), logical(1))
   cbind(tk[rep(1, G), ], gene = gn, mu_gene = vapply(mus, `[[`, numeric(1), "Pc"), phi_gene = vapply(phis, `[[`, numeric(1), "Pc"),
         sigma_d_true = s2d_true, sigma_d_hat = pc$sigma_d, private_truncated = vq_trunc, mean_trans_p_paired = pB, PR, row.names = NULL)
 })
@@ -639,7 +652,7 @@ trans_null_paired_p <- function(g, M, E, cb, n_perm) {
 ## pooled groups differ, D2); level the trans mean null of both arms (D3).
 .CAL.MODES <- "(total|cis|trans|mid|par_sc|par_se)"
 CALIB.TRUE.NULLS <- list(
-  all   = paste0("^(mean|disp|rdisp|bsize|kbal|kbalsup|wdisp|wrdisp|wbsize|wkbal|wkbalsup)_", .CAL.MODES, "_p$"),
+  all   = paste0("^(mean|disp|rdisp|bsize|kbal|wdisp|wrdisp|wbsize|wkbal)_", .CAL.MODES, "_p$"),
   means = paste0("^(disp|rdisp|wdisp|wrdisp)_", .CAL.MODES, "_p$"),
   dispratio = paste0("^mean_", .CAL.MODES, "_p$"),
   level = "^mean_trans_p(_paired)?$")
@@ -778,7 +791,8 @@ data_boot_gene <- function(g, mats, expos, eta, draws, refit_share = TRUE, share
 ## scale (a zero phi included) and on the log2 scale (finite only), cor(log2 zeta, log2 theta) and cor(log2 kappa, log2 mu) with zeta = mu phi,
 ## theta = 1 / phi and kappa = theta / zeta, and the SE ratios SE(log2 kappa) / SE(log2 theta) and SE(log phi) / SE(log mu) (SDs of finite log values).
 ## Per reported mode: cor(Delta mu, Delta phi) of the mean contrast (mean partition) with the dispersion contrast of its noise source and of its kinetic
-## balance source, and the SE of the log2 dispersion contrast (finite replicates). The mean rates are corrected at cbar for the contrasts.
+## balance source and of its burst size source (each from one partition's cells), and the SE of the log2 dispersion contrast (finite replicates). The mean
+## rates are corrected at cbar for the contrasts.
 boot_gene_stats <- function(D, cbar, groups = .CONTRAST.GROUPS) {
   cf <- function(a, b) { ok <- is.finite(a) & is.finite(b); if (sum(ok) > 3 && sd(a[ok]) > 0 && sd(b[ok]) > 0) cor(a[ok], b[ok]) else NA_real_ }
   sdf <- function(a) { a <- a[is.finite(a)]; if (length(a) > 3) sd(a) else NA_real_ }
@@ -795,9 +809,11 @@ boot_gene_stats <- function(D, cbar, groups = .CONTRAST.GROUPS) {
     dm <- arr(md, "mean")
     out[[paste0("cor_dmu_dphi_noise.", md)]] <- cf(dm, arr(.DISP_SOURCE[[md]], "disp"))
     out[[paste0("cor_dmu_dphi_kbal.", md)]] <- cf(arr(.KBAL_SOURCE[[md]], "mean"), arr(.KBAL_SOURCE[[md]], "disp"))
+    out[[paste0("cor_dmu_dphi_bsize.", md)]] <- cf(arr(.BSIZE_SOURCE[[md]], "mean"), arr(.BSIZE_SOURCE[[md]], "disp"))
     out[[paste0("se_disp.", md)]] <- sdf(arr(.DISP_SOURCE[[md]], "disp"))
   }
   out$cor_mu_Hc_phi_He_kbal <- cf(D[, "mu.HYC.SC.K"], D[, "phi.HYC.SE.K"]); out$cor_mu_He_phi_Hc_kbal <- cf(D[, "mu.HYC.SE.K"], D[, "phi.HYC.SC.K"])
+  out$cor_mu_Hc_phi_He_bsize <- cf(D[, "mu.HYC.SC.Z"], D[, "phi.HYC.SE.Z"]); out$cor_mu_He_phi_Hc_bsize <- cf(D[, "mu.HYC.SE.Z"], D[, "phi.HYC.SC.Z"])
   unlist(out)
 }
 

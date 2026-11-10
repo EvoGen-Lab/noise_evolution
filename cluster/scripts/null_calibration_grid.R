@@ -2,12 +2,14 @@
 ### null_calibration_grid.R
 ### Null calibration array for the validation checks D1 to D4, D7 and D10 (analysis/checks/checks_sim.R). Each task of
 ### calib_task_grid() builds one synthetic experiment of CAL.G genes from the shared generator on the observed design, with the
-### null of its design true, and runs the pipeline's own fits and null generator (null_contrasts_one(), both estimators) on it.
+### null of its design true, and runs the pipeline's own fits and null generator (null_contrasts_one(), both estimators, with the shifted bootstrap
+### nulls of the dispersion and kinetic contrasts) on it.
 ###
 ### Inputs  : null_calibration_inputs.rda (CAL.GRID, CAL.G, CAL.N.SIM, CAL.N.PERM, CAL.SEED, CAL.STREAMS, POOLS), written by
 ###           checks_sim.R block CAL
 ### Output  : null_calibration_output_<k>of<K>.rda for array task k of K, holding CAL.TASKS (the grid rows this task ran) and
-###           CAL.PART (one row per gene: the task's design, the gene's true values and every p-value). Tasks are dealt out
+###           CAL.PART (one row per gene: the task's design, the gene's true values and every p-value, masked as in analysis.R when a group
+###           is unresolved, with the unmasked value in <quantity>_<mode>_p_all). Tasks are dealt out
 ###           round-robin; each task draws from its own L'Ecuyer-CMRG stream, so the results do not depend on how the tasks are split.
 ###           checks_sim.R block CALMERGE reads the outputs and checks the task keys.
 ###############################################################

@@ -354,6 +354,15 @@ if ("CALMERGE" %in% RUN.CHECKS) {
                                              size_headline(D1.MAIN[D1.MAIN$design == "means", ], "means design (dispersion nulls), NB, by mean and phi"),
                                              sprintf("KS p < 0.01 in %d of %d tests", sum(D1.MAIN$ks_p < 0.01), nrow(D1.MAIN))),
                mc_error = "binomial SE per test and stratum", script = CHECK.SCRIPT)
+    # D1_boundary: the departure near the zero boundary. The pipeline tests a dispersion, burst size or kinetic balance contrast only when every group is resolved
+    # (D1 reads those p-values); the same nulls on the genes left untested (some group above RESOLVED.ZERO.MAX of zero refits) are kept in the _p_all columns.
+    UNRES <- CAL[gam & CAL$design %in% c("equal", "means"), ]
+    for (cn in grep("_p_all$", names(UNRES), value = TRUE)) { base <- sub("_all$", "", cn); UNRES[[base]] <- ifelse(is.na(UNRES[[base]]), UNRES[[cn]], NA_real_) }
+    UNRES[grep("^mean_.*_p$", names(UNRES), value = TRUE)] <- NA_real_                       # the mean nulls need no resolution and are read in D1
+    D1B <- calib_size_summary(UNRES, strata = c("mean", "phi")); D1B <- D1B[D1B$n > 0 & !grepl("^w", D1B$test), ]
+    check_save("D1_boundary", D1B, "run", headline = if (nrow(D1B)) c(size_headline(D1B, "genes with an unresolved group (untested in the pipeline), NB"),
+                                                                     sprintf("%d test-stratum cells with at least one unresolved gene", nrow(D1B))) else "no gene had an unresolved group",
+               mc_error = "binomial SE per test and stratum", script = CHECK.SCRIPT)
     D2 <- calib_size_summary(CAL[CAL$design == "dispratio", ])
     check_save("D2", D2, "run", headline = vapply(sort(unique(D2$par)), function(r) size_headline(D2[D2$par == r, ], paste("phi ratio", r)), ""), mc_error = "binomial SE per test", script = CHECK.SCRIPT)
     D3 <- calib_size_summary(CAL[CAL$design == "level", ], strata = "omega")
@@ -367,9 +376,9 @@ if ("CALMERGE" %in% RUN.CHECKS) {
                                              size_headline(D4$s2d_known[!grepl("^w", D4$s2d_known$test), ], "(b) true sigma2_d in the null"),
                                              sprintf("(c) private variance truncated: share of genes from %.3f to %.3f across strata", min(D4$private_truncated$private_truncated), max(D4$private_truncated$private_truncated))),
                mc_error = "binomial SE per test", script = CHECK.SCRIPT)
-    D7 <- D1[grepl("^(bsize|kbal|kbalsup)_", D1$test) & D1$design == "equal", ]
-    check_save("D7", D7, "run", headline = c(size_headline(D7[grepl("^kbal_", D7$test), ], "kappa, f_kappa partition (shared cells)"), size_headline(D7[grepl("^kbalsup_", D7$test), ], "kappa, supplementary f_mu and f_phi"),
-                                             size_headline(D7[grepl("^bsize_", D7$test), ], "burst size")), mc_error = "binomial SE per test", script = CHECK.SCRIPT)
+    D7 <- D1[grepl("^(bsize|kbal)_", D1$test) & D1$design == "equal", ]
+    check_save("D7", D7, "run", headline = c(size_headline(D7[grepl("^kbal_", D7$test), ], "kappa, f_kappa partition (shared cells)"),
+                                             size_headline(D7[grepl("^bsize_", D7$test), ], "burst size, f_zeta partition (shared cells)")), mc_error = "binomial SE per test", script = CHECK.SCRIPT)
     # H5: with every true contrast zero (equal design and its non-gamma and known-sigma_d variants), the mean estimate over genes is the bias of the full
     # estimation chain, read against the spread of the estimates over genes.
     H5 <- contrast_bias_summary(CAL[CAL$design %in% c("equal", "s2d_known"), ], strata = c("design", "family", "mean", "phi", "omega"))
