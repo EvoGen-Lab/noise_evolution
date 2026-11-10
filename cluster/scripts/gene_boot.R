@@ -7,11 +7,12 @@
 ### Inputs  : gene_boot_inputs.rda (CONTRAST.MATS, CONTRAST.EXPOS, CONTRAST.FITS, GENES, N.BOOT,
 ###           DRAWS.REPS: one set of pre-drawn resamples per bootstrap replicate; SHARE.CELLS: each hybrid cell's observed Sc share and library size, from
 ###           which every replicate refits the transcriptome share terms; SHARE.OBS: the observed share quantities (mean share, share corrections of the
-###           datasets, per-gene summed-hybrid share term and ploidy shifts); GATES: the contrasts each gene qualifies for)
+###           datasets, per-gene summed-hybrid share term and ploidy shifts); GATES: the contrasts each gene's fits define)
 ### Output  : gene_boot_output_<k>of<K>.rda for array task k of K, holding
 ###           BOOT.CONTRASTS (one row per gene) for replicate k. Task k
 ###           uses DRAWS.REPS[[k]]; replicate 1 is the reported bootstrap
-###           and the others check seed adequacy.
+###           and the others check seed adequacy. Each row also holds every group's fraction of replicates
+###           at a zero dispersion (zero_<dataset>), from which analysis.R decides which groups are resolved.
 ###
 ### Progress is printed by the master after each chunk of genes,
 ### so it lands in the job log even though the workers are forked.
@@ -23,7 +24,7 @@ library('MASS')          # glm.nb ships with base R; set lib= if your cluster ne
 source("functions.R")
 write_pkg_versions("gene_boot")   # R and package versions of this job, compared with renv.lock by check_pkg_versions()
 
-load("gene_boot_inputs.rda")     # GENES is the inference set (every gene for which at least one comparison is eligible), not only the matched set. CONTRAST.MATS, CONTRAST.EXPOS, CONTRAST.FITS, GENES, DRAWS.REPS, N.BOOT, SHARE.CELLS, SHARE.OBS, GATES
+load("gene_boot_inputs.rda")     # GENES is the inference set (every gene for which at least one contrast is defined), not only the matched set. CONTRAST.MATS, CONTRAST.EXPOS, CONTRAST.FITS, GENES, DRAWS.REPS, N.BOOT, SHARE.CELLS, SHARE.OBS, GATES
 
 ## Job-array position: task k bootstraps replicate k. A finished task leaves its
 ## output file, so resubmitting the array only computes the missing replicates.

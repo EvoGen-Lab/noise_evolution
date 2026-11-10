@@ -1,9 +1,9 @@
 ###############################################################
 ### cox_reid_check.R
-### Local unit checks of the Cox-Reid adjusted dispersion fit (.fit_one(), fit_dispersion()) and of dispersion_class_stats(): the adjusted slope at zero
+### Local unit checks of the Cox-Reid adjusted dispersion fit (.fit_one(), fit_dispersion()) and of dispersion_bound_stats(): the adjusted slope at zero
 ### matches its closed form and the boundary rule, the fit recovers phi and flags a maximum at the end of the search range, the share corrections lower
-### the fitted phi by the expected amount, simulated Poisson genes pass the boundary likelihood-ratio test at the nominal rate, and the class proportions
-### of simulated NB genes follow the mean count and phi. Also checks the matrix fitter on one core and on a PSOCK cluster.
+### the fitted phi by the expected amount, simulated Poisson genes pass the boundary likelihood-ratio test at the nominal rate, and the one-sided 95%
+### likelihood bounds cover the true phi at about 95% each. Also checks the matrix fitter on one core and on a PSOCK cluster.
 ### Needs   : R/functions.R. Writes nothing; stops with an error when a check fails.
 ###############################################################
 suppressWarnings(suppressMessages(source("R/functions.R")))
@@ -33,17 +33,19 @@ a <- fit_dispersion(y, e)[["disp"]]
 stopifnot(abs(fit_dispersion(y, e, 0.01)[["disp"]] - (a - 0.01) / 1.01) < 1e-12, abs(fit_dispersion(y, e, 0, "NB", 0.01)[["disp"]] - (a - 0.01)) < 1e-12)
 stopifnot(fit_dispersion(y, e, 0, "NB", 10)[["disp"]] == 0, fit_dispersion(y, e, 0, "NB", 10)[["boundary"]] == 1)
 
-## the critical value of the boundary test and of the upper bound is the 0.90 quantile of chi-square(1), 2.7055, which makes the bound one-sided at 95%
-stopifnot(round(qchisq(0.90, 1), 4) == 2.7055, isTRUE(all.equal(qchisq(1 - 2 * CLASS.ALPHA, 1), qchisq(0.90, 1))))
+## the critical value of the likelihood bounds is the 0.90 quantile of chi-square(1), 2.7055, which makes each bound one-sided at 95%
+stopifnot(round(BOUND.CRIT, 4) == 2.7055)
 
 ## Poisson genes: the likelihood-ratio statistic is zero about half the time and exceeds 2.71 about 5% of the time
-lrt <- replicate(1000, dispersion_class_stats(rpois(n, 5 * e), e)[["lrt"]])
+lrt <- replicate(1000, dispersion_bound_stats(rpois(n, 5 * e), e)[["lrt"]])
 stopifnot(abs(mean(lrt > qchisq(0.9, 1)) - 0.05) < 0.02, abs(mean(lrt == 0) - 0.5) < 0.06)
-## NB genes: resolved above zero when mu and phi are large, uninformative when both are small, resolved near zero for a quiet gene with a tight bound
-cls <- function(mu, phi) replicate(100, dispersion_class_stats(rnbinom(n, mu = mu * e, size = 1 / phi), e)[["class"]])
-stopifnot(mean(cls(5, 1) == 1) > 0.95, mean(cls(0.05, 0.01) == 3) > 0.8, mean(cls(0.5, 0.01) == 2) > 0.15)
-## classes are re-derived from the stored statistics: a stricter near-zero threshold moves class 2 genes to class 3 only
-st <- dispersion_class_stats(rpois(n, 1 * e), e); stopifnot(st[["class"]] %in% 1:3, st[["lrt"]] >= 0, st[["disp_upper"]] >= 0)
+## NB genes: each one-sided bound covers the true phi about 95% of the time, the lower bound is zero whenever the LRT does not exceed the critical value, and
+## the share correction is applied to both bounds
+bd <- t(replicate(400, dispersion_bound_stats(rnbinom(n, mu = 3 * e, size = 1 / 0.3), e)))
+stopifnot(abs(mean(bd[, "disp_upper"] >= 0.3) - 0.95) < 0.04, abs(mean(bd[, "disp_lower"] <= 0.3) - 0.95) < 0.04, all(bd[, "disp_lower"] <= bd[, "disp_upper"]))
+st <- dispersion_bound_stats(rpois(n, 1 * e), e); stopifnot(st[["lrt"]] >= 0, st[["disp_upper"]] >= 0, st[["lrt"]] > BOUND.CRIT || st[["disp_lower"]] == 0)
+y3 <- rnbinom(n, mu = 3 * e, size = 1 / 0.3); b0 <- dispersion_bound_stats(y3, e); b1 <- dispersion_bound_stats(y3, e, share_r = 0.01)
+stopifnot(abs(b1[["disp_upper"]] - (b0[["disp_upper"]] - 0.01) / 1.01) < 1e-6, abs(b1[["disp_lower"]] - max((b0[["disp_lower"]] - 0.01) / 1.01, 0)) < 1e-6)
 
 ## the matrix fitter agrees on one core and on a PSOCK cluster, with a per-gene additive correction
 mat <- t(sapply(1:12, function(i) rnbinom(n, mu = (0.5 + i / 3) * e, size = 1 / (0.05 * i))))
@@ -51,5 +53,5 @@ rownames(mat) <- paste0("g", 1:12)
 f1 <- fit_counts_offset(mat, e, share_r = 1e-4, share_sub = seq(0, 0.011, length.out = 12))
 cl <- parallel::makeCluster(2)
 f2 <- fit_counts_offset(mat, e, cl = cl, share_r = 1e-4, share_sub = seq(0, 0.011, length.out = 12)); parallel::stopCluster(cl)
-stopifnot(isTRUE(all.equal(f1, f2)), all(c("CLASS", "LRT", "DISP_UPPER", "MBAR", "HIT_RANGE", "DISP_APP") %in% names(f1)))
+stopifnot(isTRUE(all.equal(f1, f2)), all(c("LRT", "DISP_LOWER", "DISP_UPPER", "MBAR", "HIT_RANGE", "DISP_APP") %in% names(f1)), !any(grepl("CLASS", names(f1))))
 cat("Cox-Reid fit checks passed\n")

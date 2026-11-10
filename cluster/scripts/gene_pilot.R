@@ -1,17 +1,18 @@
 ###############################################################
 ### gene_pilot.R
 ### Reads the pilot inputs, runs the per-gene internal-pilot
-### bootstrap (SE of log mu, log disp and log kinetic balance, undivided hybrid and
+### bootstrap (SE of log mu, log disp, log kinetic balance and log burst size, undivided hybrid and
 ### parents) on a FORK cluster, saves the output. Mirrors the
 ### structure of gene_boot.R exactly; this is the same
 ### kind of per-gene, per-replicate bootstrap, just over four
-### datasets instead of thirteen, and used only to set the Nc/Nt
+### datasets instead of twenty, and used only to set the Nc/Nt
 ### split fraction rather than to test any gene for significance.
 ###
 ### Inputs  : gene_pilot_inputs.rda  (PILOT.MATS, PILOT.EXPOS,
 ###           PILOT.GENES, N.BOOT, SEED.BOOT)
 ### Output  : gene_pilot_output.rda  (PILOT.SE, one row per gene: bootstrap SEs of
-###           log mu, log disp and log kinetic balance for the four datasets, plus the bootstrap covariance of
+###           log mu, log disp, log kinetic balance and log burst size for the four datasets, the fraction of replicates at
+###           a zero dispersion in each (zero_<dataset>), and the bootstrap covariance of
 ###           the two hybrid alleles' estimates, which share their resampled cells)
 ###############################################################
 
