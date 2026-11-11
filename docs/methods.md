@@ -1,36 +1,34 @@
 <!-- Exported from the Claude Docs document "Statistical models for allele-specific expression, noise, and ploidy"
-     (https://claude.ai/artifact/79JHPV3XCH2K8VS7RJZQHS), revision 17945, retrieved 2026-11-03. Display equations are LaTeX in $$ blocks.
+     (https://claude.ai/artifact/79JHPV3XCH2K8VS7RJZQHS), revision 18037, retrieved 2026-11-11. Display equations are LaTeX in $$ blocks.
      This file is a snapshot for the repository; the document remains the specification and is edited there. -->
 
 # Statistical models for allele-specific expression, noise, and ploidy
 
 2026-10-20 · Brian Metzger
 
-We compared expression and noise between groups of cells through quantities fitted to each gene. To put cells sequenced to different depths on a common scale, we used a depth offset, and then estimated a mean rate and a dispersion for each gene with a negative binomial model of the counts. We summarized burst kinetics with kinetic balance rather than burst size. In the hybrid, we removed the effects of cell-to-cell variation in the transcriptome share of each allele on the mean and the dispersion. We then formed contrasts between groups on the log₂ and raw scales, partitioned the hybrid cells to equalize *cis* and* trans* precision, and tested each contrast against a null distribution generated under its null hypothesis.
+We compared expression and noise between groups of cells through quantities fitted to each gene. To put cells sequenced to different depths on a common scale, we used a depth offset, and then estimated a mean rate and a dispersion for each gene with a negative binomial model of the counts. We summarized burst kinetics with kinetic balance rather than burst size. In the hybrid, we removed the effects of cell-to-cell variation in the transcriptome share of each allele on the mean and the dispersion. We then formed contrasts between groups on the log₂ and raw scales, partitioned the hybrid cells to equalize *cis* and *trans* precision, and tested each contrast against a null distribution generated under its null hypothesis.
 
 ## Notation
 
-Cells are indexed by i. Cell groups (r) include the haploid *S. cerevisiae* parent (Pc), the haploid* S. eubayanus* parent (Pe), the* S. cerevisiae* allele in the hybrid (Hc), and the* S. eubayanus* allele in the hybrid (He). H is used for the hybrid as a whole. We omit the group index when a quantity is taken within a single group. We fit each gene separately and omit gene indexes (g) unless needed for clarity. We use lowercase letters for latent variables and realized observations. We use matching uppercase letters for the corresponding random variables, for fixed values calculated from the data, and for expectations built from parameters. Model parameters use Greek letters. A bar marks the mean of a variable over cells, and σ² with the variable as its subscript marks its variance. Δ marks contrasts between groups. Parameters of the summed allele counts of a hybrid cell carry the subscript Σ. A hat marks an estimate of a latent variable or parameter, and a star marks a quantity that still carries the transcriptome share distortion. A tilde marks an intermediate or comparison estimator.
+Cells are indexed by i. Cell groups (r) include the haploid *S. cerevisiae* parent (Pc), the haploid *S. eubayanus* parent (Pe), the *S. cerevisiae* allele in the hybrid (Hc), and the *S. eubayanus* allele in the hybrid (He). H is used for the hybrid as a whole. We omit the group index when a quantity is taken within a single group. We fit each gene separately and omit gene indexes (g) unless needed for clarity. We use lowercase letters for latent variables and realized observations. We use matching uppercase letters for the corresponding random variables, for fixed values calculated from the data, and for expectations built from parameters. Model parameters use Greek letters. A bar marks the mean of a variable over cells, and σ² with the variable as its subscript marks its variance. Δ marks contrasts between groups. Parameters of the summed allele counts of a hybrid cell carry the subscript Σ. A hat marks an estimate of a latent variable or parameter, and a star marks a quantity that still carries the transcriptome share distortion. A tilde marks an intermediate or comparison estimator.
 
 | Symbol | Definition |
-|---|---|
+| --- | --- |
 | y, Y | UMI count of one gene in one cell |
 | L | Library size of a cell |
 | D | Reference library size, the median library size |
-| S | Depth factor of a cell, L/D |
-| O | Offset of a cell, S for a parent and S/2 for each hybrid allele |
+| O | Offset of a cell, L/D for a parent and L/(2D) for each hybrid allele |
 | N | Number of cells in a group |
 | μ | Mean rate, the expression per genome, which is the expected count at the reference depth. |
 | M | Expected count of a cell, O μ |
-| φ | Dispersion, the variability beyond Poisson counting. |
+| φ | Dispersion, the variability beyond Poisson counting.&#32; |
 | s | Slope in φ of the log probability of one cell |
-| T | Boundary likelihood ratio statistic for φ |
 | θ | Burst frequency, 1/φ |
 | ζ | Burst size, μφ |
 | κ | Kinetic balance, θ/ζ |
 | Δ | Contrast between groups |
-| f | Fraction of hybrid cells assigned to the *cis* estimate |
-| σ² | Variance of the variable in its subscript. σ²_Δ is the variance of a contrast |
+| f | Fraction of hybrid cells assigned to the *cis *estimate |
+| σ² | Variance of the variable in its subscript. σ²\_Δ is the variance of a contrast |
 | γ | Ratio of the parental to the hybrid contrast variance |
 | c | Transcriptome share, the probability that a UMI from a hybrid cell comes from the *S. cerevisiae* genome |
 | t | Transcriptome share multiplier of an allele, its share relative to the mean share |
@@ -46,17 +44,17 @@ Cells are indexed by i. Cell groups (r) include the haploid *S. cerevisiae* pare
 
 ## Sequencing depth offset
 
-Sequencing depth and capture efficiency vary among cells and groups, which causes two problems. First, deeply sequenced cells yield more counts of every gene, and this cell-to-cell spread inflates the dispersion estimates, so genes appear noisier than they are. Second, groups differ in sequencing depth, which shifts their contrasts. We solved both problems with cell-specific offsets. The offset of each cell is its library size, L, divided by a reference depth, D. We set D to the median library size across all cells, calculated each offset once, and held it fixed.
+Sequencing depth and capture efficiency vary among cells and groups, which causes two problems. First, deeply sequenced cells yield more counts of every gene, and this cell-to-cell spread inflates the dispersion estimates, so genes appear noisier than they are. Second, groups differ in sequencing depth, which shifts their contrasts. We solved both problems with cell-specific offsets. The offset of each cell is its library size, L, divided by a reference depth, D. We set D to the median library size across all cells, calculated each offset once, and then held it fixed.
 
 $$
 L_{ri} = \sum_g y_{gri}, \qquad L_{\mathrm{H}i} = L_{\mathrm{Hc}i} + L_{\mathrm{He}i} \\
-D = \mathrm{median}\left(L_{ri}\right)_{}, \qquad S_{ri} = \frac{L_{ri}}{D}
+D = \mathrm{median}\left(L_{ri}\right)_{}
 $$
 
-A parental cell took the offset of its own library. The two alleles of a hybrid cell share one library, so each allele received half of the hybrid offset, and summed hybrid counts used the full hybrid offset.
+A parental cell takes the offset of its own library. The two alleles of a hybrid cell share one library, so each allele receives half of the hybrid offset.
 
 $$
-O_{\mathrm{Pc}i} = S_{\mathrm{Pc}i}, \qquad O_{\mathrm{Pe}i} = S_{\mathrm{Pe}i}, \qquad O_{\mathrm{Hc}i} = O_{\mathrm{He}i} = \frac{S_{\mathrm{H}i}}{2}, \qquad O_{\mathrm{H}i} = S_{\mathrm{H}i}
+O_{\mathrm{Pc}i} = \frac{L_{\mathrm{Pc}i}}{D}, \qquad O_{\mathrm{Pe}i} = \frac{L_{\mathrm{Pe}i}}{D}, \qquad O_{\mathrm{Hc}i} = O_{\mathrm{He}i} = O_i = \frac{L_{\mathrm{H}i}}{2D}
 $$
 
 ## Negative binomial model of single-cell counts
@@ -69,7 +67,7 @@ Y_{ri} \sim \mathrm{NB}\left(O_i\,\mu_r,\ \varphi_r\right) \\
 \mathrm{E}[Y_{ri}] = O_i\,\mu_r \equiv M_i, \qquad \mathrm{Var}[Y_{ri}] = M_i + \varphi_r\,M_i^2
 $$
 
-where μ_r is the mean rate of group r, the expected count of a cell sequenced at the reference depth D, and M_i is the expected count of cell i at its own depth. The dispersion sets how far the variance exceeds the Poisson variance. A small dispersion means little excess noise, and zero dispersion recovers the Poisson distribution. The squared coefficient of variation of a count separates the two sources of variance:
+where μ\_r is the mean rate of group r, the expected count of a cell sequenced at the reference depth D, and M\_i is the expected count of cell i at its own depth. The dispersion sets how far the variance exceeds the Poisson variance. A small dispersion means little excess noise, and zero dispersion recovers the Poisson distribution. The squared coefficient of variation of a count separates the two sources of variance:
 
 $$
 \mathrm{CV}^2_{ri} = \frac{\mathrm{Var}[Y_{ri}]}{\mathrm{E}[Y_{ri}]^2} = \frac{O_i\,\mu_r + \varphi_r\,(O_i\,\mu_r)^2}{(O_i\,\mu_r)^2} = \frac{1}{O_i\,\mu_r} + \varphi_r
@@ -77,7 +75,7 @@ $$
 
 The first term is the Poisson contribution. It falls as depth or expression rises because counting noise shrinks as more molecules are sampled. The second term does not depend on depth and is the excess variability that bursting adds.
 
-**Estimating μ.** The NB likelihood of group r is the product over its cells of the NB probability of each count. Setting the derivative of its log with respect to μ to zero gives the maximum likelihood estimate μ̃_r (Lawless 1987). When the offsets differ among cells, μ̃_r has no closed form and is the sum of a term that depends on φ and a term that does not, so it is usually found iteratively and jointly with φ:
+**Estimating μ.** The NB likelihood of group r is the product over its cells of the NB probability of each count. Setting the derivative of its log with respect to μ to zero gives the maximum likelihood estimate μ̃\_r (Lawless 1987). When the offsets differ among cells, μ̃\_r has no closed form and is the sum of a term that depends on φ and a term that does not, so it is usually found iteratively and jointly with φ:
 
 $$
 \begin{aligned}
@@ -95,15 +93,15 @@ $$
 \mathrm{E}\left[\sum_i \frac{M_i\left(Y_{ri} - M_i\right)}{1 + \varphi M_i}\right] = \sum_i \frac{M_i\left(\mathrm{E}[Y_{ri}] - M_i\right)}{1 + \varphi M_i} = 0
 $$
 
-The term therefore adds no systematic shift to μ̃_r. Instead, it changes the relative contribution of cells when estimating the mean. Dropping this term gives a closed form estimator, μ̂_r, that is independent of φ. 
+The term therefore adds no systematic shift to μ̃\_r. Instead, it changes the relative contribution of cells when estimating the mean. Dropping this term gives a closed form estimator, μ̂\_r, that is independent of φ.&#32;
 
 $$
 \hat{\mu}_r = \frac{\sum_i y_{ri}}{\sum_i O_i}
 $$
 
-This is the Poisson score with a log link and an offset. It assumes only that the mean count is O_i μ, which makes it the quasi-Poisson estimating equation (Wedderburn 1974, McCullagh and Nelder 1989). When φ = 0, every weight equals one and μ̃_r and μ̂_r are equal. Similarly, when every cell has the same offset, every weight is the same and cancels from the equation. Otherwise the two differ, and μ̂_r has three advantages. First, it keeps the mean separate from the dispersion. In a joint fit, μ̃_r depends on φ̂_r, so sampling error in φ̂_r reaches the mean and every mean contrast built from it. Orthogonality of μ and φ makes this dependence second order in large samples, but μ̂_r removes it at every sample size. Second, a joint fit gives equal weights for genes whose φ̂_r is zero and NB weights for the rest, so the mean estimator would differ among genes according to a test on their dispersion. μ̂_r treats every gene the same way. Third, μ̂_r is computed once from the counts and offsets, before any dispersion fit, so the dispersion fit runs with every cell mean fixed rather than alternating between μ and φ. This saving repeats for every gene in every observed, bootstrap, null and power-simulation fit.
+This is the Poisson score with a log link and an offset. It assumes only that the mean count is O\_i μ, which makes it the quasi-Poisson estimating equation (Wedderburn 1974, McCullagh and Nelder 1989). When φ = 0, every weight equals one and μ̃\_r and μ̂\_r are equal. Similarly, when every cell has the same offset, every weight is the same and cancels from the equation. Otherwise the two differ, and μ̂\_r has three advantages. First, it keeps the mean separate from the dispersion. In a joint fit, μ̃\_r depends on φ̂\_r, so sampling error in φ̂\_r reaches the mean and every mean contrast built from it. Under the NB, orthogonality of μ and φ makes this dependence second order in large samples, but μ̂\_r removes it at every sample size. Second, a joint fit gives equal weights for genes whose φ̂\_r is zero and NB weights for the rest, so the mean estimator would differ among genes according to a test on their dispersion. μ̂\_r treats every gene the same way. Third, μ̂\_r is computed once from the counts and offsets, before any dispersion fit, so the dispersion fit runs with every cell mean fixed rather than alternating between μ and φ. This saving repeats for every gene in every observed, bootstrap, null and power-simulation fit.
 
-The cost is precision. μ̂_r gives every count equal weight, whereas μ̃_r gives less weight to cells with large φM_i, whose counts vary the most. The variance of μ̂_r follows from the NB definition. The large-sample variance of μ̃_r is the inverse of the Fisher information, the variance of the score. The ratio of these variances gives:
+The cost is precision. μ̂\_r gives every count equal weight, whereas μ̃\_r gives less weight to cells with large φM\_i, whose counts vary the most. The variance of μ̂\_r follows from the NB definition. The large-sample variance of μ̃\_r is the inverse of the Fisher information, the variance of the score. The ratio of these variances gives:
 
 $$
 \begin{aligned}
@@ -113,7 +111,7 @@ $$
 \end{aligned}
 $$
 
-The Cauchy–Schwarz inequality gives (Σ_i M_i)² ≤ Σ_i M_i(1 + φM_i) · Σ_i M_i/(1 + φM_i), so the ratio of variances is at least one and μ̂_r is never more precise than μ̃_r. However, this ratio has an upper bound. Both the quotient M_i/(1 + φM_i) and the product M_i(1 + φM_i) increase with M_i, so across cells they are positively correlated. The product of their averages is then at most the average of their product:
+The Cauchy–Schwarz inequality gives (Σ\_i M\_i)² ≤ Σ\_i M\_i(1 + φM\_i) · Σ\_i M\_i/(1 + φM\_i), so the ratio of variances is at least one and μ̂\_r is never more precise than μ̃\_r. However, this ratio has an upper bound. Both the quotient M\_i/(1 + φM\_i) and the product M\_i(1 + φM\_i) increase with M\_i, so across cells they are positively correlated. The product of their averages is then at most the average of their product:
 
 $$
 \begin{aligned}
@@ -122,9 +120,9 @@ $$
 \end{aligned}
 $$
 
-Here CV(O) is the coefficient of variation of the depth offsets across the N_r cells of the group. The cap depends only on the variability of the offsets, whereas the position of a gene between one and the cap depends on φM_i. When φM_i is small, as for lowly expressed genes or genes with φ near zero, the variances of the two estimators nearly coincide, and the ratio approaches the cap only when φM_i is large. 
+Here CV(O) is the coefficient of variation of the depth offsets across the N\_r cells of the group, computed with divisor N\_r. The identity behind the cap holds only with this divisor, and the divisor N\_r − 1 would make the cap 1 + (N\_r − 1)CV(O)²/N\_r. The cap depends only on the variability of the offsets, whereas the position of a gene between one and the cap depends on φM\_i. When φM\_i is small, as for lowly expressed genes or genes with φ near zero, the variances of the two estimators nearly coincide, and the ratio approaches the cap only when φM\_i is large.&#32;
 
-**Estimating φ.** Because μ̂_r contains no φ, we fixed each cell's mean at its fitted value and estimated φ by maximizing the profile log-likelihood over φ ≥ 0. Under the NB model μ and φ are orthogonal, so fixing μ̂_r leaves only a bias of order 1/N_r, the cost of the degree of freedom spent on the mean. Relative to φ this bias is of order 1/(N_r M̄_r φ). We therefore used a Cox–Reid adjustment to remove the first-order part of this bias (Cox and Reid 1987, McCarthy et al. 2012). 
+**Estimating φ.** Because μ̂\_r contains no φ, we fixed each cell's mean at its fitted value and estimated φ by maximizing the profile log-likelihood over φ ≥ 0. Under the NB model μ and φ are orthogonal, so fixing μ̂\_r leaves only a bias of order 1/N\_r, the cost of the degree of freedom spent on the mean. Relative to φ this bias is of order 1/(N\_r M̄\_r φ). We therefore used a Cox–Reid adjustment to remove the first-order part of this bias (Cox and Reid 1987, McCarthy et al. 2012). The adjustment is derived for the profile likelihood, which equals our fit when every cell has the same offset. With unequal offsets the fixed mean differs from the profile mean, and we assume that the adjustment still removes the first-order part of the bias.&#32;
 
 $$
 \begin{aligned}
@@ -133,7 +131,7 @@ $$
 \end{aligned}
 $$
 
-The maximum of ℓ^CR_r has no closed form, so we located it numerically over log φ. We write s_ri = ∂ log Pr(y_ri | M̂_i, φ)/∂φ for the slope of the log probability of cell i, so the slope of ℓ_r is Σ_i s_ri. Whether the maximum is at zero depends on the slope of ℓ^CR_r at zero. For ℓ_r, starting from the log probability of one cell, we write the ratio of gamma functions as a finite sum, collect the two terms in log(1 + φM), and expand to first order in φ:
+The maximum of ℓ^CR\_r has no closed form, so we located it numerically over log φ. We write s\_ri = ∂ log Pr(y\_ri | M̂\_i, φ)/∂φ for the slope of the log probability of cell i, so the slope of ℓ\_r is Σ\_i s\_ri. Whether the maximum is at zero depends on the slope of ℓ^CR\_r at zero. For ℓ\_r, starting from the log probability of one cell, we write the ratio of gamma functions as a finite sum, collect the two terms in log(1 + φM), and expand to first order in φ:
 
 $$
 \begin{aligned}
@@ -149,7 +147,7 @@ $$
 \end{aligned}
 $$
 
-Summing over cells then gives ℓ_r and its slope, written as the sum of the per-cell slopes s_ri:
+Summing over cells then gives ℓ\_r and its slope, written as the sum of the per-cell slopes s\_ri:
 
 $$
 \begin{aligned}
@@ -173,13 +171,13 @@ $$
 
 We used this estimator for the observed fits and for every bootstrap, null and power-simulation replicate. *Appendix A* gives a moment estimator for the dispersion that does not assume an NB distribution and uses only the first two moments of the counts. It is less precise, and we used it only for sensitivity analyses.
 
-**Burst kinetics.** In the NB model, burst frequency and burst size are not estimated independently. Burst frequency is the inverse dispersion, θ = 1/φ, and burst size follows by division, ζ = μ/θ. Both estimates are linear in log₂ μ̂_r and log₂ φ̂_r:
+**Burst kinetics.** In the NB model, burst frequency and burst size are not estimated independently. Burst frequency is the inverse dispersion, θ = 1/φ, and burst size follows by division, ζ = μ/θ. Both estimates are linear in log₂ μ̂\_r and log₂ φ̂\_r:
 
 $$
 \log_2\hat{\theta}_r = -\log_2\hat{\varphi}_r, \qquad \log_2\hat{\zeta}_r = \log_2\hat{\mu}_r - \log_2\hat{\theta}_r = \log_2\hat{\mu}_r + \log_2\hat{\varphi}_r
 $$
 
-Because ζ̂_r is built from θ̂_r, any sampling error in θ̂_r enters ζ̂_r with the opposite sign. Expanding their covariance and using the orthogonality of the NB mean and dispersion gives:
+Because ζ̂\_r is built from θ̂\_r, any sampling error in θ̂\_r enters ζ̂\_r with the opposite sign. Expanding their covariance and using the orthogonality of the NB mean and dispersion, which holds when the counts follow the NB, gives:
 
 $$
 \mathrm{Cov}\left[\log_2\hat{\theta}_r, \log_2\hat{\zeta}_r\right] = \mathrm{Cov}\left[\log_2\hat{\theta}_r,\ \log_2\hat{\mu}_r - \log_2\hat{\theta}_r\right] = \mathrm{Cov}\left[\log_2\hat{\theta}_r, \log_2\hat{\mu}_r\right] - \mathrm{Var}\left[\log_2\hat{\theta}_r\right] \approx -\mathrm{Var}\left[\log_2\hat{\theta}_r\right]
@@ -187,19 +185,19 @@ $$
 
 This covariance is large when the dispersion is poorly estimated. Estimated burst frequency and burst size are therefore negatively correlated across genes even when the underlying kinetics are unrelated, and within a gene an imprecise dispersion estimate appears as burst frequency traded against burst size.
 
-We therefore summarized burst kinetics with the kinetic balance κ = θ/ζ. The pair μ̂_r and κ̂_r carries the same information as θ̂_r and ζ̂_r:
+We therefore summarized burst kinetics with the kinetic balance κ = θ/ζ. The pair μ̂\_r and κ̂\_r carries the same information as θ̂\_r and ζ̂\_r:
 
 $$
 \log_2\hat{\kappa}_r = \log_2\hat{\theta}_r - \log_2\hat{\zeta}_r = 2\log_2\hat{\theta}_r - \log_2\hat{\mu}_r, \qquad \log_2\hat{\theta}_r = \tfrac12\left(\log_2\hat{\mu}_r + \log_2\hat{\kappa}_r\right), \qquad \log_2\hat{\zeta}_r = \tfrac12\left(\log_2\hat{\mu}_r - \log_2\hat{\kappa}_r\right)
 $$
 
-And kinetic balance is still coupled: 
+And kinetic balance is still coupled:&#32;
 
 $$
 \mathrm{Cov}\left[\log_2\hat{\kappa}_r, \log_2\hat{\mu}_r\right] = 2\,\mathrm{Cov}\left[\log_2\hat{\theta}_r, \log_2\hat{\mu}_r\right] - \mathrm{Var}\left[\log_2\hat{\mu}_r\right] \approx -\mathrm{Var}\left[\log_2\hat{\mu}_r\right]
 $$
 
-Kinetic balance is still coupled to the mean, but only weakly, because the mean is estimated far more precisely than the dispersion. Converting each covariance to a correlation puts the two couplings on a common scale. With the mean and dispersion estimates uncorrelated, log₂ ζ̂_r has variance Var[log₂ μ̂_r] + Var[log₂ θ̂_r], and the two correlations are:
+Kinetic balance is still coupled to the mean, but only weakly, because the mean is estimated far more precisely than the dispersion. Converting each covariance to a correlation puts the two couplings on a common scale. With the mean and dispersion estimates uncorrelated, as they are when the counts follow the NB, log₂ ζ̂\_r has variance Var\[log₂ μ̂\_r\] + Var\[log₂ θ̂\_r\], and the two correlations are:
 
 $$
 \begin{aligned}
@@ -214,54 +212,56 @@ $$
 \mathrm{Var}\left[\log_2\hat{\kappa}_r\right] = 4\,\mathrm{Var}\left[\log_2\hat{\theta}_r\right] + \mathrm{Var}\left[\log_2\hat{\mu}_r\right] - 4\,\mathrm{Cov}\left[\log_2\hat{\theta}_r, \log_2\hat{\mu}_r\right] \approx 4\,\mathrm{Var}\left[\log_2\hat{\theta}_r\right]
 $$
 
-Kinetic balance therefore carries about twice the standard error of burst frequency. It gives up precision to weaken its coupling to the mean.
+Kinetic balance therefore carries about twice the standard error of burst frequency. It gives up precision to weaken its coupling to the mean. These expressions assume that the counts follow the NB. For a non-gamma factor the mean and dispersion errors correlate when they are fitted on the same cells (*Separate partitions for each quantity*), which adds a covariance term to each expression, and the bootstrap standard errors of the kinetic balance and burst size contrasts include it.
 
 UMI capture thins each count binomially, which leaves φ and θ unchanged but scales μ and ζ by the capture rate, so burst size is measured in captured molecules. A difference in capture between parental cells, or between parental and hybrid cells, enters the total, *trans* and dominance contrasts in the mean and burst size but not in burst frequency. For the hybrid alleles, the transcriptome share correction of the mean removes a genome-wide capture difference.
 
-**Fano factor.** The Fano factor of a count, its variance divided by its mean, is a common summary of bursting. However, under the NB, the Fano factor is one plus the dispersion times the expected count, so it rises with the sequencing depth of each cell, and we did not use it. 
+**Fano factor.** The Fano factor of a count, its variance divided by its mean, is a common summary of bursting. However, under the NB, the Fano factor is one plus the dispersion times the expected count, so it rises with the sequencing depth of each cell, and we did not use it.&#32;
 
 $$
-\qquad \frac{\mathrm{Var}[Y_{ri}]}{\mathrm{E}[Y_{ri}]} = \frac{O_i\,\mu_r + \varphi_r\,(O_i\,\mu_r)^2}{O_i\,\mu_r} = 1 + \varphi_r\,O_i\,\mu_r
+ \qquad \frac{\mathrm{Var}[Y_{ri}]}{\mathrm{E}[Y_{ri}]} = \frac{O_i\,\mu_r + \varphi_r\,(O_i\,\mu_r)^2}{O_i\,\mu_r} = 1 + \varphi_r\,O_i\,\mu_r
 $$
 
 ## Transcriptome share corrections in the hybrid
 
-A hybrid cell carries two genomes that share one library. Each captured UMI comes from one of the two genomes, and we call the probability that it comes from the *S. cerevisiae* genome the transcriptome share, c_i. It reflects the share of the cell's mRNA from each genome, weighted by how efficiently each genome's molecules are captured and assigned. It varies from cell to cell and is not observed. The observed fraction of UMIs, ĉ_i, estimates it with binomial sampling noise. The offsets do not capture the transcriptome share, so its variation affects the estimated means and dispersions of the hybrid alleles, and we corrected both.
+A hybrid cell carries two genomes that share one library. Each captured UMI comes from one of the two genomes, and we call the probability that it comes from the *S. cerevisiae* genome the transcriptome share, c\_i. It reflects the share of the cell's mRNA from each genome, weighted by how efficiently each genome's molecules are captured and assigned. It varies from cell to cell and is not observed. The observed fraction of UMIs, ĉ\_i, estimates it with binomial sampling noise. The offsets do not capture the transcriptome share, so its variation affects the estimated means and dispersions of the hybrid alleles, and we corrected both.
 
-**Transcriptome share estimate.** For each hybrid cell, we estimated its transcriptome share as the fraction of its UMIs assigned to the *S. cerevisiae* genome. The average of ĉ_i over the N_H hybrid cells, c̄̂, estimates the mean transcriptome share c̄.
+**T****ranscriptome share estimate****.** For each hybrid cell, we estimated its transcriptome share as the fraction of its UMIs assigned to the *S. cerevisiae* genome. The average of ĉ\_i over the N\_H hybrid cells, c̄̂, estimates the mean transcriptome share c̄.
 
 $$
 \hat{c}_i = \frac{L_{\mathrm{Hc}i}}{L_{\mathrm{Hc}i}+L_{\mathrm{He}i}} = \frac{L_{\mathrm{Hc}i}}{L_{\mathrm{H}i}}, \qquad \hat{\bar{c}} = \frac{1}{N_{\mathrm{H}}}\sum_i \hat{c}_i
 $$
 
-**Mean.** The mean estimator of the NB model is the ratio of summed counts to summed offsets, where each allele's offset is O_i = S_Hi/2:
+**Mean.** The mean estimator of the NB model is the ratio of summed counts to summed offsets, where each allele's offset is O\_i:
 
 $$
-\hat{\mu}^*_{\mathrm{Hc}} = \frac{\sum_i y_{\mathrm{Hc}i}}{\sum_i S_{\mathrm{H}i}/2}, \qquad \hat{\mu}^*_{\mathrm{He}} = \frac{\sum_i y_{\mathrm{He}i}}{\sum_i S_{\mathrm{H}i}/2}
+\hat{\mu}^*_{\mathrm{Hc}} = \frac{\sum_i y_{\mathrm{Hc}i}}{\sum_i O_i}, \qquad \hat{\mu}^*_{\mathrm{He}} = \frac{\sum_i y_{\mathrm{He}i}}{\sum_i O_i}
 $$
 
 This estimator is biased. Given its transcriptome share, the expected Hc count of cell i is its library size times its transcriptome share and its expression per genome. Since the offsets are fixed, the expectation of the ratio is the sum of the expected counts over the sum of the offsets. Averaging over the transcriptome share gives:
 
 $$
 \begin{aligned}
-\mathrm{E}[Y_{\mathrm{Hc}i} \mid c_i] &= S_{\mathrm{H}i}\,c_i\,\mu_{\mathrm{Hc}}, \qquad \mathrm{E}[Y_{\mathrm{Hc}i}] = S_{\mathrm{H}i}\,\bar{c}\,\mu_{\mathrm{Hc}} \\
-\mathrm{E}\left[\hat{\mu}^*_{\mathrm{Hc}}\right] &= \frac{\sum_i S_{\mathrm{H}i}\,\bar{c}\,\mu_{\mathrm{Hc}}}{\sum_i S_{\mathrm{H}i}/2} = 2\bar{c}\,\mu_{\mathrm{Hc}}, \qquad \mathrm{E}\left[\hat{\mu}^*_{\mathrm{He}}\right] = 2(1-\bar{c})\,\mu_{\mathrm{He}}
+\mathrm{E}[Y_{\mathrm{Hc}i} \mid c_i] &= 2O_i\,c_i\,\mu_{\mathrm{Hc}}, \qquad \mathrm{E}[Y_{\mathrm{Hc}i}] = 2O_i\,\bar{c}\,\mu_{\mathrm{Hc}} \\
+\mathrm{E}\left[\hat{\mu}^*_{\mathrm{Hc}}\right] &= \frac{\sum_i 2O_i\,\bar{c}\,\mu_{\mathrm{Hc}}}{\sum_i O_i} = 2\bar{c}\,\mu_{\mathrm{Hc}}, \qquad \mathrm{E}\left[\hat{\mu}^*_{\mathrm{He}}\right] = 2(1-\bar{c})\,\mu_{\mathrm{He}}
 \end{aligned}
 $$
 
-The fitted mean therefore equals μ_Hc only when c̄ is one half. We call 2c̄ and 2(1 − c̄) the abundance factors of the two alleles. Every group has 800 cells or more, so terms of 𝒪(1/N) are small, and we dropped them throughout. Dividing each fitted mean by its abundance factor gives estimators of the per-genome rates that are unbiased up to 𝒪(1/N_H):
+The fitted mean therefore equals μ\_Hc only when c̄ is one half. We call 2c̄ and 2(1 − c̄) the abundance factors of the two alleles. Every group has 800 cells or more, so terms of 𝒪(1/N) are small, and we dropped them throughout. Dividing each fitted mean by its abundance factor gives estimators of the per-genome rates that are unbiased up to 𝒪(1/N\_H):
 
 $$
 \hat{\mu}_{\mathrm{Hc}} = \frac{\hat{\mu}^*_{\mathrm{Hc}}}{2\hat{\bar{c}}}, \qquad \hat{\mu}_{\mathrm{He}} = \frac{\hat{\mu}^*_{\mathrm{He}}}{2(1-\hat{\bar{c}})}
 $$
 
-Because c̄ averages over all genes, this correction removes the genome-wide allele imbalance of the hybrid. A genome-wide difference in mRNA output between the two genomes and a difference in their capture or assignment efficiency are removed together. The *cis* mean contrasts therefore measure each gene relative to the hybrid's genome-wide allele balance, and a* cis* effect shared by every gene cannot be detected.
+Because c̄ averages over all genes, this correction removes the genome-wide allele imbalance of the hybrid. A genome-wide difference in mRNA output between the two genomes and a difference in their capture or assignment efficiency are removed together. The *cis* mean contrasts therefore measure each gene relative to the hybrid's genome-wide allele balance, and a *cis* effect shared by every gene cannot be detected.
 
 **Dispersion.** To find how the transcriptome share affects the dispersion estimate, we first need to know what an NB dispersion estimates. The NB arises when a Poisson count is scaled by an expression factor a that has mean one and a gamma distribution:
 
 $$
+
 Y_{ri} \mid a_{ri} \sim \mathrm{Poisson}\left(O_i\,\mu_r\,a_{ri}\right), \qquad a_{ri} \sim \mathrm{Gamma}\left(\text{shape} = 1/\varphi_r,\ \text{rate} = 1/\varphi_r\right) \\
 \mathrm{E}[a_{ri}] = 1, \qquad \mathrm{Var}[a_{ri}] = \varphi_r
+
 $$
 
 Integrating the Poisson probability against the gamma density, with θ = 1/φ, gives the marginal distribution of the count:
@@ -275,13 +275,13 @@ $$
 \end{aligned}
 $$
 
-This is the NB with mean M_i and dispersion φ. An NB fit therefore estimates the variance of the mean-one factor that scales the Poisson mean. For an allele, that factor is its expression factor, so the target is φ_Hc ≡ Var[a_Hci]. However, the fit absorbs every factor that scales the Poisson mean, including the transcriptome share in the hybrid. Writing the library size through the allele offset, S_Hi = 2O_i, and the transcriptome share relative to its mean, c_i = c̄ t_Hci, separates the expected Hc count into the offset, the fitted mean 2c̄μ_Hc, and two mean-one factors:
+This is the NB with mean M\_i and dispersion φ. An NB fit therefore estimates the variance of the mean-one factor that scales the Poisson mean. For an allele, that factor is its expression factor, so the target is φ\_Hc ≡ Var\[a\_Hci\]. However, the fit absorbs every factor that scales the Poisson mean, including the transcriptome share in the hybrid. Writing the library size through the allele offset, L\_Hi/D = 2O\_i, and the transcriptome share relative to its mean, c\_i = c̄ t\_Hci, separates the expected Hc count into the offset, the fitted mean 2c̄μ\_Hc, and two mean-one factors:
 
 $$
-\mathrm{E}[Y_{\mathrm{Hc}i} \mid c_i, a_{\mathrm{Hc}i}] = S_{\mathrm{H}i}\,c_i\,\mu_{\mathrm{Hc}}\,a_{\mathrm{Hc}i} = 2O_i\left(\bar{c}\,\mu_{\mathrm{Hc}}\right)t_{\mathrm{Hc}i}\,a_{\mathrm{Hc}i}, \qquad t_{\mathrm{Hc}i} \equiv \frac{c_i}{\bar{c}}
+\mathrm{E}[Y_{\mathrm{Hc}i} \mid c_i, a_{\mathrm{Hc}i}] = 2O_i\,c_i\,\mu_{\mathrm{Hc}}\,a_{\mathrm{Hc}i} = 2O_i\left(\bar{c}\,\mu_{\mathrm{Hc}}\right)t_{\mathrm{Hc}i}\,a_{\mathrm{Hc}i}, \qquad t_{\mathrm{Hc}i} \equiv \frac{c_i}{\bar{c}}
 $$
 
-We assumed the transcriptome share multiplier t_Hci to be independent of the expression factor and of the depth factor. The fit then treats the product a*_Hci ≡ t_Hci a_Hci as its expression factor, marked with a star because it still carries the transcriptome share. The product has mean one, so φ̂*_Hc estimates its variance. We define η_Hc as the squared coefficient of variation of the transcriptome share, and have E[t²_Hc] = 1 + η_Hc:
+We assumed the transcriptome share multiplier t\_Hci to be independent of the expression factor and of the offset. The fit then treats the product a\*\_Hci ≡ t\_Hci a\_Hci as its expression factor, marked with a star because it still carries the transcriptome share. The product has mean one, so φ̂\*\_Hc estimates its variance. We define η\_Hc as the squared coefficient of variation of the transcriptome share, and have E\[t²\_Hc\] = 1 + η\_Hc:
 
 $$
 \begin{aligned}
@@ -290,9 +290,9 @@ $$
 \end{aligned}
 $$
 
-The fitted dispersion therefore exceeds φ_Hc by (1 + φ_Hc)η_Hc, which has a fixed part η_Hc and a part proportional to the dispersion. Removing it requires η_Hc, and thus the variance of the true transcriptome share, σ²_c.
+The fitted dispersion therefore exceeds φ\_Hc by (1 + φ\_Hc)η\_Hc, which has a fixed part η\_Hc and a part proportional to the dispersion. Removing it requires η\_Hc, and thus the variance of the true transcriptome share, σ²\_c.
 
-The sample variance of ĉ_i overstates σ²_c, because each ĉ_i also carries binomial sampling noise. The law of total variance splits Var[ĉ_i] into the variance of its conditional mean and the mean of its conditional variance. Given the library size and the true transcriptome share, the number of *S. cerevisiae* UMIs is binomial, so ĉ_i has conditional mean c_i and conditional variance c_i(1 − c_i)/L_Hi. Taking the library size to be independent of the true transcriptome share and substituting these moments gives the variance of the true transcriptome share plus the average sampling variance:
+The sample variance of ĉ\_i overstates σ²\_c, because each ĉ\_i also carries binomial sampling noise. The law of total variance splits Var\[ĉ\_i\] into the variance of its conditional mean and the mean of its conditional variance. Given the library size and the true transcriptome share, the number of *S. cerevisiae* UMIs is binomial, so ĉ\_i has conditional mean c\_i and conditional variance c\_i(1 − c\_i)/L\_Hi. Taking the library size to be independent of the true transcriptome share and substituting these moments gives the variance of the true transcriptome share plus the average sampling variance:
 
 $$
 \begin{gathered}
@@ -303,7 +303,7 @@ L_{\mathrm{Hc}i} \mid L_{\mathrm{H}i}, c_i \sim \mathrm{Binomial}\left(L_{\mathr
 \end{gathered}
 $$
 
-This correction needs c_i, which is unknown, so we substituted ĉ_i, which adds a bias of its own. The library size is fixed under the conditioning, so the expectation of ĉ_i(1 − ĉ_i)/L_Hi is the mean of ĉ_i minus the mean of its square, divided by L_Hi, and the mean square is the binomial variance plus the squared mean. The plug-in term is therefore too small by the factor (L_Hi − 1)/L_Hi, and dividing by L_Hi − 1 instead of L_Hi removes it. Each cell then gives an unbiased estimate of its own sampling variance. Averaging these over cells and subtracting the average from the sample variance of ĉ_i gives the estimator of the variance of the transcriptome share.
+This correction needs c\_i, which is unknown, so we substituted ĉ\_i, which adds a bias of its own. The library size is fixed under the conditioning, so the expectation of ĉ\_i(1 − ĉ\_i)/L\_Hi is the mean of ĉ\_i minus the mean of its square, divided by L\_Hi, and the mean square is the binomial variance plus the squared mean. The plug-in term is therefore too small by the factor (L\_Hi − 1)/L\_Hi, and dividing by L\_Hi − 1 instead of L\_Hi removes it. Each cell then gives an unbiased estimate of its own sampling variance. Averaging these over cells and subtracting the average from the sample variance of ĉ\_i gives the estimator of the variance of the transcriptome share.
 
 $$
 \begin{aligned}
@@ -312,13 +312,13 @@ $$
 \end{aligned}
 $$
 
-Solving the expectation of φ̂*_Hc for φ_Hc and replacing each quantity by its estimate gives the corrected allele dispersion:
+Solving the expectation of φ̂\*\_Hc for φ\_Hc and replacing each quantity by its estimate gives the corrected allele dispersion:
 
 $$
 \hat{\varphi}_{\mathrm{Hc}} = \frac{\hat{\varphi}^*_{\mathrm{Hc}} - \hat{\eta}_{\mathrm{Hc}}}{1 + \hat{\eta}_{\mathrm{Hc}}}, \qquad \hat{\eta}_{\mathrm{Hc}} = \frac{\hat{\sigma}_c^2}{\hat{\bar{c}}^2}
 $$
 
-Both parts of η̂_Hc are unbiased, so η̂_Hc is unbiased up to a term of order 1/N_H. 
+Both parts of η̂\_Hc are unbiased, so η̂\_Hc is unbiased up to a term of order 1/N\_H.&#32;
 
 $$
 \begin{aligned}
@@ -328,19 +328,13 @@ $$
 \end{aligned}
 $$
 
-Analogous formulas apply for the He allele with 1 − c̄̂ in place of c̄̂. In our data the estimated mean transcriptome share c̄̂ is 0.5024, with η̂_Hc = 7.4 × 10⁻⁵ and η̂_He = 7.5 × 10⁻⁵. At the median dispersions of Hc (0.150) and He (0.152) the transcriptome share correction terms are 8.5 × 10⁻⁵ and 8.6 × 10⁻⁵, about 0.06% of each. Relative to the dispersion, the correction (1 + φ)η/φ grows as the dispersion falls, and it exceeds 1% of φ for dispersions below about 0.0075. We therefore corrected every hybrid allele dispersion and truncated negative values at zero.
+Analogous formulas apply for the He allele with 1 − c̄̂ in place of c̄̂. In our data the estimated mean transcriptome share c̄̂ is 0.5024, with η̂\_Hc = 7.4 × 10⁻⁵ and η̂\_He = 7.5 × 10⁻⁵. At the median dispersions of Hc (0.150) and He (0.152) the transcriptome share correction terms are 8.5 × 10⁻⁵ and 8.6 × 10⁻⁵, about 0.06% of each. Relative to the dispersion, the correction (1 + φ)η/φ grows as the dispersion falls, and it exceeds 1% of φ for dispersions below about 0.0075. We therefore corrected every hybrid allele dispersion and truncated negative values at zero.
 
 ## Per-genome hybrid estimates
 
 The dominance contrasts compare the hybrid with its parents per genome, which requires the per-genome mean and dispersion of the hybrid.
 
-**Mean.** We fitted the summed hybrid counts with the offset S_H, the full depth of the hybrid cell. When the two alleles contribute equally on average (c̄ = ½), the mean rate of the summed hybrid is the average of the two per-genome rates.
-
-$$
-\hat{\mu}^*_{\mathrm{H}} = \frac{\sum_i y_{\mathrm{H}i}}{\sum_i S_{\mathrm{H}i}} = \frac{\sum_i y_{\mathrm{Hc}i} + \sum_i y_{\mathrm{He}i}}{\sum_i S_{\mathrm{H}i}} = \tfrac12\left(\frac{\sum_i y_{\mathrm{Hc}i}}{\sum_i S_{\mathrm{H}i}/2} + \frac{\sum_i y_{\mathrm{He}i}}{\sum_i S_{\mathrm{H}i}/2}\right) = \tfrac12\left(\hat{\mu}^*_{\mathrm{Hc}} + \hat{\mu}^*_{\mathrm{He}}\right)
-$$
-
-When c̄ differs from one half, μ̂*_H converges instead to the transcriptome share-weighted average of the per-genome rates. We divided each allele fit by its abundance factor to remove this weighting:
+**Mean.** Each allele fit estimates its per-genome rate times its abundance factor, 2c̄ for Hc and 2(1 − c̄) for He, so we divided each allele fit by its abundance factor and averaged the two per-genome rates:
 
 $$
 \hat{\mu}_{\mathrm{H}} = \tfrac12\left(\hat{\mu}_{\mathrm{Hc}} + \hat{\mu}_{\mathrm{He}}\right) = \tfrac12\left(\frac{\hat{\mu}^*_{\mathrm{Hc}}}{2\hat{\bar{c}}} + \frac{\hat{\mu}^*_{\mathrm{He}}}{2(1-\hat{\bar{c}})}\right)
@@ -352,9 +346,9 @@ $$
 \log_2\hat{\varphi}_{\mathrm{H}} = \tfrac12\left(\log_2\hat{\varphi}_{\mathrm{Hc}} + \log_2\hat{\varphi}_{\mathrm{He}}\right)
 $$
 
-Each allele carries the full extrinsic noise of its cell and its own intrinsic noise, so each corrected allele dispersion is a per-genome dispersion and their average is φ̂_H. Summing the two allele counts instead averages their intrinsic noise, which lowers the dispersion of the summed counts, φ_Σ, below φ_H by a ploidy shift δ. Appendix B derives δ, and we reported it for each gene as a measure of how much noise summing hides. 
+Each allele carries the full extrinsic noise of its cell and its own intrinsic noise, so each corrected allele dispersion is a per-genome dispersion and their average is φ̂\_H. Summing the two allele counts instead averages their intrinsic noise, which lowers the dispersion of the summed counts, φ\_Σ, below φ\_H by a ploidy shift δ. Appendix B derives δ, and we reported it for each gene as a measure of how much noise summing hides.&#32;
 
-Burst size and kinetic balance of the hybrid are built from the same per-genome quantities, μ̂_H and φ̂_H. The CV² is a raw-scale quantity, so it uses the arithmetic mean of the two allele dispersions:
+Burst size and kinetic balance of the hybrid are built from the same per-genome quantities, μ̂\_H and φ̂\_H. The CV² is a raw-scale quantity, so it uses the arithmetic mean of the two allele dispersions:
 
 $$
 \log_2\hat{\zeta}_{\mathrm{H}} = \log_2\hat{\mu}_{\mathrm{H}} + \log_2\hat{\varphi}_{\mathrm{H}}, \qquad \log_2\hat{\kappa}_{\mathrm{H}} = -\log_2\hat{\mu}_{\mathrm{H}} - 2\log_2\hat{\varphi}_{\mathrm{H}}
@@ -364,13 +358,13 @@ $$
 \mathrm{CV}^2_{\mathrm{H}} = \frac{1}{\hat{\mu}_{\mathrm{H}}} + \tfrac12\left(\hat{\varphi}_{\mathrm{Hc}} + \hat{\varphi}_{\mathrm{He}}\right)
 $$
 
-On the raw scale, the burst size and kinetic balance of the hybrid are averages of the allele values rather than functions of μ̂_H and φ̂_H:
+On the raw scale, the burst size and kinetic balance of the hybrid are averages of the allele values rather than functions of μ̂\_H and φ̂\_H:
 
 $$
 \hat{\zeta}^{\mathrm{raw}}_{\mathrm{H}} = \tfrac12\left(\hat{\mu}_{\mathrm{Hc}}\,\hat{\varphi}_{\mathrm{Hc}} + \hat{\mu}_{\mathrm{He}}\,\hat{\varphi}_{\mathrm{He}}\right), \qquad \hat{\kappa}^{\mathrm{raw}}_{\mathrm{H}} = \tfrac12\left(\hat{\kappa}_{\mathrm{Hc}} + \hat{\kappa}_{\mathrm{He}}\right)
 $$
 
-The raw burst size and kinetic balance contrasts are the weighted sums of these per-group values, Σ_r λ_r ζ̂_r and Σ_r λ_r κ̂_r, with the group weights λ_r of the raw dispersion contrasts (*Null for the log₂ dispersion contrasts*).
+The raw burst size and kinetic balance contrasts are the weighted sums of these per-group values, Σ\_r λ\_r ζ̂\_r and Σ\_r λ\_r κ̂\_r, with the group weights λ\_r of the raw dispersion contrasts (*Null for the log₂ dispersion contrasts*).
 
 Each bootstrap replicate refitted the allele means and dispersions, with their transcriptome share corrections, on its resampled hybrid cells, so the standard errors of every quantity built from them include the sampling error of the corrections.
 
@@ -384,31 +378,15 @@ $$
 
 We used only the log₂ scale for mean contrasts and both scales for dispersion contrasts. On the log₂ scale, a doubling of φ counts the same whether the gene starts quiet or noisy, so log₂ dispersion contrasts compare genes on a common footing and can be compared directly with log₂ mean contrasts. When two groups differ by a constant factor in an underlying rate, their log₂ dispersions differ by a fixed amount regardless of the starting dispersion. The log₂ scale therefore suits questions about the mechanism behind a difference between groups.
 
-On the raw scale, a contrast is the difference of two dispersions. Because the squared coefficient of variation of a count is 1/μ + φ, a raw difference in φ is the difference in cell-to-cell variability beyond Poisson sampling, so it measures how much noise a difference adds. The raw scale suits questions about the size of noise and its likely consequences for phenotype. It also handles genes at or near zero dispersion, which the log₂ contrast must exclude.
+On the raw scale, a contrast is the difference of two dispersions. Because the squared coefficient of variation of a count is 1/μ + φ, a raw difference in φ is the difference in cell-to-cell variability beyond Poisson sampling, so it measures how much noise a difference adds. The raw scale suits questions about the size of noise and its likely consequences for phenotype. It needs no logarithm, so its estimates stay defined for genes with a zero estimate, although the boundary gate withholds their p-values.
 
-**Informative estimates.** Whether a dispersion estimate can support a contrast between groups depends on its precision. We therefore placed each estimate in one of three classes. First, an estimate is resolved above zero when a test against the Poisson model rejects at the 5% level. The test compares the adjusted log-likelihood at φ̂_r and at zero. Because zero lies on the boundary of the parameter space, the null distribution is an equal mixture of a point mass at zero and a χ² distribution with one degree of freedom:
+**Informative estimates.** Whether a dispersion estimate can support a contrast between groups depends on how much of its sampling distribution lies on the zero boundary. A dispersion estimate cannot fall below zero, so a group whose refitted dispersion is zero in many bootstrap replicates has no log₂ value in those replicates, and on the raw scale its null distribution is clipped at zero. For each group we therefore recorded the fraction of bootstrap replicates in which its refitted dispersion is zero. We called a group resolved when this fraction is at most 2.5%, the tail fraction of a 95% percentile interval, which has a finite endpoint on the log₂ scale only below this fraction. A fit that returns zero is a valid boundary value, and we recorded it as an estimate, separate from a failed fit.
 
-$$
-T_r = 2\left[\ell^{\mathrm{CR}}_r(\hat{\varphi}_r) - \ell^{\mathrm{CR}}_r(0)\right], \qquad T_r \sim \tfrac12\,\chi^2_0 + \tfrac12\,\chi^2_1 \ \text{under } \varphi_r = 0, \qquad \text{resolved above zero if } T_r > 2.71
-$$
+The gate applies to the raw, log₂, burst size and kinetic balance contrasts alike. The log₂ scale needs it because a zero estimate has no logarithm, and the raw scale needs it because the shifted bootstrap null of a group on the boundary is clipped at zero (*Null distributions*). We formed a contrast only when every group it uses is resolved. A contrast with an unresolved group received its estimate and bootstrap interval, and no p-value.
 
-Second, an estimate is resolved near zero when it is not resolved above zero, but its upper 95% likelihood bound φ^up_r, scaled by the average fitted count per cell, falls below 0.1:
+When one group is resolved and the other is not, we compared likelihood bounds on the raw scale. The upper 95% likelihood bound φ^up\_r is the value above φ̂\_r at which twice the fall in the adjusted log-likelihood from its maximum equals 2.71, the 0.90 quantile of a χ² with one degree of freedom, which makes it a one-sided 95% bound (a two-sided 95% bound would use 3.84). The lower bound φ^lo\_r is the value below φ̂\_r at which the fall is the same, or zero if the fall never reaches it. We described the contrast as a gain or loss of noise when the lower bound of the resolved group exceeds the upper bound of the unresolved group.
 
-$$
-\varphi^{\mathrm{up}}_r\,\bar{M}_r < 0.1, \qquad \bar{M}_r \equiv \frac{1}{N_r}\sum_i \hat{M}_i
-$$
-
-Since φM̄_r is the extra-Poisson variance as a fraction of the Poisson variance, these genes are effectively Poisson. We considered all other estimates uninformative.
-
-The two scales need different precision from each dispersion estimate. A raw contrast can use estimates resolved above or near zero, while a log₂ contrast can use only estimates resolved above zero. A fit that returns zero can still be resolved near zero, so we recorded it as a valid estimate, separate from a failed fit. We formed a contrast only when every group it uses has an estimate in an allowed class:
-
-| Class | Raw contrasts | Log₂ contrasts |
-|---|---|---|
-| Resolved above zero | yes | yes |
-| Resolved near zero | yes | no |
-| Uninformative | no | no |
-
-**Contrasts between groups.** The total contrast compares the two parents, the *cis* contrast compares the two hybrid alleles, and the* trans* contrast is their difference. The midparent contrast compares the per-genome hybrid with the mean of the two parents, and the parental contrast compares it with one parent, P. For the mean:
+**Contrasts between groups.** The total contrast compares the two parents, the *cis* contrast compares the two hybrid alleles, and the *trans* contrast is their difference. The midparent contrast compares the per-genome hybrid with the mean of the two parents, and the parental contrast compares it with one parent, P. For the mean:
 
 $$
 \begin{aligned}
@@ -436,7 +414,7 @@ $$
 
 Each estimated contrast replaces every quantity by its corrected estimate, so it converges to its true contrast within 𝒪(1/N) because each estimator does.
 
-**Kinetic balance.** For a contrast between independent groups, the variances of the two groups add and the covariances between groups are zero, so the covariances, correlations and precision cost derived in *Burst kinetics* carry over, with each variance replaced by its sum over the two groups. For the* c**is* contrasts, whose two alleles share cells, we assumed that the covariance between the mean estimate of one allele and the dispersion estimate of the other is negligible, so the same results hold. We formed a kinetic balance contrast only when every group it uses has a dispersion estimate resolved above zero.
+**Kinetic balance.** For a contrast between independent groups, the variances of the two groups add and the covariances between groups are zero, so the covariances, correlations and precision cost derived in *Burst kinetics* carry over under the NB, with each variance replaced by its sum over the two groups. For the *cis* contrasts, whose two alleles share cells, we assumed that the covariance between the mean estimate of one allele and the dispersion estimate of the other is negligible, so the same results hold. We formed a kinetic balance contrast only when every group it uses is resolved.
 
 Together, the kinetic balance and mean contrasts separate two biological questions. Δ(μ) asks how much expression differs. Δ(κ) then asks how that difference divides between differences in burst frequency and burst size. Rewriting the relationship between μ, θ, and ζ, we have:
 
@@ -456,19 +434,19 @@ $$
 
 A difference carried entirely by burst frequency therefore gives Δ(κ) = Δ(μ), one carried entirely by burst size gives Δ(κ) = −Δ(μ), and equal log₂ differences in both give Δ(κ) = 0.
 
-## Statistical power of *cis* and* trans* estimates
+## Statistical power of *cis* and *trans* estimates
 
-In the hybrid, both alleles share one nucleus and one set of *trans*-acting factors, so their difference measures* cis* divergence alone (Wittkopp et al. 2004).* Trans* divergence is the remainder of the parental difference. The two estimates differ in statistical power because they draw on different data. Fluctuations shared by both alleles of a hybrid cell, such as cell size, sequencing depth and extrinsic fluctuations like cell-cycle state, largely cancel in the* cis* contrast. The* trans* contrast subtracts the hybrid ratio from the parental ratio, and the parental ratio comes from two independent sets of cells, so its variance adds to the* trans* contrast without cancellation. If all hybrid cells were used for both components,* trans* would always be the less precise estimate, with lower power than* cis* to detect differences, and its estimation error would correlate negatively with that of* cis* (Fraser 2019). We resolved both problems by using a fraction of the hybrid cells to estimate* cis* and the rest to estimate* trans*:
+In the hybrid, both alleles share one nucleus and one set of *trans*-acting factors, so their difference measures *cis* divergence alone (Wittkopp et al. 2004). *Trans* divergence is the remainder of the parental difference. The two estimates differ in statistical power because they draw on different data. Fluctuations shared by both alleles of a hybrid cell, such as cell size, sequencing depth and extrinsic fluctuations like cell-cycle state, largely cancel in the *cis* contrast. The *trans* contrast subtracts the hybrid ratio from the parental ratio, and the parental ratio comes from two independent sets of cells, so its variance adds to the *trans* contrast without cancellation. If all hybrid cells were used for both components, *trans* would always be the less precise estimate, with lower power than *cis* to detect differences, and its estimation error would correlate negatively with that of *cis* (Fraser 2019). We resolved both problems by using a fraction of the hybrid cells to estimate *cis* and the rest to estimate *trans*:
 
 $$
 N_{\mathrm{cis}} = f_x\,N_{\mathrm{H}}, \qquad N_{\mathrm{trans}} = (1-f_x)\,N_{\mathrm{H}}
 $$
 
-where N_H is the number of hybrid cells and f_x the fraction assigned to *cis*.
+where N\_H is the number of hybrid cells and f\_x the fraction assigned to *cis*.
 
-Since the two subsets share no hybrid cells, the *cis* and* trans* estimates are independent and estimation errors in one do not affect the other. We also chose the partition so that the two contrasts have equal sampling variance, and therefore equal power to detect an effect of a given size.
+Since the two subsets share no hybrid cells, the *cis* and *trans* estimates are independent and estimation errors in one do not affect the other. We also chose the partition so that the two contrasts have equal sampling variance, and therefore equal power to detect an effect of a given size.
 
-**Variance of the cis contrast.** Both hybrid alleles are fit on the same *cis* cells, so the variance of the difference of their log₂ estimates includes their covariance. In large samples each variance and the covariance are inversely proportional to the number of cells used, here f_x N_H. The whole sum is therefore a constant divided by f_x N_H. We call this constant σ²_Δ,H, the per-cell variance of the hybrid allele ratio.
+**Variance of the *cis* contrast.** Both hybrid alleles are fit on the same *cis* cells, so the variance of the difference of their log₂ estimates includes their covariance. In large samples each variance and the covariance are inversely proportional to the number of cells used, here f\_x N\_H. The whole sum is therefore a constant divided by f\_x N\_H. We call this constant σ²\_Δ,H, the per-cell variance of the hybrid allele ratio.
 
 $$
 \begin{aligned}
@@ -479,19 +457,19 @@ $$
 
 Since the alleles share depth and extrinsic fluctuations, the covariance is positive. It therefore lowers the variance of the *cis* contrast below that of two alleles measured in separate cells.
 
-**Variance of the trans contrast.** The *trans* contrast subtracts the hybrid allele ratio, measured on the remaining hybrid cells, from the parental ratio. The two parents are measured in different cells, so their estimates have no covariance, and the variance of the parental ratio is the sum of two terms.
+**Variance of the *trans* contrast.** The *trans* contrast subtracts the hybrid allele ratio, measured on the remaining hybrid cells, from the parental ratio. The two parents are measured in different cells, so their estimates have no covariance, and the variance of the parental ratio is the sum of two terms.
 
 $$
 \sigma^2_{\Delta,P} = \mathrm{Var}\left[\log_2 \hat{x}_{\mathrm{Pc}}\right] + \mathrm{Var}\left[\log_2 \hat{x}_{\mathrm{Pe}}\right]
 $$
 
-The parental cells and the *trans* hybrid cells are also disjoint, so the two parts of the* trans* contrast are independent and their variances add with no covariance. The fitted difference for the* trans* contrast is the parental log ratio minus the hybrid allele log ratio, with the two hybrid alleles fit only on the cells of the* trans* subset. Substituting these gives:
+The parental cells and the *trans* hybrid cells are also disjoint, so the two parts of the *trans* contrast are independent and their variances add with no covariance. The fitted difference for the *trans* contrast is the parental log ratio minus the hybrid allele log ratio, with the two hybrid alleles fit only on the cells of the *trans* subset. Substituting these gives:
 
 $$
 \mathrm{Var}\left\{\left[\log_2 \hat{x}_{\mathrm{Pc}} - \log_2 \hat{x}_{\mathrm{Pe}}\right] - \left[\log_2 \hat{x}_{\mathrm{Hc}} - \log_2 \hat{x}_{\mathrm{He}}\right]\right\} = \sigma^2_{\Delta,P} + \frac{\sigma^2_{\Delta,\mathrm{H}}}{(1-f_x)\,N_{\mathrm{H}}}
 $$
 
-**Solving for the balanced statistical power.** To balance statistical power between *cis* and *trans* estimates, we set the *cis* variance equal to the* trans* variance and solved for f_x. Multiplying both sides by the number of hybrid cells and dividing by the per-cell variance gives:
+**Solving for the balanced statistical power.** To balance statistical power between *cis *and *trans *estimates, we set the *cis* variance equal to the *trans* variance and solved for f\_x. Multiplying both sides by the number of hybrid cells and dividing by the per-cell variance gives:
 
 $$
 \begin{aligned}
@@ -517,7 +495,7 @@ $$
 
 The root with the minus sign is the balanced partition, because the root with the plus sign exceeds one.
 
-Two limits show how the balanced partition behaves. When the parental variance is negligible compared to the hybrid variance (γ → 0), the optimum returns to an even partition. When the parental variance is much larger than the hybrid variance, the partition falls as the inverse of the ratio. Power is therefore equalized by moving hybrid cells from estimating *cis* to estimating* trans* as the fixed parental variance grows.
+Two limits show how the balanced partition behaves. When the parental variance is negligible compared to the hybrid variance (γ → 0), the optimum returns to an even partition. When the parental variance is much larger than the hybrid variance, the partition falls as the inverse of the ratio. Power is therefore equalized by moving hybrid cells from estimating *cis* to estimating *trans* as the fixed parental variance grows.
 
 $$
 \begin{aligned}
@@ -526,9 +504,9 @@ $$
 \end{aligned}
 $$
 
-**Separate partitions for each quantity.** The optimal partition depends on the parental variance relative to the hybrid variance, which differs among quantities. Estimates of φ carry larger and more skewed sampling error than estimates of μ, and kinetic balance carries about four times the dispersion variance, so we estimated γ separately for each. Mean contrasts used the partition at f_μ, dispersion contrasts the partition at f_φ, and kinetic balance contrasts the partition at f_κ, in which the mean and the dispersion are fitted on the same cells. Burst size contrasts combined Δ(μ) from the first partition with Δ(φ) from the second, and their standard errors treated the two as uncorrelated.
+**Separate partitions for each quantity.** The optimal partition depends on the parental variance relative to the hybrid variance, which differs among quantities. Estimates of φ carry larger and more skewed sampling error than estimates of μ, and kinetic balance carries about four times the dispersion variance, so we estimated γ separately for each. Mean contrasts used the partition at f\_μ, dispersion contrasts the partition at f\_φ, kinetic balance contrasts the partition at f\_κ, and burst size contrasts the partition at f\_ζ. The kinetic balance and burst size partitions fit the mean and the dispersion on the same cells.
 
-Sharing cells between the mean and dispersion partitions, or fitting both on the same cells as in the kinetic balance partition, does not correlate the mean and dispersion contrasts to first order. Within one group, let the mean be fitted on a set of cells A and the dispersion on a set B, which may share cells. The error of the fitted mean is a sum of count deviations over A. The fitted dispersion sets the slope of the log-likelihood in φ to zero (*Estimating φ*), so to first order its error is a constant c times the sum over B of the per-cell slopes s_i, evaluated at the true mean and dispersion. Writing out the covariance of the two errors with these definitions, the expected counts M_i are constants, a count and a slope from different cells are independent, and only cells in both sets remain:
+Fitting the mean and dispersion on the same cells, as in the kinetic balance and burst size partitions, can correlate the mean and dispersion contrasts, so we asked when. Within one group, let the mean be fitted on a set of cells A and the dispersion on a set B, which may share cells. The error of the fitted mean is a sum of count deviations over A. When the counts follow the NB, the fitted dispersion sets the slope of the log-likelihood in φ to zero (*Estimating φ*), so to first order its error is a constant c times the sum over B of the per-cell slopes s\_i, evaluated at the true mean and dispersion. Writing out the covariance of the two errors with these definitions, the expected counts M\_i are constants, a count and a slope from different cells are independent, and only cells in both sets remain:
 
 $$
 \begin{aligned}
@@ -538,15 +516,45 @@ $$
 \end{aligned}
 $$
 
-Each remaining term is also zero. A slope has mean zero, so the covariance is the mean of the count times its slope, and the expected count does not depend on φ:
+Each remaining term is zero when the counts follow the NB. A slope has mean zero, so the covariance is the mean of the count times its slope. Differentiating the sum of y times its probability turns this mean into the derivative of the expected count with respect to φ, and the expected count does not depend on φ. The step sums over the NB probability, so it holds only when the counts follow the NB:
 
 $$
 \mathrm{Cov}\left[Y_i, s_i\right] = \mathrm{E}\left[Y_i\,s_i\right] = \sum_y y\,\frac{\partial \Pr(y \mid M_i, \varphi)}{\partial \varphi} = \frac{\partial}{\partial \varphi}\sum_y y\,\Pr(y \mid M_i, \varphi) = \frac{\partial M_i}{\partial \varphi} = 0
 $$
 
-The mean and dispersion errors of one group are therefore uncorrelated whether or not two partitions share its cells.
+The mean and dispersion errors of one group are therefore uncorrelated when the two sets share no cells, whatever the distribution of the counts. When the sets share cells, the errors are uncorrelated only if the counts follow the NB, which requires a gamma expression factor. The factor of a hybrid allele is not gamma in general, because it combines the transcriptome share multiplier with an expression factor that has a shared and a private part, so shared cells can correlate the two errors.
 
-**Estimating partition fractions.** To estimate f_x for each quantity, we first estimated σ²_Δ,H and σ²_Δ,P for that quantity. We bootstrapped cells from the undivided hybrid and from both parents, refitting the hybrid alleles on the same resampled cells in each replicate to preserve their covariance. Because per-gene ratios of squared bootstrap standard errors are noisy and right-skewed, we pooled the variance components across genes by their medians. The pooled γ is the ratio of their medians across genes. For kinetic balance the medians ran over genes whose dispersion estimates are resolved above zero on both sides of the contrast, because κ is undefined otherwise. We reported γ̂_x and f_x for each quantity, with the resulting numbers of cis and trans cells, so that the partition sizes can be checked against the large-sample assumption.
+To size this covariance, we used the moment estimator of Appendix A, whose first-order error is explicit, with equal offsets scaled to one so that every cell has the same weight and M\_i = μ. Let a\_i be the expression factor of cell i, with mean one and variance φ, so that given a\_i the count Y\_i is Poisson with mean μ a\_i. The estimator averages \[(Y\_j − μ̂\_B)² − μ̂\_B\]/μ̂\_B² over B. The expected value of this bracket at a mean value m is \[μ + μ²φ + (μ − m)² − m\]/m², and its derivative with respect to m at m = μ is −(1/μ² + 2φ/μ). Expanding the estimator around the true mean gives its error. A count in A and a term in B covary only through the cells in both sets, and the fitted mean of B covaries with the mean of A through the variance of one count over those cells. We write N\_A, N\_B and N\_{A∩B} for the numbers of cells in A, in B and in both. Because E\[Y\_i − μ\] = 0, the covariance of a count with the bracket is its third central moment divided by μ², and the variance of a count is μ(1 + μφ) for any mean-one factor with variance φ:
+
+$$
+\begin{aligned}
+\hat{\varphi}_B - \varphi &\approx \frac{1}{N_B}\sum_{j \in B}\left[\frac{(Y_j - \mu)^2 - \mu}{\mu^2} - \varphi\right] - \left(\frac{1}{\mu^2} + \frac{2\varphi}{\mu}\right)\left(\hat{\mu}_B - \mu\right) \\
+\mathrm{Cov}\left[\hat{\mu}_A - \mu,\ \hat{\varphi}_B - \varphi\right] &\approx \frac{N_{A \cap B}}{N_A N_B}\left\{\frac{\mathrm{E}\left[(Y_i - \mu)^3\right]}{\mu^2} - \left(\frac{1}{\mu^2} + \frac{2\varphi}{\mu}\right)\mu\left(1 + \mu\varphi\right)\right\}
+\end{aligned}
+$$
+
+The third central moment follows from writing Y\_i − μ as the Poisson deviation Y\_i − μ a\_i plus the factor deviation μ(a\_i − 1). Given a\_i, the Poisson deviation has mean zero and its second and third moments equal μ a\_i. Expanding the cube leaves three terms, because the term with one Poisson deviation and the square of the factor deviation has conditional mean zero, and E\[a\_i²\] = 1 + φ gives E\[a\_i(a\_i − 1)\] = φ:
+
+$$
+\begin{aligned}
+\mathrm{E}\left[(Y_i - \mu)^3\right] &= \mathrm{E}\left[(Y_i - \mu a_i)^3\right] + 3\,\mathrm{E}\left[(Y_i - \mu a_i)^2\,\mu(a_i - 1)\right] + \mu^3\,\mathrm{E}\left[(a_i - 1)^3\right] \\
+&= \mu + 3\mu^2\,\mathrm{E}\left[a_i(a_i - 1)\right] + \mu^3\,\mathrm{E}\left[(a_i - 1)^3\right] \\
+&= \mu + 3\mu^2\varphi + \mu^3\,\mathrm{E}\left[(a_i - 1)^3\right]
+\end{aligned}
+$$
+
+Substituting this moment and expanding the product in the second term leaves a covariance that depends on the third central moment of the expression factor alone:
+
+$$
+\begin{aligned}
+\mathrm{Cov}\left[\hat{\mu}_A - \mu,\ \hat{\varphi}_B - \varphi\right] &\approx \frac{N_{A \cap B}}{N_A N_B}\left\{\frac{1}{\mu} + 3\varphi + \mu\,\mathrm{E}\left[(a_i - 1)^3\right] - \left(\frac{1}{\mu} + 3\varphi + 2\mu\varphi^2\right)\right\} \\
+&= \frac{N_{A \cap B}}{N_A N_B}\,\mu\left(\mathrm{E}\left[(a_i - 1)^3\right] - 2\varphi^2\right)
+\end{aligned}
+$$
+
+A gamma factor with mean one and variance φ has third central moment 2φ², so the covariance vanishes, as the slope argument above showed. Any other factor leaves a covariance that shrinks as 1/N like the variances of the two estimates, so the correlation depends on the overlap N\_{A∩B}/√(N\_A N\_B) and does not fall as the sample grows. Kinetic balance and burst size contrasts fit the mean and dispersion on the same cells and carry this correlation, so the standard errors of both include it. We derived the covariance for the moment estimator with equal offsets. The NB maximum likelihood fit depends on the third moment in the same way, through the covariance of a count with its slope, which no longer equals ∂M\_i/∂φ, but we did not derive its coefficient.
+
+**Estimating partition fractions.** To estimate f\_x for each quantity, we first estimated σ²\_Δ,H and σ²\_Δ,P for that quantity. We bootstrapped cells from the undivided hybrid and from both parents, refitting the hybrid alleles on the same resampled cells in each replicate to preserve their covariance. Because per-gene ratios of squared bootstrap standard errors are noisy and right-skewed, we pooled the variance components across genes by their medians. The pooled γ is the ratio of their medians across genes. For kinetic balance and burst size the medians ran over genes whose groups are resolved on both sides of the contrast, because κ and the log₂ of ζ are undefined otherwise. We reported γ̂\_x and f\_x for each quantity, with the resulting numbers of cis and trans cells, so that the partition sizes can be checked against the large-sample assumption.
 
 $$
 \begin{aligned}
@@ -555,55 +563,57 @@ $$
 \end{aligned}
 $$
 
-These estimates use only variances, not *cis* or* trans* point estimates, so they do not bias the* cis* and* trans* tests (Wittes and Brittain 1990). Within each partition, the hybrid cells used for* cis* and* trans* span the full range of sequencing depth.
+These estimates use only variances, not *cis* or *trans* point estimates, so they do not bias the *cis* and *trans* tests (Wittes and Brittain 1990). Within each partition, the hybrid cells used for *cis* and *trans* span the full range of sequencing depth.
 
 ## Null distributions
 
-To identify significant contrasts, we tested each contrast against a null distribution generated under its null hypothesis. Every contrast is a difference of per-group or per-allele estimates after the transcriptome share corrections, so we built one null for each of the three statistics, the log₂ mean contrast, the log₂ dispersion contrast, and the raw dispersion contrast, and applied it to every type of contrast. Each null draw was refitted with the same estimators and corrections as the observed data. The permuted and simulated draws keep the observed cells and their libraries, so the transcriptome share estimates c̄̂ and η̂_r are the observed values in every draw, and k̂ of the trans null is held fixed. When the sensitivity analysis used the weighted moment estimator (Appendix A), its null draws were refits of that estimator on the same permuted or simulated counts. With c the number of the B draws whose contrast is at least as extreme as the observed one, the p-value is (1 + c)/(1 + B), which is never zero (Phipson and Smyth 2010).
+To identify significant contrasts, we tested each contrast against a null distribution generated under its null hypothesis. Every contrast is a difference of per-group or per-allele estimates after the transcriptome share corrections, so we built one null for each of the three statistics, the log₂ mean contrast, the log₂ dispersion contrast, and the raw dispersion contrast, and applied it to every type of contrast. Each null draw was refitted with the same estimators and corrections as the observed data. The permuted and simulated draws keep the observed cells and their libraries, so the transcriptome share estimates c̄̂ and η̂\_r are the observed values in every draw, and k̂ of the trans null is held fixed. The dispersion nulls resample cells, so each of their draws refits c̄̂ and η̂\_r on its resampled hybrid cells, as the bootstrap replicates do. When the sensitivity analysis used the weighted moment estimator (Appendix A), its null draws were refits of that estimator on the same permuted, simulated or resampled counts. With c the number of the B draws whose contrast is at least as extreme as the observed one, the p-value is (1 + c)/(1 + B), which is never zero (Phipson and Smyth 2010).
 
 ### Null for the log₂ mean contrasts
 
-Under the null hypothesis the groups compared share one per-genome mean rate. The offsets put every cell on a common depth scale. For the *cis* and parental nulls, dividing each hybrid allele's counts by its abundance factor, 2c̄̂ for Hc and 2(1 − c̄̂) for He, puts them on the per-genome scale of a parent. The* trans* null places the same factor in the allele offsets instead. The cells of the groups compared then share one expected count per unit offset, and we permuted them. Exchangeability also requires the pooled cells to share a dispersion, so where the groups differ in dispersion the permutation null is approximate. We simulated the midparent mean null instead, because a pooled null would be miscalibrated.
+Under the null hypothesis the groups compared share one per-genome mean rate. The offsets put every cell on a common depth scale. For the *cis* and parental nulls, dividing each hybrid allele's counts by its abundance factor, 2c̄̂ for Hc and 2(1 − c̄̂) for He, puts them on the per-genome scale of a parent. The *trans* null places the same factor in the allele offsets instead. The cells of the groups compared then share one expected count per unit offset, and we permuted them. Exchangeability also requires the pooled cells to share a dispersion, so where the groups differ in dispersion the permutation null is approximate. We simulated the midparent mean null instead, because a pooled null would be miscalibrated.
 
 **Cis.** The two alleles are measured in the same cells and share their extrinsic noise. We swapped the two rescaled allele counts within each cell at random, which keeps that shared noise and leaves the offsets unchanged.
 
-**Trans.** Under the null the two ratios are equal, μ_Pc/μ_Pe = μ_Hc/μ_He. This allows the per-genome level of the hybrid to differ from the parents' by a common factor k, with μ_Hc = kμ_Pc and μ_He = kμ_Pe. We estimated k from the corrected allele means of the *trans* subset and the parental means, and gave each hybrid allele an offset that includes both its abundance factor and k, leaving its counts unchanged:
+**Trans.** Under the null the two ratios are equal, μ\_Pc/μ\_Pe = μ\_Hc/μ\_He. This allows the per-genome level of the hybrid to differ from the parents' by a common factor k, with μ\_Hc = kμ\_Pc and μ\_He = kμ\_Pe. We estimated k from the corrected allele means of the *trans* subset and the parental means, and gave each hybrid allele an offset that includes both its abundance factor and k, leaving its counts unchanged:
 
 $$
-\hat{k} = \sqrt{\frac{\hat{\mu}_{\mathrm{Hc}}\,\hat{\mu}_{\mathrm{He}}}{\hat{\mu}_{\mathrm{Pc}}\,\hat{\mu}_{\mathrm{Pe}}}}, \qquad O_{\mathrm{Hc}i} = \hat{k}\,\hat{\bar{c}}\,S_{\mathrm{H}i}, \qquad O_{\mathrm{He}i} = \hat{k}\,(1-\hat{\bar{c}})\,S_{\mathrm{H}i}
+\hat{k} = \sqrt{\frac{\hat{\mu}_{\mathrm{Hc}}\,\hat{\mu}_{\mathrm{He}}}{\hat{\mu}_{\mathrm{Pc}}\,\hat{\mu}_{\mathrm{Pe}}}}, \qquad O_{\mathrm{Hc}i} = 2\hat{k}\,\hat{\bar{c}}\,O_i, \qquad O_{\mathrm{He}i} = 2\hat{k}\,(1-\hat{\bar{c}})\,O_i
 $$
 
-The expected Hc count per unit offset is then S_Hi c̄ μ_Hc/(k c̄ S_Hi) = μ_Pc under the null, and likewise for He. We pooled the Pc cells with the Hc cells and split the pool at random, and did the same for Pe and He with an independent split. Each pool then shares one expected count per unit offset regardless of the dominance of the gene. The *trans* contrast does not change when both hybrid alleles are scaled by a common factor, so k̂ changes only the null distribution, not the observed contrast. We held k̂ fixed across permutations, since its sampling error is of order 1/N.
+The expected Hc count per unit offset is then 2O\_i c̄ μ\_Hc/(k c̄ 2O\_i) = μ\_Pc under the null, and likewise for He. We pooled the Pc cells with the Hc cells and split the pool at random, and did the same for Pe and He with an independent split. Each pool then shares one expected count per unit offset regardless of the dominance of the gene. The *trans* contrast does not change when both hybrid alleles are scaled by a common factor, so k̂ changes only the null distribution, not the observed contrast. We held k̂ fixed across permutations, since its sampling error is of order 1/N.
 
-**Parental.** We pooled the hybrid cells with the cells of one parent. For each hybrid cell we summed its two rescaled allele counts. From the expected allele counts (*Transcriptome share corrections in the hybrid*), this sum has expectation S_Hi μ_H, so with offset S_Hi it shares the per-genome mean of a parental cell under the null:
+**Parental.** We pooled the hybrid cells with the cells of one parent. For each hybrid cell we summed its two rescaled allele counts. From the expected allele counts (*Transcriptome share corrections in the hybrid*), this sum has expectation 2O\_i μ\_H, so with offset 2O\_i it shares the per-genome mean of a parental cell under the null:
 
 $$
-\mathrm{E}\left[\frac{Y_{\mathrm{Hc}i}}{2\hat{\bar{c}}} + \frac{Y_{\mathrm{He}i}}{2(1-\hat{\bar{c}})}\right] = \frac{S_{\mathrm{H}i}\,\bar{c}\,\mu_{\mathrm{Hc}}}{2\bar{c}} + \frac{S_{\mathrm{H}i}\,(1-\bar{c})\,\mu_{\mathrm{He}}}{2(1-\bar{c})} + \mathcal{O}\left(\frac{1}{N_{\mathrm{H}}}\right) = S_{\mathrm{H}i}\,\tfrac12\left(\mu_{\mathrm{Hc}} + \mu_{\mathrm{He}}\right) + \mathcal{O}\left(\frac{1}{N_{\mathrm{H}}}\right) = S_{\mathrm{H}i}\,\mu_{\mathrm{H}} + \mathcal{O}\left(\frac{1}{N_{\mathrm{H}}}\right)
+\mathrm{E}\left[\frac{Y_{\mathrm{Hc}i}}{2\hat{\bar{c}}} + \frac{Y_{\mathrm{He}i}}{2(1-\hat{\bar{c}})}\right] = \frac{2O_i\,\bar{c}\,\mu_{\mathrm{Hc}}}{2\bar{c}} + \frac{2O_i\,(1-\bar{c})\,\mu_{\mathrm{He}}}{2(1-\bar{c})} + \mathcal{O}\left(\frac{1}{N_{\mathrm{H}}}\right) = 2O_i\,\tfrac12\left(\mu_{\mathrm{Hc}} + \mu_{\mathrm{He}}\right) + \mathcal{O}\left(\frac{1}{N_{\mathrm{H}}}\right) = 2O_i\,\mu_{\mathrm{H}} + \mathcal{O}\left(\frac{1}{N_{\mathrm{H}}}\right)
 $$
 
-**Midparent.** A synthetic hybrid built from independent parental cells lacks the extrinsic noise that the two alleles of a hybrid cell share, so its noise differs from the hybrid's and a pooled permutation null would be miscalibrated. We therefore simulated the midparent mean null from the fitted model, as for the dispersion nulls. Under the null the per-genome hybrid mean equals the midparent, μ_H = μ_MP. We set the null allele means by scaling both corrected allele means by one common factor, which keeps their ratio and so the *cis* contrast:
+**Midparent.** A synthetic hybrid built from independent parental cells lacks the extrinsic noise that the two alleles of a hybrid cell share, so its noise differs from the hybrid's and a pooled permutation null would be miscalibrated. We therefore simulated the midparent mean null from the fitted model. Under the null the per-genome hybrid mean equals the midparent, μ\_H = μ\_MP. We set the null allele means by scaling both corrected allele means by one common factor, which keeps their ratio and so the *cis* contrast:
 
 $$
 \mu^0_{\mathrm{Hc}} = \hat{\mu}_{\mathrm{Hc}}\,\frac{\hat{\mu}_{MP}}{\hat{\mu}_{\mathrm{H}}}, \qquad \mu^0_{\mathrm{He}} = \hat{\mu}_{\mathrm{He}}\,\frac{\hat{\mu}_{MP}}{\hat{\mu}_{\mathrm{H}}}, \qquad \tfrac12\left(\mu^0_{\mathrm{Hc}} + \mu^0_{\mathrm{He}}\right) = \hat{\mu}_{MP}
 $$
 
-Each draw simulated the two allele counts of every hybrid cell from these means with their abundance factors and offsets, with the dispersion each allele fit would show, φ̂_r(1 + η̂_r) + η̂_r, and with the shared extrinsic factor of the dispersion nulls. It simulated the parental counts from their fitted means and dispersions, refitted every group with the same estimators and corrections, and recomputed the midparent contrast.
+Each draw simulated the two allele counts of every hybrid cell from these means with their abundance factors and offsets, with the dispersion each allele fit would show, φ̂\_r(1 + η̂\_r) + η̂\_r, and with a shared extrinsic factor. We drew each allele's expression factor as the product of a factor shared by the cell, with variance σ̂²\_d (Appendix B), and a private factor whose variance gives the allele its dispersion. All factors have mean one and are gamma distributed:
+
+$$
+a_{ri} = d_i\,q_{ri}, \qquad \mathrm{Var}[d_i] = \hat{\sigma}^2_d, \qquad \mathrm{Var}[q_{ri}] = \frac{1 + \hat{\varphi}_r(1 + \hat{\eta}_r) + \hat{\eta}_r}{1 + \hat{\sigma}^2_d} - 1, \qquad \mathrm{Cov}[a_{\mathrm{Hc}i}, a_{\mathrm{He}i}] = \hat{\sigma}^2_d
+$$
+
+We set a private variance below zero to zero. We simulated the parental counts from their fitted means and dispersions, refitted every group with the same estimators and corrections, and recomputed the midparent contrast.
 
 ### Null for the log₂ dispersion contrasts
 
-A dispersion null cannot be built by pooling cells, because the groups compared may differ in their means under the null. Pooling cells with different means and refitting gives each pseudo-group a mixture of means, which inflates its fitted dispersion and widens the null. We therefore simulated each null draw from the fitted model with the contrast set to zero. Each group kept its own fitted expected counts M̂_i, and its dispersion was replaced by a null value. Writing a contrast as a weighted sum of log₂ dispersions, with weights λ_r of ±1 or ±½ for the groups r it uses, the null values are the fitted values moved the shortest distance that makes the contrast zero:
+A dispersion null cannot be built by pooling cells, because the groups compared may differ in their means under the null. Pooling cells with different means and refitting gives each pseudo-group a mixture of means, which inflates its fitted dispersion and widens the null. We therefore resampled the observed cells and moved each group's refitted dispersion to a null value, which keeps the shape of the expression factors and the correlation between the mean and dispersion estimates. Writing a contrast as a weighted sum of log₂ dispersions, with weights λ\_r of ±1 or ±½ for the groups r it uses, the null values are the fitted values moved the shortest distance that makes the contrast zero:
 
 $$
 \Delta(\hat{\varphi}) = \sum_r \lambda_r\log_2\hat{\varphi}_r, \qquad \log_2\varphi^0_r = \log_2\hat{\varphi}_r - \frac{\lambda_r\,\Delta(\hat{\varphi})}{\sum_{r'} \lambda_{r'}^2}, \qquad \sum_r \lambda_r\log_2\varphi^0_r = 0
 $$
 
-Parental counts were simulated as NB with mean M̂_i and dispersion φ⁰_r. A hybrid allele was simulated with the dispersion its uncorrected fit would show, φ⁰_r(1 + η̂_r) + η̂_r, so that the refit and its transcriptome share correction return φ⁰_r. The two alleles of a cell share extrinsic noise, which lowers the variance of the *cis* contrast. We kept it by drawing each allele's expression factor as the product of a factor shared by the cell, with variance σ̂²_d (Appendix B), and a private factor whose variance gives the allele its null dispersion. All factors have mean one and are gamma distributed:
+Each draw resampled the cells of each parent with replacement and resampled the undivided hybrid cells once, and each resampled hybrid cell kept the *cis*, *trans* and partition memberships of the cell it copied. Resampling a hybrid cell whole keeps the extrinsic noise that its two alleles share, which lowers the variance of the *cis* contrast. We refitted every group with the same estimators and corrections, multiplied each refitted dispersion by the ratio of its null value to its fitted value, and recomputed the contrast from the shifted dispersions and the refitted means. On the log₂ scale this subtracts the observed contrast from the resampled contrast. The p-value counts the draws whose absolute null contrast reaches the absolute observed contrast. Resampling under the null follows the first guideline for bootstrap tests (Hall and Wilson 1991). We resampled cells, and did not simulate counts from gamma factors, because the shape of the expression factor changes the variance of the dispersion estimate and its correlation with the mean estimate. We did not studentize the contrast, which would need a nested bootstrap, so the statistic is not pivotal. The bootstrap is also not consistent for a parameter on the boundary (Andrews 2000), which the boundary gate in Informative estimates limits by excluding groups with more than 2.5% of replicates at zero. A replicate with a zero dispersion estimate stays at −∞ on the log₂ scale.
 
-$$
-a_{ri} = d_i\,q_{ri}, \qquad \mathrm{Var}[d_i] = \hat{\sigma}^2_d, \qquad \mathrm{Var}[q_{ri}] = \frac{1 + \varphi^0_r(1 + \hat{\eta}_r) + \hat{\eta}_r}{1 + \hat{\sigma}^2_d} - 1, \qquad \mathrm{Cov}[a_{\mathrm{Hc}i}, a_{\mathrm{He}i}] = \hat{\sigma}^2_d
-$$
-
-We set a private variance below zero to zero. The burst size and kinetic balance contrasts, including the supplementary kinetic balance contrasts built from the f_μ and f_φ partitions, used the same construction with the fitted means held fixed and only the dispersions moved, until the contrast tested is zero:
+The burst size and kinetic balance contrasts used the same resampling and shift, with null dispersion values found from the fitted means so that the contrast tested is zero:
 
 $$
 \log_2\varphi^0_r = \log_2\hat{\varphi}_r - \frac{\lambda_r\,\Delta(\hat{\zeta})}{\sum_{r'} \lambda_{r'}^2} \ \ \text{(burst size)}, \qquad \log_2\varphi^0_r = \log_2\hat{\varphi}_r + \frac{\lambda_r\,\Delta(\hat{\kappa})}{2\sum_{r'} \lambda_{r'}^2} \ \ \text{(kinetic balance)}
@@ -613,42 +623,43 @@ Burst frequency needs no separate null, because Δ(θ) = −Δ(φ) and its test 
 
 ### Null for the raw dispersion contrasts
 
-The raw null used the same simulation with the null values moved on the raw scale, φ⁰_r = φ̂_r − λ_r Δ^raw(φ̂)/Σ_r′ λ_r′², and null values below zero set to zero. When truncation moves a null value, the contrast is no longer exactly zero, so we repeated the projection over the groups that remain positive, holding the truncated groups at zero. For the two-group contrasts, total and cis, the raw and log₂ null hypotheses are the same, equal dispersions, so the raw tests reused the log₂ draws. Their common null value is the geometric mean of the two fitted dispersions rather than the arithmetic mean that the raw projection would give. For the *trans*, midparent and parental contrasts the two null hypotheses differ, because a ratio and a difference of dispersions are zero under different conditions, so the two nulls were generated separately.
+The raw null used the same resampling and shift with the null values moved on the raw scale, φ⁰\_r = φ̂\_r − λ\_r Δ^raw(φ̂)/Σ\_r′ λ\_r′², and null values below zero set to zero. When truncation moves a null value, the contrast is no longer exactly zero, so we repeated the projection over the groups that remain positive, holding the truncated groups at zero. For the two-group contrasts, total and cis, the raw and log₂ null hypotheses are the same, equal dispersions, so the raw tests reused the log₂ draws. Their common null value is the geometric mean of the two fitted dispersions rather than the arithmetic mean that the raw projection would give. For the *trans*, midparent and parental contrasts the two null hypotheses differ, because a ratio and a difference of dispersions are zero under different conditions, so the two nulls were generated separately.
 
 ## Model assumptions
 
 | Assumption | Statement | Used in |
-|---|---|---|
+| --- | --- | --- |
 | Independent cells | Counts of different cells are independent given their offsets | Negative binomial model, Statistical power, Null distributions |
 | Bursty limit | The NB arises from bursty transcription, so θ = 1/φ is the burst frequency and ζ = μφ the burst size | Negative binomial model, Burst kinetics |
 | Fixed offsets | Offsets are library sizes divided by D and are held fixed, although a gene's own counts enter its library size | Sequencing depth offset, Transcriptome share corrections |
 | Fitted dispersion | The NB fit converges to the variance of the expression factor only when that factor is gamma | Negative binomial model, Transcriptome share corrections |
 | Large samples | Every group has about 800 cells or more, so terms of order 1/N are small and are dropped, except the plug-in bias of φ̂, which the Cox–Reid adjustment removes to first order. Partition sizes are reported in Statistical power | Estimating φ, Transcriptome share corrections, Contrasts |
 | Capture efficiency | UMI capture thins counts binomially, which leaves φ and θ unchanged but scales μ and ζ. A capture difference between parental cells, or between parental and hybrid cells, enters the total, trans and dominance contrasts in μ and ζ. A genome-wide capture difference between the hybrid alleles is removed by the transcriptome share correction | Burst kinetics, Contrasts |
-| Hybrid allele counts | Allele counts follow the parental NB form scaled by the transcriptome share multiplier c_i/c̄ for Hc and (1 − c_i)/(1 − c̄) for He | Transcriptome share corrections, Appendix B |
-| Independent transcriptome share | c_i is independent of the offset and of every expression factor | Transcriptome share corrections, Appendix B |
-| Binomial transcriptome share sampling | Genome-assigned UMIs are binomial given the hybrid library size and c_i, and library size is independent of c_i | Transcriptome share corrections |
+| Hybrid allele counts | Allele counts follow the parental NB form scaled by the transcriptome share multiplier c\_i/c̄ for Hc and (1 − c\_i)/(1 − c̄) for He | Transcriptome share corrections, Appendix B |
+| Independent transcriptome share | c\_i is independent of the offset and of every expression factor | Transcriptome share corrections, Appendix B |
+| Binomial transcriptome share sampling | Genome-assigned UMIs are binomial given the hybrid library size and c\_i, and library size is independent of c\_i | Transcriptome share corrections |
 | Transcriptome share correction | The transcriptome share corrections of the hybrid dispersions and variance estimates are estimated from the transcriptome share variance and subtracted | Transcriptome share corrections, Null distributions |
-| Zero estimates | A zero dispersion estimate is a valid boundary value and is kept. Raw contrasts can use it when it is resolved near zero, and log₂ contrasts need estimates resolved above zero | Contrasts |
+| Zero estimates | A zero dispersion estimate is a valid boundary value and is kept. Contrasts are tested only when at most 2.5% of the bootstrap replicates are at zero in every group they use | Contrasts |
 | Ploidy effects | Ploidy effects act equally on both alleles, so they cancel in the cis ratio and within each ratio of the trans contrast. A species-specific ploidy effect would remain in the trans divergence, and separating it requires diploid parental strains | Contrasts |
 | Cross-allele covariance | In the cis kinetic contrasts, the covariance between the mean estimate of one allele and the dispersion estimate of the other is negligible | Contrasts, Kinetic balance |
 | Common partition ratio | One ratio γ of parental to hybrid variance, pooled by medians across genes, sets the partition for every gene of a quantity | Statistical power |
 | Exchangeable means | Under the mean null, pooled or swapped cells differ only in dispersion, so the permutation null is approximate where dispersions differ | Null distributions |
-| Null simulation model | Dispersion nulls and the midparent mean null are simulated from gamma expression factors, with a shared extrinsic factor for the two alleles of a cell and null dispersions set by projection onto the null | Null distributions |
+| Null construction | Dispersion nulls are shifted bootstrap draws with null dispersions set by projection onto the null, and the midparent mean null is simulated from gamma expression factors with a shared extrinsic factor for the two alleles of a cell | Null distributions |
 | Extrinsic and intrinsic parts | Allele expression factors split into a shared extrinsic part and equal private intrinsic parts | Null distributions, Appendix B |
 | Working weights | The weighted moment estimator uses second moments alone and needs no gamma assumption. Its estimating equation is unbiased only with true means and fixed weights | Appendix A |
 | Expression factors and offset | Expression factors are independent of the offset | Appendix B |
+| Shift invariance | The sampling distribution of a refitted dispersion keeps its shape and relative spread when its fitted value is moved to the null value, so multiplying each resampled dispersion by the ratio of null value to fitted value gives its null distribution | Null distributions |
 
 ## Summary of estimators
 
 The table gives where each estimator is defined and where it is used, and the display gives each estimator as it is computed. A corrected estimate below zero is set to zero after its correction.
 
 | Quantity | Defined in | Used in |
-|---|---|---|
+| --- | --- | --- |
 | Depth offset | Sequencing depth offset | Every fit |
-| Mean rate | Estimating μ | Every mean contrast, fitted means M̂_i |
-| Dispersion before any correction | Estimating φ | Parental dispersions directly, and φ̂*_Hc and φ̂*_He for the hybrid alleles |
-| Informativeness class | Contrasts, Informative estimates | Gating of raw, log₂ and kinetic balance contrasts |
+| Mean rate | Estimating μ | Every mean contrast, fitted means M̂\_i |
+| Dispersion before any correction | Estimating φ | Parental dispersions directly, and φ̂\*\_Hc and φ̂\*\_He for the hybrid alleles |
+| Boundary fraction | Contrasts, Informative estimates | Gating of raw, log₂, burst size and kinetic balance contrasts |
 | Transcriptome share and its variance | Transcriptome share corrections in the hybrid | η̂, corrected allele means |
 | Multiplier moments | Transcriptome share corrections, Appendix B | Transcriptome share correction of the allele dispersions |
 | Allele mean | Transcriptome share corrections in the hybrid | Cis, trans and dominance mean contrasts |
@@ -661,17 +672,17 @@ The table gives where each estimator is defined and where it is used, and the di
 
 $$
 \begin{aligned}
-&\text{Depth offset} && O_i = L_{ri}/D, \qquad S_{\mathrm{H}i} = L_{\mathrm{H}i}/D, \qquad O_i = S_{\mathrm{H}i}/2 \ \text{for each allele} \\
+&\text{Depth offset} && O_i = L_{ri}/D \ \text{for a parent}, \qquad O_i = L_{\mathrm{H}i}/(2D) \ \text{for each hybrid allele} \\
 &\text{Mean rate} && \hat{\mu}_r = \frac{\sum_i y_{ri}}{\sum_i O_i}, \qquad \hat{M}_i = O_i\,\hat{\mu}_r \\
 &\text{Dispersion} && \hat{\varphi}_r = \arg\max_{\varphi > 0} \ell^{\mathrm{CR}}_r(\varphi), \qquad \hat{\varphi}_r = 0 \ \text{if} \ \sum_i (y_{ri} - \hat{M}_i)^2 \le \sum_i \hat{M}_i - \frac{\sum_i \hat{M}_i^2}{\sum_i \hat{M}_i} \\
-&\text{Informativeness class} && T_r = 2\left[\ell^{\mathrm{CR}}_r(\hat{\varphi}_r) - \ell^{\mathrm{CR}}_r(0)\right] > 2.71, \qquad \varphi^{\mathrm{up}}_r\,\bar{M}_r < 0.1 \\
+&\text{Boundary gate} && \text{fraction of bootstrap replicates with } \hat{\varphi}_r = 0 \ \text{at most } 0.025 \\
 &\text{Transcriptome share} && \hat{c}_i = \frac{L_{\mathrm{Hc}i}}{L_{\mathrm{H}i}}, \qquad \hat{\bar{c}} = \frac{1}{N_{\mathrm{H}}}\sum_i \hat{c}_i, \qquad \hat{\sigma}^2_c = \widehat{\mathrm{Var}}[\hat{c}_i] - \frac{1}{N_{\mathrm{H}}}\sum_i \frac{\hat{c}_i(1-\hat{c}_i)}{L_{\mathrm{H}i} - 1} \\
 &\text{Multiplier moments} && \hat{\eta}_{\mathrm{Hc}} = \frac{\hat{\sigma}^2_c}{\hat{\bar{c}}^2}, \qquad \hat{\eta}_{\mathrm{He}} = \frac{\hat{\sigma}^2_c}{(1-\hat{\bar{c}})^2} \\
 &\text{Allele dispersion} && \hat{\varphi}_{\mathrm{Hc}} = \frac{\hat{\varphi}^*_{\mathrm{Hc}} - \hat{\eta}_{\mathrm{Hc}}}{1 + \hat{\eta}_{\mathrm{Hc}}}, \qquad \hat{\varphi}_{\mathrm{He}} = \frac{\hat{\varphi}^*_{\mathrm{He}} - \hat{\eta}_{\mathrm{He}}}{1 + \hat{\eta}_{\mathrm{He}}} \\
 &\text{Allele mean} && \hat{\mu}_{\mathrm{Hc}} = \frac{\hat{\mu}^*_{\mathrm{Hc}}}{2\hat{\bar{c}}}, \qquad \hat{\mu}_{\mathrm{He}} = \frac{\hat{\mu}^*_{\mathrm{He}}}{2(1-\hat{\bar{c}})} \\
 &\text{Per-genome hybrid mean} && \hat{\mu}_{\mathrm{H}} = \tfrac12\left(\hat{\mu}_{\mathrm{Hc}} + \hat{\mu}_{\mathrm{He}}\right) \\
 &\text{Per-genome hybrid dispersion} && \log_2\hat{\varphi}_{\mathrm{H}} = \tfrac12\left(\log_2\hat{\varphi}_{\mathrm{Hc}} + \log_2\hat{\varphi}_{\mathrm{He}}\right) \\
-&\text{Partition fraction} && f_x = \frac{(2 + \hat{\gamma}) - \sqrt{\hat{\gamma}^2 + 4}}{2\hat{\gamma}}, \qquad x = \mu, \varphi, \kappa \\
+&\text{Partition fraction} && f_x = \frac{(2 + \hat{\gamma}) - \sqrt{\hat{\gamma}^2 + 4}}{2\hat{\gamma}}, \qquad x = \mu, \varphi, \kappa, \zeta \\
 &\text{Kinetic quantities} && \hat{\theta} = 1/\hat{\varphi}, \qquad \hat{\zeta} = \hat{\mu}\,\hat{\varphi}, \qquad \hat{\kappa} = \hat{\theta}/\hat{\zeta} \\
 &\text{Ploidy shift (reported)} && \hat{\delta} = -\log_2\left[1 - 2\hat{\pi}(1-\hat{\pi})\,\hat{\omega}\right], \qquad \hat{\delta}_{\mathrm{raw}} = 2\hat{\pi}(1-\hat{\pi})\,\hat{\sigma}^2_q \ \ \text{(Appendix B)}
 \end{aligned}
@@ -679,33 +690,34 @@ $$
 
 ## Appendix A. Weighted method of moments for the dispersion
 
-The Cox–Reid adjusted NB likelihood estimate is the primary estimator of φ. As a sensitivity analysis we also estimated φ from the first two moments of the counts, without requiring them to follow an NB distribution. For the count Y_i of cell i, the mean is M_i = O_i μ. The variance can exceed the Poisson variance M_i by a term proportional to M_i².
+The Cox–Reid adjusted NB likelihood estimate is the primary estimator of φ. As a sensitivity analysis we also estimated φ from the first two moments of the counts, without requiring them to follow an NB distribution. For the count Y\_i of cell i, the mean is M\_i = O\_i μ. The variance can exceed the Poisson variance M\_i by a term proportional to M\_i².
 
 $$
 \mathrm{E}[Y_i] = O_i\,\mu = M_i, \qquad \mathrm{Var}[Y_i] = \mathrm{E}\left[(Y_i - M_i)^2\right] = M_i + \varphi\,M_i^2
 $$
 
-Subtracting the Poisson variance M_i from the squared deviation leaves a random variable whose expectation is this excess variance:
+Subtracting the Poisson variance M\_i from the squared deviation leaves a random variable whose expectation is this excess variance:
 
 $$
 \mathrm{E}\left[(Y_i - M_i)^2 - M_i\right] = \mathrm{E}\left[(Y_i - M_i)^2\right] - M_i = \left(M_i + \varphi\,M_i^2\right) - M_i = \varphi\,M_i^2
 $$
 
-If the means were known, we could produce a method of moments estimate of φ by replacing the expectation with the observed values. Each cell provides one such moment, and we averaged them with non-negative weights w_i so that more precise cells count more:
+If the means were known, we could produce a method of moments estimate of φ by replacing the expectation with the observed values. Each cell provides one such moment, and we averaged them with non-negative weights w\_i so that more precise cells count more:
 
 $$
 \mathrm{E}\left[\sum_i w_i\left((Y_i - M_i)^2 - M_i\right)\right] = \varphi\sum_i w_i\,M_i^2 \\
 \sum_i w_i\left[(y_i - M_i)^2 - M_i\right] = \tilde{\varphi}\sum_i w_i\,M_i^2 \\
 \tilde{\varphi} = \frac{\sum_i w_i\left[(y_i - M_i)^2 - M_i\right]}{\sum_i w_i\,M_i^2}
+
 $$
 
-The means are not known, so we replaced M_i by its fitted value M̂_i in φ̃ to give a naive estimator φ̃(M̂).
+The means are not known, so we replaced M\_i by its fitted value M̂\_i in φ̃ to give a naive estimator φ̃(M̂).
 
 $$
 \tilde{\varphi}(\hat{M}) = \frac{\sum_i w_i\left[(y_i - \hat{M}_i)^2 - \hat{M}_i\right]}{\sum_i w_i\,\hat{M}_i^2}
 $$
 
-The offsets are fixed, so the expectation of the fitted mean is the offset times the sum of the expected counts over the sum of the offsets, which equals M_i. The residual therefore has expectation zero, and the expectation of its square is its variance.
+The offsets are fixed, so the expectation of the fitted mean is the offset times the sum of the expected counts over the sum of the offsets, which equals M\_i. The residual therefore has expectation zero, and the expectation of its square is its variance.
 
 $$
 \begin{aligned}
@@ -715,13 +727,14 @@ $$
 \end{aligned}
 $$
 
-To find this variance, we define p_i as the share of the total offset for cell i. 
+To find this variance, we define p\_i as the share of the total offset for cell i.&#32;
 
 $$
+
 \hat{M}_i = O_i\,\hat{\mu} = O_i\,\frac{\sum_j y_j}{\sum_j O_j} = p_i\sum_j y_j, \qquad p_i \equiv \frac{O_i}{\sum_j O_j}
 $$
 
-Pulling out the part that depends on Y_i from the residual produces:
+Pulling out the part that depends on Y\_i from the residual produces:
 
 $$
 \begin{aligned}
@@ -730,7 +743,7 @@ Y_i - \hat{M}_i &= Y_i - p_i\sum_j Y_j = Y_i - p_i\,Y_i - p_i\sum_{j\neq i} Y_j 
 \end{aligned}
 $$
 
-Substituting in the variance and using the definition of p (Σ_j M_j = M_i/p_i) separates a Poisson part from a part proportional to φ. 
+Substituting in the variance and using the definition of p (Σ\_j M\_j = M\_i/p\_i) separates a Poisson part from a part proportional to φ.&#32;
 
 $$
 \begin{aligned}
@@ -742,7 +755,7 @@ A_i &\equiv M_i\,(1-p_i), \qquad B_i \equiv M_i^2\,(1-2p_i) + p_i^2\sum_j M_j^2
 \end{aligned}
 $$
 
-For the numerator of the naive estimator we then have: 
+For the numerator of the naive estimator we then have:&#32;
 
 $$
 \begin{aligned}
@@ -751,22 +764,24 @@ $$
 \end{aligned}
 $$
 
-With known means the numerator would have expectation φM_i². With fitted means it does not, so this estimator is biased. The bias term p_i M_i does not scale with φ. We therefore defined a corrected numerator that adds its estimate, p_i M̂_i, whose expectation is p_i M_i because the fitted mean has expectation M_i. The expectation of the corrected numerator is then:
+With known means the numerator would have expectation φM\_i². With fitted means it does not, so this estimator is biased. The bias term p\_i M\_i does not scale with φ. We therefore defined a corrected numerator that adds its estimate, p\_i M̂\_i, whose expectation is p\_i M\_i because the fitted mean has expectation M\_i. The expectation of the corrected numerator is then:
 
 $$
 \mathrm{E}\left[(Y_i - \hat{M}_i)^2 - \hat{M}_i + p_i\,\hat{M}_i\right] = \left(\varphi\,B_i - p_i\,M_i\right) + p_i\,M_i = \varphi\,B_i
 $$
 
-The weighted sum of these terms minus φ Σ w_i B_i therefore has expectation zero at the true φ. Solving this for φ gives an unbiased estimator (φ̌) if B_i is known. 
+The weighted sum of these terms minus φ Σ w\_i B\_i therefore has expectation zero at the true φ. Solving this for φ gives an unbiased estimator (φ̌) if B\_i is known.&#32;
 
 $$
+
 \mathrm{E}\left[\sum_i w_i\left((Y_i - \hat{M}_i)^2 - \hat{M}_i + p_i\,\hat{M}_i\right) - \varphi\sum_i w_i\,B_i\right] = 0 \\
 \check{\varphi} \equiv \frac{\sum_i w_i\left(\left[(y_i - \hat{M}_i)^2 - \hat{M}_i\right] + p_i\,\hat{M}_i\right)}{\sum_i w_i\,\hat{B}_i} = \frac{\sum_i w_i\left((y_i - \hat{M}_i)^2 - \hat{A}_i\right)}{\sum_i w_i\,\hat{B}_i}, \\ \hat{A}_i \equiv \hat{M}_i\,(1 - p_i), \quad \hat{B}_i \equiv \hat{M}_i^2\,(1 - 2p_i) + p_i^2\sum_j \hat{M}_j^2
+
 $$
 
-A check marks this second intermediate estimate. It uses the fitted means and the plug-in B̂_i, which keeps it distinct from φ̃, written with the true means, and from the final estimate φ̂, which also corrects the bias of B̂_i.
+A check marks this second intermediate estimate. It uses the fitted means and the plug-in B̂\_i, which keeps it distinct from φ̃, written with the true means, and from the final estimate φ̂, which also corrects the bias of B̂\_i.
 
-In practice we evaluated A_i, B_i and the weights at M̂_i. Â_i is linear in the means when p_i is known and is therefore unbiased for A_i. However, B̂_i is quadratic in the means, so it has to be corrected.
+In practice we evaluated A\_i, B\_i and the weights at M̂\_i. Â\_i is linear in the means when p\_i is known and is therefore unbiased for A\_i. However, B̂\_i is quadratic in the means, so it has to be corrected.
 
 $$
 \begin{aligned}
@@ -777,7 +792,7 @@ $$
 \end{aligned}
 $$
 
-The variances of the fitted means remain. Since M̂_j = O_j μ̂, its variance is O_j² Var[μ̂]. Substituting it collects the terms into a multiple of B_i.
+The variances of the fitted means remain. Since M̂\_j = O\_j μ̂, its variance is O\_j² Var\[μ̂\]. Substituting it collects the terms into a multiple of B\_i.
 
 $$
 \begin{aligned}
@@ -797,13 +812,13 @@ M_{\mathrm{tot}} &\equiv \sum_j M_j = \mu\sum_j O_j,
 \end{aligned}
 $$
 
-Dividing B̂_i by the coefficient out front then gives an unbiased estimate of B_i, if the coefficient is known. 
+Dividing B̂\_i by the coefficient out front then gives an unbiased estimate of B\_i, if the coefficient is known.&#32;
 
 $$
 \tilde{B}_i \equiv \frac{\hat{B}_i}{1 + 1/\sum_j y_j + \hat{\varphi}\,h}
 $$
 
-Plugging B̃_i into the denominator of φ̌ gives φ̂. 
+Plugging B̃\_i into the denominator of φ̌ gives φ̂.&#32;
 
 $$
 \begin{aligned}
@@ -823,7 +838,7 @@ $$
 \end{aligned}
 $$
 
-Finally, we chose the weights w_i. φ̂ is approximately unbiased for fixed weights, so the weights mainly affect the precision of φ̂ and only slightly its remaining bias. We minimized the variance of φ̃ instead, because with M_i and w_i known it can be written exactly.
+Finally, we chose the weights w\_i. φ̂ is approximately unbiased for fixed weights, so the weights mainly affect the precision of φ̂ and only slightly its remaining bias. We minimized the variance of φ̃ instead, because with M\_i and w\_i known it can be written exactly.
 
 $$
 \begin{aligned}
@@ -833,7 +848,7 @@ $$
 \end{aligned}
 $$
 
-What remains unknown is V_i, the variance of the squared deviation of cell i. The variance of any random variable is the mean of its square minus the square of its mean. The deviation has expectation zero and we write E[(Y_i − M_i)⁴] as τ Var[Y_i]², where τ is the kurtosis of the counts of cell i. We assumed that τ is the same for every cell. 
+What remains unknown is V\_i, the variance of the squared deviation of cell i. The variance of any random variable is the mean of its square minus the square of its mean. The deviation has expectation zero and we write E\[(Y\_i − M\_i)⁴\] as τ Var\[Y\_i\]², where τ is the kurtosis of the counts of cell i. We assumed that τ is the same for every cell.&#32;
 
 $$
 \begin{aligned}
@@ -845,7 +860,7 @@ V_i\equiv\mathrm{Var}\left[(Y_i - M_i)^2\right] &= \mathrm{E}\left[\left((Y_i - 
 \end{aligned}
 $$
 
-To minimize the variance, we set the derivative with respect to the weights to zero and solved. 
+To minimize the variance, we set the derivative with respect to the weights to zero and solved.&#32;
 
 $$
 \begin{aligned}
@@ -863,33 +878,33 @@ w_i &= \frac{\sum_j w_j^2\,V_j}{\sum_j w_j\,M_j^2}\cdot\frac{M_i^2}{V_i} \propto
 \end{aligned}
 $$
 
-These weights are the optimum for φ̃ when the kurtosis is the same for every cell. We used them for φ̂, evaluated at M̂_i, which departs from the derivation in three ways. First, the fitted means lower the variance, because they remove the part of the numerator that moves with the total count. Second, the kurtosis does not have to be the same for every cell, for example for NB counts, where it falls as the mean rises. Third, evaluating the weights at fitted values makes them random, which adds bias.
+These weights are the optimum for φ̃ when the kurtosis is the same for every cell. We used them for φ̂, evaluated at M̂\_i, which departs from the derivation in three ways. First, the fitted means lower the variance, because they remove the part of the numerator that moves with the total count. Second, the kurtosis does not have to be the same for every cell, for example for NB counts, where it falls as the mean rises. Third, evaluating the weights at fitted values makes them random, which adds bias.
 
-These assumptions have little consequence at the cell numbers in this study. We tested this by simulation at N = 800 and N = 1600, with M of 0.5, 2 or 5, φ of 0.3 or 1, offset CV of 0.5 or 1, and either NB or Poisson-lognormal counts. We compared the weights from this derivation with more complete weights that use the true fourth moment of each cell and include the effect of the fitted means. Both used the true M, φ and count distribution. The weights from this derivation were nearly as precise. The median standard deviation of φ̂ was 0.5% higher at N = 800 and 0.3% higher at N = 1600. Evaluating them at the fitted M̂_i and an iterated φ̂ added at most 0.3% more at the median. The loss was concentrated when the true counts were NB with high mean and dispersion. Almost all of this loss comes from leaving out the effect of the fitted means. Bias differed from that of the more complete weights by at most 0.006, and it was at most 0.06 of the standard deviation for every choice.
+These assumptions have little consequence at the cell numbers in this study. We tested this by simulation at N = 800 and N = 1600, with M of 0.5, 2 or 5, φ of 0.3 or 1, offset CV of 0.5 or 1, and either NB or Poisson-lognormal counts. We compared the weights from this derivation with more complete weights that use the true fourth moment of each cell and include the effect of the fitted means. Both used the true M, φ and count distribution. The weights from this derivation were nearly as precise. The median standard deviation of φ̂ was 0.5% higher at N = 800 and 0.3% higher at N = 1600. Evaluating them at the fitted M̂\_i and an iterated φ̂ added at most 0.3% more at the median. The loss was concentrated when the true counts were NB with high mean and dispersion. Almost all of this loss comes from leaving out the effect of the fitted means. Bias differed from that of the more complete weights by at most 0.006, and it was at most 0.06 of the standard deviation for every choice.
 
-The weights depend on φ, so we started from φ = 0, calculated the weights at M̂_i, updated φ̂ with the estimating equation, restricted it to nonnegative values, and repeated until convergence or a maximum number of iterations. We recorded the convergence status, whether the estimate sat at the boundary, and the untruncated estimate.
+The weights depend on φ, so we started from φ = 0, calculated the weights at M̂\_i, updated φ̂ with the estimating equation, restricted it to nonnegative values, and repeated until convergence or a maximum number of iterations. We recorded the convergence status, whether the estimate sat at the boundary, and the untruncated estimate.
 
 ## Appendix B. The ploidy shift
 
 Summing the two alleles of a hybrid cell averages their private noise, so the summed counts are less dispersed than a single genome. We derive this ploidy shift, δ, and its estimator, including the correction of the estimator for variation in the transcriptome share, and the transcriptome share term in the dispersion of the summed counts. We reported δ as a description of how much noise summing the two alleles hides.
 
-**Summed counts.** Summing two alleles within a cell averages their private fluctuations, so the summed hybrid appears quieter than either allele alone. We derive the size of this effect from the decomposition of dispersion into intrinsic and extrinsic parts (Elowitz et al. 2002). Setting aside variation in the transcriptome share, the Hc count is Poisson around its library size times c̄, its expression per genome, and its expression factor a. The two allele counts of a cell are independent given these expression factors, and the sum of two independent Poisson counts is Poisson with the summed mean. The summed mean is therefore S_H times the sum of the two allele terms. 
+**Summed counts.** Summing two alleles within a cell averages their private fluctuations, so the summed hybrid appears quieter than either allele alone. We derive the size of this effect from the decomposition of dispersion into intrinsic and extrinsic parts (Elowitz et al. 2002). Setting aside variation in the transcriptome share, the Hc count is Poisson around its library size times c̄, its expression per genome, and its expression factor a. The two allele counts of a cell are independent given these expression factors, and the sum of two independent Poisson counts is Poisson with the summed mean. The summed mean is therefore 2O\_i times the sum of the two allele terms.&#32;
 
 $$
-Y_{\mathrm{H}i} \mid a_{\mathrm{Hc}i}, a_{\mathrm{He}i} \sim \mathrm{Poisson}\left(S_{\mathrm{H}i}\left[\bar{c}\,\mu_{\mathrm{Hc}}\,a_{\mathrm{Hc}i} + (1-\bar{c})\,\mu_{\mathrm{He}}\,a_{\mathrm{He}i}\right]\right)
+Y_{\mathrm{H}i} \mid a_{\mathrm{Hc}i}, a_{\mathrm{He}i} \sim \mathrm{Poisson}\left(2O_i\left[\bar{c}\,\mu_{\mathrm{Hc}}\,a_{\mathrm{Hc}i} + (1-\bar{c})\,\mu_{\mathrm{He}}\,a_{\mathrm{He}i}\right]\right)
 $$
 
-We write μ_Σ = c̄μ_Hc + (1 − c̄)μ_He for the mean rate of the summed counts and define π as the fraction of it contributed by the Hc allele. Rearranging gives a weighted sum for the expression factor of the summed hybrid, a_Hi. Each expression factor has mean one and the weights sum to one, so a_Hi has mean one.
+We write μ\_Σ = c̄μ\_Hc + (1 − c̄)μ\_He for the mean rate of the summed counts and define π as the fraction of it contributed by the Hc allele. Rearranging gives a weighted sum for the expression factor of the summed hybrid, a\_Hi. Each expression factor has mean one and the weights sum to one, so a\_Hi has mean one.
 
 $$
 \begin{aligned}
-Y_{\mathrm{H}i} \mid a_{\mathrm{Hc}i}, a_{\mathrm{He}i} &\sim \mathrm{Poisson}\left(S_{\mathrm{H}i}\,\mu_{\Sigma}\left[\pi\,a_{\mathrm{Hc}i} + (1-\pi)\,a_{\mathrm{He}i}\right]\right), \qquad \mu_{\Sigma} \equiv \bar{c}\,\mu_{\mathrm{Hc}} + (1-\bar{c})\,\mu_{\mathrm{He}}, \qquad \pi = \frac{\bar{c}\,\mu_{\mathrm{Hc}}}{\mu_{\Sigma}} \\
-&= \mathrm{Poisson}\left(S_{\mathrm{H}i}\,\mu_{\Sigma}\,a_{\mathrm{H}i}\right), \qquad a_{\mathrm{H}i} \equiv \pi\,a_{\mathrm{Hc}i} + (1-\pi)\,a_{\mathrm{He}i} \\
+Y_{\mathrm{H}i} \mid a_{\mathrm{Hc}i}, a_{\mathrm{He}i} &\sim \mathrm{Poisson}\left(2O_i\,\mu_{\Sigma}\left[\pi\,a_{\mathrm{Hc}i} + (1-\pi)\,a_{\mathrm{He}i}\right]\right), \qquad \mu_{\Sigma} \equiv \bar{c}\,\mu_{\mathrm{Hc}} + (1-\bar{c})\,\mu_{\mathrm{He}}, \qquad \pi = \frac{\bar{c}\,\mu_{\mathrm{Hc}}}{\mu_{\Sigma}} \\
+&= \mathrm{Poisson}\left(2O_i\,\mu_{\Sigma}\,a_{\mathrm{H}i}\right), \qquad a_{\mathrm{H}i} \equiv \pi\,a_{\mathrm{Hc}i} + (1-\pi)\,a_{\mathrm{He}i} \\
 \mathrm{E}[a_{\mathrm{H}i}] &= \pi\,\mathrm{E}[a_{\mathrm{Hc}i}] + (1-\pi)\,\mathrm{E}[a_{\mathrm{He}i}] = \pi + (1-\pi) = 1
 \end{aligned}
 $$
 
-The NB fit of the summed counts treats a_Hi as its expression factor, and we call the variance of that factor φ_Σ. 
+The NB fit of the summed counts treats a\_Hi as its expression factor, and we call the variance of that factor φ\_Σ.&#32;
 
 **Intrinsic and extrinsic noise.** In the hybrid, each allele has an intrinsic deviation (q) that arises from its own stochastic bursting, and the two alleles share an extrinsic deviation (d) due to shared cell size, cell-cycle state, and pool of transcription factors. The deviations are mutually independent and both deviations have a mean of zero. Since the dispersion is the variance of the expression factor, we have, assuming the two alleles have the same intrinsic variance:
 
@@ -911,13 +926,15 @@ $$
 The extrinsic variance passes through in full, whereas the intrinsic variance enters with weight π² + (1 − π)². Expanding the square and completing it around π = 1/2 gives:
 
 $$
+
 \pi^2 + (1-\pi)^2 = 1 - 2\pi + 2\pi^2 = \tfrac12 + 2\left(\pi - \tfrac12\right)^2 \\
 \tfrac12 \le \pi^2 + (1-\pi)^2 < 1 \qquad \text{for } 0 < \pi < 1
+
 $$
 
 Whenever both alleles contribute counts, the weight on the intrinsic variance is between one half and one. It equals one half at equal counts and approaches one as a single allele dominates. The summed hybrid therefore carries less intrinsic variance than a single allele, and this averaging can be estimated for each gene.
 
-**Ploidy shift.** A parent carries one genome, so its expression factor has the same form as that of one allele, with the same extrinsic and intrinsic variances. We write φ_H for the dispersion of a single genome. The difference between φ_H and the dispersion of the summed hybrid is the averaging component. Dividing this difference by φ_H gives the fraction of dispersion lost in the summed hybrid. This fraction depends only on a single factor ω, the intrinsic variance share of φ_H.
+**Ploidy shift.** A parent carries one genome, so its expression factor has the same form as that of one allele, with the same extrinsic and intrinsic variances. We write φ\_H for the dispersion of a single genome. The difference between φ\_H and the dispersion of the summed hybrid is the averaging component. Dividing this difference by φ\_H gives the fraction of dispersion lost in the summed hybrid. This fraction depends only on a single factor ω, the intrinsic variance share of φ\_H.
 
 $$
 \begin{aligned}
@@ -941,13 +958,13 @@ $$
 \delta_{\mathrm{raw}} \equiv \varphi_{\mathrm{H}} - \varphi_{\Sigma} = \left[1 - \pi^2 - (1-\pi)^2\right]\sigma^2_q
 $$
 
-**Estimating the ploidy shift.** We estimated the ploidy shift from estimators of π, σ²_d and σ²_q. For the weight π, we replaced each mean rate by its fitted value, the ratio of its summed counts to the summed offsets.
+**Estimating the ploidy shift.** We estimated the ploidy shift from estimators of π, σ²\_d and σ²\_q. For the weight π, we replaced each mean rate by its fitted value, the ratio of its summed counts to the summed offsets.
 
 $$
 \hat{\pi} = \frac{\hat{\mu}^*_{\mathrm{Hc}}}{\hat{\mu}^*_{\mathrm{Hc}} + \hat{\mu}^*_{\mathrm{He}}}
 $$
 
-This estimator is a ratio of sums, so it is consistent but biased. The bias comes from the joint fluctuation of the two sums around their means. Each sum runs over N_H cells, so the bias is 𝒪(1/N_H), and we dropped it.
+This estimator is a ratio of sums, so it is consistent but biased. The bias comes from the joint fluctuation of the two sums around their means. Each sum runs over N\_H cells, so the bias is 𝒪(1/N\_H), and we dropped it.
 
 To estimate the extrinsic variance, we note that it is also the covariance of the two alleles' expression factors, because the extrinsic deviation is the only part that they share. Each expression factor has mean one, so expanding the covariance gives:
 
@@ -957,7 +974,7 @@ $$
 \end{aligned}
 $$
 
-The intrinsic variance is the same for both alleles and the expected deviations have mean zero, so expanding the variances gives: 
+The intrinsic variance is the same for both alleles and the expected deviations have mean zero, so expanding the variances gives:&#32;
 
 $$
 \begin{aligned}
@@ -967,7 +984,7 @@ $$
 \end{aligned}
 $$
 
-The two intrinsic deviations are independent, so E[q_Hc q_He] is zero, and subtracting twice this cross moment completes the square. Within the square, we add and subtract one plus the extrinsic deviation, and then substitute with the allele expression factors. Expanding and simplifying gives:
+The two intrinsic deviations are independent, so E\[q\_Hc q\_He\] is zero, and subtracting twice this cross moment completes the square. Within the square, we add and subtract one plus the extrinsic deviation, and then substitute with the allele expression factors. Expanding and simplifying gives:
 
 $$
 \begin{aligned}
@@ -981,26 +998,26 @@ This leaves the intrinsic and extrinsic variances written as moments of the expr
 
 $$
 \begin{aligned}
-\mathrm{E}[a_{\mathrm{Hc}i}\,a_{\mathrm{He}i}] &= \mathrm{E}\left[\frac{S_{\mathrm{H}i}\,\bar{c}\,\mu_{\mathrm{Hc}}\,a_{\mathrm{Hc}i}}{S_{\mathrm{H}i}\,\bar{c}\,\mu_{\mathrm{Hc}}} \cdot \frac{S_{\mathrm{H}i}(1-\bar{c})\,\mu_{\mathrm{He}}\,a_{\mathrm{He}i}}{S_{\mathrm{H}i}(1-\bar{c})\,\mu_{\mathrm{He}}}\right] = \mathrm{E}\left[\frac{\mathrm{E}[Y_{\mathrm{Hc}i} \mid a_{\mathrm{Hc}i}]}{S_{\mathrm{H}i}\,\bar{c}\,\mu_{\mathrm{Hc}}} \cdot \frac{\mathrm{E}[Y_{\mathrm{He}i} \mid a_{\mathrm{He}i}]}{S_{\mathrm{H}i}(1-\bar{c})\,\mu_{\mathrm{He}}}\right] \\
-&= \mathrm{E}\left[\frac{\mathrm{E}[Y_{\mathrm{Hc}i}\,Y_{\mathrm{He}i} \mid a_{\mathrm{Hc}i}, a_{\mathrm{He}i}]}{S_{\mathrm{H}i}^2\,\bar{c}(1-\bar{c})\,\mu_{\mathrm{Hc}}\,\mu_{\mathrm{He}}}\right] = \mathrm{E}\left[\mathrm{E}\left[\frac{Y_{\mathrm{Hc}i}\,Y_{\mathrm{He}i}}{S_{\mathrm{H}i}^2\,\bar{c}(1-\bar{c})\,\mu_{\mathrm{Hc}}\,\mu_{\mathrm{He}}}\,\middle|\, a_{\mathrm{Hc}i}, a_{\mathrm{He}i}\right]\right] = \mathrm{E}\left[\frac{Y_{\mathrm{Hc}i}\,Y_{\mathrm{He}i}}{S_{\mathrm{H}i}^2\,\bar{c}(1-\bar{c})\,\mu_{\mathrm{Hc}}\,\mu_{\mathrm{He}}}\right]
+\mathrm{E}[a_{\mathrm{Hc}i}\,a_{\mathrm{He}i}] &= \mathrm{E}\left[\frac{2O_i\,\bar{c}\,\mu_{\mathrm{Hc}}\,a_{\mathrm{Hc}i}}{2O_i\,\bar{c}\,\mu_{\mathrm{Hc}}} \cdot \frac{2O_i(1-\bar{c})\,\mu_{\mathrm{He}}\,a_{\mathrm{He}i}}{2O_i(1-\bar{c})\,\mu_{\mathrm{He}}}\right] = \mathrm{E}\left[\frac{\mathrm{E}[Y_{\mathrm{Hc}i} \mid a_{\mathrm{Hc}i}]}{2O_i\,\bar{c}\,\mu_{\mathrm{Hc}}} \cdot \frac{\mathrm{E}[Y_{\mathrm{He}i} \mid a_{\mathrm{He}i}]}{2O_i(1-\bar{c})\,\mu_{\mathrm{He}}}\right] \\
+&= \mathrm{E}\left[\frac{\mathrm{E}[Y_{\mathrm{Hc}i}\,Y_{\mathrm{He}i} \mid a_{\mathrm{Hc}i}, a_{\mathrm{He}i}]}{4O_i^2\,\bar{c}(1-\bar{c})\,\mu_{\mathrm{Hc}}\,\mu_{\mathrm{He}}}\right] = \mathrm{E}\left[\mathrm{E}\left[\frac{Y_{\mathrm{Hc}i}\,Y_{\mathrm{He}i}}{4O_i^2\,\bar{c}(1-\bar{c})\,\mu_{\mathrm{Hc}}\,\mu_{\mathrm{He}}}\,\middle|\, a_{\mathrm{Hc}i}, a_{\mathrm{He}i}\right]\right] = \mathrm{E}\left[\frac{Y_{\mathrm{Hc}i}\,Y_{\mathrm{He}i}}{4O_i^2\,\bar{c}(1-\bar{c})\,\mu_{\mathrm{Hc}}\,\mu_{\mathrm{He}}}\right]
 \end{aligned}
 $$
 
-For the square moment, we write a_Hc in terms of the conditional Poisson mean of its count. A Poisson count has variance equal to its mean, so its conditional mean square is the mean plus the squared mean. Subtracting the conditional mean leaves the squared mean. The denominator is fixed, and the law of total expectation removes the conditioning, giving:
+For the square moment, we write a\_Hc in terms of the conditional Poisson mean of its count. A Poisson count has variance equal to its mean, so its conditional mean square is the mean plus the squared mean. Subtracting the conditional mean leaves the squared mean. The denominator is fixed, and the law of total expectation removes the conditioning, giving:
 
 $$
 \begin{aligned}
-\mathrm{E}[a_{\mathrm{Hc}i}^2] &= \mathrm{E}\left[\frac{\left(S_{\mathrm{H}i}\,\bar{c}\,\mu_{\mathrm{Hc}}\,a_{\mathrm{Hc}i}\right)^2}{S_{\mathrm{H}i}^2\,\bar{c}^2\,\mu_{\mathrm{Hc}}^2}\right] = \mathrm{E}\left[\frac{\left(S_{\mathrm{H}i}\,\bar{c}\,\mu_{\mathrm{Hc}}\,a_{\mathrm{Hc}i} + \left(S_{\mathrm{H}i}\,\bar{c}\,\mu_{\mathrm{Hc}}\,a_{\mathrm{Hc}i}\right)^2\right) - S_{\mathrm{H}i}\,\bar{c}\,\mu_{\mathrm{Hc}}\,a_{\mathrm{Hc}i}}{S_{\mathrm{H}i}^2\,\bar{c}^2\,\mu_{\mathrm{Hc}}^2}\right] = \mathrm{E}\left[\frac{\mathrm{E}[Y_{\mathrm{Hc}i}(Y_{\mathrm{Hc}i} - 1) \mid a_{\mathrm{Hc}i}]}{S_{\mathrm{H}i}^2\,\bar{c}^2\,\mu_{\mathrm{Hc}}^2}\right] \\
-&= \mathrm{E}\left[\mathrm{E}\left[\frac{Y_{\mathrm{Hc}i}(Y_{\mathrm{Hc}i} - 1)}{S_{\mathrm{H}i}^2\,\bar{c}^2\,\mu_{\mathrm{Hc}}^2}\,\middle|\, a_{\mathrm{Hc}i}\right]\right] = \mathrm{E}\left[\frac{Y_{\mathrm{Hc}i}(Y_{\mathrm{Hc}i} - 1)}{S_{\mathrm{H}i}^2\,\bar{c}^2\,\mu_{\mathrm{Hc}}^2}\right], \qquad \mathrm{E}[a_{\mathrm{He}i}^2] = \mathrm{E}\left[\frac{Y_{\mathrm{He}i}(Y_{\mathrm{He}i} - 1)}{S_{\mathrm{H}i}^2\,(1-\bar{c})^2\,\mu_{\mathrm{He}}^2}\right]
+\mathrm{E}[a_{\mathrm{Hc}i}^2] &= \mathrm{E}\left[\frac{\left(2O_i\,\bar{c}\,\mu_{\mathrm{Hc}}\,a_{\mathrm{Hc}i}\right)^2}{4O_i^2\,\bar{c}^2\,\mu_{\mathrm{Hc}}^2}\right] = \mathrm{E}\left[\frac{\left(2O_i\,\bar{c}\,\mu_{\mathrm{Hc}}\,a_{\mathrm{Hc}i} + \left(2O_i\,\bar{c}\,\mu_{\mathrm{Hc}}\,a_{\mathrm{Hc}i}\right)^2\right) - 2O_i\,\bar{c}\,\mu_{\mathrm{Hc}}\,a_{\mathrm{Hc}i}}{4O_i^2\,\bar{c}^2\,\mu_{\mathrm{Hc}}^2}\right] = \mathrm{E}\left[\frac{\mathrm{E}[Y_{\mathrm{Hc}i}(Y_{\mathrm{Hc}i} - 1) \mid a_{\mathrm{Hc}i}]}{4O_i^2\,\bar{c}^2\,\mu_{\mathrm{Hc}}^2}\right] \\
+&= \mathrm{E}\left[\mathrm{E}\left[\frac{Y_{\mathrm{Hc}i}(Y_{\mathrm{Hc}i} - 1)}{4O_i^2\,\bar{c}^2\,\mu_{\mathrm{Hc}}^2}\,\middle|\, a_{\mathrm{Hc}i}\right]\right] = \mathrm{E}\left[\frac{Y_{\mathrm{Hc}i}(Y_{\mathrm{Hc}i} - 1)}{4O_i^2\,\bar{c}^2\,\mu_{\mathrm{Hc}}^2}\right], \qquad \mathrm{E}[a_{\mathrm{He}i}^2] = \mathrm{E}\left[\frac{Y_{\mathrm{He}i}(Y_{\mathrm{He}i} - 1)}{4O_i^2\,(1-\bar{c})^2\,\mu_{\mathrm{He}}^2}\right]
 \end{aligned}
 $$
 
-Substituting these moments into the definitions gives σ²_d and σ²_q in terms of the counts, the library sizes, the transcriptome share and the per-genome rates. We then replaced each expectation by the mean over cells and each expected count by its estimate. These estimators set aside variation in the transcriptome share, which biases them, so we marked them with a star and corrected them.
+Substituting these moments into the definitions gives σ²\_d and σ²\_q in terms of the counts, the library sizes, the transcriptome share and the per-genome rates. We then replaced each expectation by the mean over cells and each expected count by its estimate. These estimators set aside variation in the transcriptome share, which biases them, so we marked them with a star and corrected them.
 
 $$
 \begin{aligned}
-\sigma^2_d &= \mathrm{E}\left[\frac{Y_{\mathrm{Hc}i}\,Y_{\mathrm{He}i}}{S_{\mathrm{H}i}^2\,\bar{c}(1-\bar{c})\,\mu_{\mathrm{Hc}}\,\mu_{\mathrm{He}}}\right] - 1 \quad\Rightarrow\quad \hat{\sigma}^{2*}_d = \frac{1}{N_{\mathrm{H}}}\sum_i \frac{y_{\mathrm{Hc}i}\,y_{\mathrm{He}i}}{O_i^2\,\hat{\mu}^*_{\mathrm{Hc}}\,\hat{\mu}^*_{\mathrm{He}}} - 1 \\
-\sigma^2_q &= \tfrac12\left(\mathrm{E}\left[\frac{Y_{\mathrm{Hc}i}(Y_{\mathrm{Hc}i} - 1)}{S_{\mathrm{H}i}^2\,\bar{c}^2\,\mu_{\mathrm{Hc}}^2}\right] + \mathrm{E}\left[\frac{Y_{\mathrm{He}i}(Y_{\mathrm{He}i} - 1)}{S_{\mathrm{H}i}^2\,(1-\bar{c})^2\,\mu_{\mathrm{He}}^2}\right]\right) - \mathrm{E}\left[\frac{Y_{\mathrm{Hc}i}\,Y_{\mathrm{He}i}}{S_{\mathrm{H}i}^2\,\bar{c}(1-\bar{c})\,\mu_{\mathrm{Hc}}\,\mu_{\mathrm{He}}}\right] \\
+\sigma^2_d &= \mathrm{E}\left[\frac{Y_{\mathrm{Hc}i}\,Y_{\mathrm{He}i}}{4O_i^2\,\bar{c}(1-\bar{c})\,\mu_{\mathrm{Hc}}\,\mu_{\mathrm{He}}}\right] - 1 \quad\Rightarrow\quad \hat{\sigma}^{2*}_d = \frac{1}{N_{\mathrm{H}}}\sum_i \frac{y_{\mathrm{Hc}i}\,y_{\mathrm{He}i}}{O_i^2\,\hat{\mu}^*_{\mathrm{Hc}}\,\hat{\mu}^*_{\mathrm{He}}} - 1 \\
+\sigma^2_q &= \tfrac12\left(\mathrm{E}\left[\frac{Y_{\mathrm{Hc}i}(Y_{\mathrm{Hc}i} - 1)}{4O_i^2\,\bar{c}^2\,\mu_{\mathrm{Hc}}^2}\right] + \mathrm{E}\left[\frac{Y_{\mathrm{He}i}(Y_{\mathrm{He}i} - 1)}{4O_i^2\,(1-\bar{c})^2\,\mu_{\mathrm{He}}^2}\right]\right) - \mathrm{E}\left[\frac{Y_{\mathrm{Hc}i}\,Y_{\mathrm{He}i}}{4O_i^2\,\bar{c}(1-\bar{c})\,\mu_{\mathrm{Hc}}\,\mu_{\mathrm{He}}}\right] \\
 \hat{\sigma}^{2*}_q &= \frac{1}{2N_{\mathrm{H}}}\sum_i \left[\frac{y_{\mathrm{Hc}i}(y_{\mathrm{Hc}i} - 1)}{O_i^2\,{\hat{\mu}^*_{\mathrm{Hc}}}^2} + \frac{y_{\mathrm{He}i}(y_{\mathrm{He}i} - 1)}{O_i^2\,{\hat{\mu}^*_{\mathrm{He}}}^2}\right] - \frac{1}{N_{\mathrm{H}}}\sum_i \frac{y_{\mathrm{Hc}i}\,y_{\mathrm{He}i}}{O_i^2\,\hat{\mu}^*_{\mathrm{Hc}}\,\hat{\mu}^*_{\mathrm{He}}}
 \end{aligned}
 $$
@@ -1018,13 +1035,13 @@ $$
 
 The estimator of the intrinsic variance is therefore half the mean squared difference of the scaled allele counts minus their average Poisson noise. The estimator of the extrinsic variance is the mean product of the scaled allele counts minus one. Each scaled count has expectation one, so this estimates their covariance, and it needs no Poisson correction because the two counts are independent given their expression factors.
 
-With the true mean rates, every term is an unbiased estimate of the corresponding moment of the expression factors, so both estimators are unbiased. As for π, the fitted mean rates are ratios of sums. Replacing each mean rate by its fitted value changes each term with a bias of order 1/N_H, which we dropped.
+With the true mean rates, every term is an unbiased estimate of the corresponding moment of the expression factors, so both estimators are unbiased. As for π, the fitted mean rates are ratios of sums. Replacing each mean rate by its fitted value changes each term with a bias of order 1/N\_H, which we dropped.
 
 $$
 \mathrm{E}\left[\hat{\sigma}^{2*}_d\right] - \sigma^2_d = \mathcal{O}\left(\frac{1}{N_{\mathrm{H}}}\right), \qquad \mathrm{E}\left[\hat{\sigma}^{2*}_q\right] - \sigma^2_q = \mathcal{O}\left(\frac{1}{N_{\mathrm{H}}}\right)
 $$
 
-**Transcriptome share correction.** The star estimators set aside variation in the transcriptome share. Their limits when the transcriptome share varies are derived in *Transcriptome share and the estimated shift*. Solving those limits for σ²_d and σ²_q gives the corrected estimators. They use η̂_r (*T**ranscriptome share corrections** in the hybrid*) and √(η̂_Hc η̂_He) (*Variance estimates*). We set any corrected variance below zero to zero.
+**Transcriptome share correction.** The star estimators set aside variation in the transcriptome share. Their limits when the transcriptome share varies are derived in *Transcriptome share and the estimated shift*. Solving those limits for σ²\_d and σ²\_q gives the corrected estimators. They use η̂\_r (*Transcriptome share corrections in the hybrid*) and √(η̂\_Hc η̂\_He) (*Variance estimates*). We set any corrected variance below zero to zero.
 
 $$
 \begin{aligned}
@@ -1043,7 +1060,7 @@ $$
 
 Both truncated variances are nonnegative, so δ̂ lies between 0 and 1. A zero estimate of the intrinsic variance gives δ̂ = 0. When both variance estimates are zero the ratio is undefined, and we set δ̂ to zero. Truncation therefore affects δ̂ only for genes with a variance estimate near zero.
 
-The estimated raw shift δ̂_raw is the difference between the estimated dispersion of a single genome and that of the summed hybrid.
+The estimated raw shift δ̂\_raw is the difference between the estimated dispersion of a single genome and that of the summed hybrid.
 
 $$
 \begin{aligned}
@@ -1052,18 +1069,18 @@ $$
 \end{aligned}
 $$
 
-**Transcriptome share and the estimated shift.** Variation in the transcriptome share biases the estimators of π, σ²_d and σ²_q, and through them the estimated shifts.
+**Transcriptome share and the estimated shift.** Variation in the transcriptome share biases the estimators of π, σ²\_d and σ²\_q, and through them the estimated shifts.
 
-**Weight estimate.** Each allele count carries its transcriptome share multiplier, t_Hci = c_i/c̄ for Hc and t_Hei = (1 − c_i)/(1 − c̄) for He, which has mean one and is independent of depth and expression. The expected counts therefore keep the form used for the weight estimate, and the weight estimate is unaffected.
+**Weight estimate.** Each allele count carries its transcriptome share multiplier, t\_Hci = c\_i/c̄ for Hc and t\_Hei = (1 − c\_i)/(1 − c̄) for He, which has mean one and is independent of depth and expression. The expected counts therefore keep the form used for the weight estimate, and the weight estimate is unaffected.
 
 $$
 \begin{aligned}
-\mathrm{E}[Y_{\mathrm{Hc}i}] &= S_{\mathrm{H}i}\,\bar{c}\,\mu_{\mathrm{Hc}}\,\mathrm{E}[t_{\mathrm{Hc}i}] = S_{\mathrm{H}i}\,\bar{c}\,\mu_{\mathrm{Hc}}, \qquad \mathrm{E}[Y_{\mathrm{He}i}] = S_{\mathrm{H}i}\,(1-\bar{c})\,\mu_{\mathrm{He}}\,\mathrm{E}[t_{\mathrm{He}i}] = S_{\mathrm{H}i}\,(1-\bar{c})\,\mu_{\mathrm{He}} \\
+\mathrm{E}[Y_{\mathrm{Hc}i}] &= 2O_i\,\bar{c}\,\mu_{\mathrm{Hc}}\,\mathrm{E}[t_{\mathrm{Hc}i}] = 2O_i\,\bar{c}\,\mu_{\mathrm{Hc}}, \qquad \mathrm{E}[Y_{\mathrm{He}i}] = 2O_i\,(1-\bar{c})\,\mu_{\mathrm{He}}\,\mathrm{E}[t_{\mathrm{He}i}] = 2O_i\,(1-\bar{c})\,\mu_{\mathrm{He}} \\
 \hat{\pi} &\to \pi
 \end{aligned}
 $$
 
-**Variance estimates.** With transcriptome share variation, each allele count is scaled by its transcriptome share multiplier as well as its expression factor, so the count moments in the estimators pick up moments of the multipliers. The multipliers have mean one and are independent of the expression factors, so expectations of products factorize. Their second moments are E[t_r²] = 1 + η_r (*T**ranscriptome share corrections** in the hybrid*), and because the two transcriptome shares sum to one, E[t_Hc t_He] = E[c_i(1 − c_i)]/[c̄(1 − c̄)] = [c̄(1 − c̄) − σ²_c]/[c̄(1 − c̄)] = 1 − σ²_c/[c̄(1 − c̄)] = 1 − √(η_Hc η_He), because σ²_c/[c̄(1 − c̄)] is the geometric mean of η_Hc and η_He. The expression factors have E[a_r²] = 1 + φ_H and E[a_Hc a_He] = 1 + σ²_d. The estimators therefore converge to
+**Variance estimates.** With transcriptome share variation, each allele count is scaled by its transcriptome share multiplier as well as its expression factor, so the count moments in the estimators pick up moments of the multipliers. The multipliers have mean one and are independent of the expression factors, so expectations of products factorize. Their second moments are E\[t\_r²\] = 1 + η\_r (*Transcriptome share corrections in the hybrid*), and because the two transcriptome shares sum to one, E\[t\_Hc t\_He\] = E\[c\_i(1 − c\_i)\]/\[c̄(1 − c̄)\] = \[c̄(1 − c̄) − σ²\_c\]/\[c̄(1 − c̄)\] = 1 − σ²\_c/\[c̄(1 − c̄)\] = 1 − √(η\_Hc η\_He), because σ²\_c/\[c̄(1 − c̄)\] is the geometric mean of η\_Hc and η\_He. The expression factors have E\[a\_r²\] = 1 + φ\_H and E\[a\_Hc a\_He\] = 1 + σ²\_d. The estimators therefore converge to
 
 $$
 \begin{aligned}
@@ -1073,26 +1090,26 @@ $$
 \end{aligned}
 $$
 
-**Bias of the shifts.** Since π̂ converges to π, substituting these limits into the raw shift built from the star estimators, δ̂*_raw, gives the bias that the correction removes. The log₂ shift inherits it through the ratio.
+**Bias of the shifts.** Since π̂ converges to π, substituting these limits into the raw shift built from the star estimators, δ̂\*\_raw, gives the bias that the correction removes. The log₂ shift inherits it through the ratio.
 
 $$
 \hat{\delta}^*_{\mathrm{raw}} \to \left[1 - \pi^2 - (1-\pi)^2\right]\left(\sigma^2_q + \tfrac12\left(1 + \varphi_{\mathrm{H}}\right)\sigma^2_c\left[\frac{1}{\bar{c}^2} + \frac{1}{(1-\bar{c})^2}\right] + \sqrt{\eta_{\mathrm{Hc}}\,\eta_{\mathrm{He}}}\left(1 + \sigma^2_d\right)\right)
 $$
 
-Both biases raise the estimated intrinsic fraction and therefore the shift. Solving the two limits above for σ²_d and σ²_q gives the corrected estimators of this appendix, which remove both biases. A simulation of this model with Poisson counts, shifted exponential extrinsic and intrinsic deviations, 8 × 10⁶ cells, and the true transcriptome share variance and mean rates reproduced both limits to within 0.0005, and the corrected estimators recovered σ²_d and σ²_q to within 0.0005.
+Both biases raise the estimated intrinsic fraction and therefore the shift. Solving the two limits above for σ²\_d and σ²\_q gives the corrected estimators of this appendix, which remove both biases. A simulation of this model with Poisson counts, shifted exponential extrinsic and intrinsic deviations, 8 × 10⁶ cells, and the true transcriptome share variance and mean rates reproduced both limits to within 0.0005, and the corrected estimators recovered σ²\_d and σ²\_q to within 0.0005.
 
 **Transcriptome share and the dispersion of the summed counts.** Variation in the transcriptome share also adds a term to the dispersion of the summed hybrid, and a correction removes it.
 
-Each allele count is scaled by a transcriptome share multiplier t, defined in *T**ranscriptome share corrections** in the hybrid*, that has mean one and is independent of the expression factors. The sum of the two allele counts is again Poisson around the sum of the two allele means, so the rewriting of the summed counts at the start of this appendix applies with the multipliers included. The summed expression factor that the NB fit sees is then a*_Hi.
+Each allele count is scaled by a transcriptome share multiplier t, defined in *Transcriptome share corrections in the hybrid*, that has mean one and is independent of the expression factors. The sum of the two allele counts is again Poisson around the sum of the two allele means, so the rewriting of the summed counts at the start of this appendix applies with the multipliers included. The summed expression factor that the NB fit sees is then a\*\_Hi.
 
 $$
 \begin{aligned}
-Y_{\mathrm{H}i} \mid c_i, a_{\mathrm{Hc}i}, a_{\mathrm{He}i} &\sim \mathrm{Poisson}\left(S_{\mathrm{H}i}\left[\bar{c}\,\mu_{\mathrm{Hc}}\,t_{\mathrm{Hc}i}\,a_{\mathrm{Hc}i} + (1-\bar{c})\,\mu_{\mathrm{He}}\,t_{\mathrm{He}i}\,a_{\mathrm{He}i}\right]\right) \\
-&= \mathrm{Poisson}\left(S_{\mathrm{H}i}\,\mu_{\Sigma}\,a^*_{\mathrm{H}i}\right), \qquad a^*_{\mathrm{H}i} \equiv \pi\,t_{\mathrm{Hc}i}\,a_{\mathrm{Hc}i} + (1-\pi)\,t_{\mathrm{He}i}\,a_{\mathrm{He}i}
+Y_{\mathrm{H}i} \mid c_i, a_{\mathrm{Hc}i}, a_{\mathrm{He}i} &\sim \mathrm{Poisson}\left(2O_i\left[\bar{c}\,\mu_{\mathrm{Hc}}\,t_{\mathrm{Hc}i}\,a_{\mathrm{Hc}i} + (1-\bar{c})\,\mu_{\mathrm{He}}\,t_{\mathrm{He}i}\,a_{\mathrm{He}i}\right]\right) \\
+&= \mathrm{Poisson}\left(2O_i\,\mu_{\Sigma}\,a^*_{\mathrm{H}i}\right), \qquad a^*_{\mathrm{H}i} \equiv \pi\,t_{\mathrm{Hc}i}\,a_{\mathrm{Hc}i} + (1-\pi)\,t_{\mathrm{He}i}\,a_{\mathrm{He}i}
 \end{aligned}
 $$
 
-Each multiplier and expression factor has mean one and they are independent, so a*_Hi has mean one. The fitted dispersion estimates its variance. The multipliers vary among cells only through c_i, so we split the variance into a part between transcriptome shares and a part within a transcriptome share.
+Each multiplier and expression factor has mean one and they are independent, so a\*\_Hi has mean one. The fitted dispersion estimates its variance. The multipliers vary among cells only through c\_i, so we split the variance into a part between transcriptome shares and a part within a transcriptome share.
 
 $$
 \begin{aligned}
@@ -1101,7 +1118,7 @@ $$
 \end{aligned}
 $$
 
-For the between part, each expression factor has mean one and is independent of the transcriptome share, so conditioning on c_i leaves only the multipliers. Its variance follows from the moments of the multipliers, Var[t_r] = η_r and Cov[t_Hc, t_He] = −√(η_Hc η_He) (*Variance estimates*):
+For the between part, each expression factor has mean one and is independent of the transcriptome share, so conditioning on c\_i leaves only the multipliers. Its variance follows from the moments of the multipliers, Var\[t\_r\] = η\_r and Cov\[t\_Hc, t\_He\] = −√(η\_Hc η\_He) (*Variance estimates*):
 
 $$
 \begin{aligned}
@@ -1110,7 +1127,7 @@ $$
 \end{aligned}
 $$
 
-For the within part, the multipliers are constants given the transcriptome share, so the conditional variance weights the allele variances and covariance by the squared multipliers. The intrinsic and extrinsic decomposition of this appendix gives the allele variances as σ²_d + σ²_q and the covariance as σ²_d.
+For the within part, the multipliers are constants given the transcriptome share, so the conditional variance weights the allele variances and covariance by the squared multipliers. The intrinsic and extrinsic decomposition of this appendix gives the allele variances as σ²\_d + σ²\_q and the covariance as σ²\_d.
 
 $$
 \mathrm{Var}[a^*_{\mathrm{H}i} \mid c_i] = \left[\pi^2\,t_{\mathrm{Hc}i}^2 + (1-\pi)^2\,t_{\mathrm{He}i}^2\right]\left(\sigma^2_d + \sigma^2_q\right) + 2\pi(1-\pi)\,t_{\mathrm{Hc}i}\,t_{\mathrm{He}i}\,\sigma^2_d
@@ -1128,19 +1145,19 @@ $$
 \mathrm{E}\left[\mathrm{Var}[a^*_{\mathrm{H}i} \mid c_i]\right] = \left[\pi^2\left(1 + \eta_{\mathrm{Hc}}\right) + (1-\pi)^2\left(1 + \eta_{\mathrm{He}}\right)\right]\left(\sigma^2_d + \sigma^2_q\right) + 2\pi(1-\pi)\left(1 - \sqrt{\eta_{\mathrm{Hc}}\,\eta_{\mathrm{He}}}\right)\sigma^2_d
 $$
 
-The terms without η or √(η_Hc η_He) reduce to φ_Σ, because π² + (1 − π)² + 2π(1 − π) equals one. Adding the between part and grouping the remaining terms gives the variance of the summed expression factor:
+The terms without η or √(η\_Hc η\_He) reduce to φ\_Σ, because π² + (1 − π)² + 2π(1 − π) equals one. Adding the between part and grouping the remaining terms gives the variance of the summed expression factor:
 
 $$
 \mathrm{Var}[a^*_{\mathrm{H}i}] = \underbrace{\sigma^2_d + \left[\pi^2 + (1-\pi)^2\right]\sigma^2_q}_{\varphi_{\Sigma}} + \left(1 + \sigma^2_d\right)\left[\pi^2\eta_{\mathrm{Hc}} + (1-\pi)^2\eta_{\mathrm{He}} - 2\pi(1-\pi)\,\sqrt{\eta_{\mathrm{Hc}}\,\eta_{\mathrm{He}}}\right] + \sigma^2_q\left[\pi^2\eta_{\mathrm{Hc}} + (1-\pi)^2\eta_{\mathrm{He}}\right]
 $$
 
-The transcriptome share correction is never negative, because its first bracket is the variance of the conditional mean and its second is a weighted sum of the η's. It is largest when one allele dominates, where it equals η_Hc(1 + φ_H) or η_He(1 + φ_H) for the dominant allele. The NB fit of the summed counts, which we write φ̂*_Σ, estimates this variance and so carries the transcriptome share correction, which we subtracted. A simulation of the summed expression factor with shifted exponential deviations and 8 × 10⁶ cells matched this variance to within 0.0002 in three settings.
+The transcriptome share correction is never negative, because its first bracket is the variance of the conditional mean and its second is a weighted sum of the η's. It is largest when one allele dominates, where it equals η\_Hc(1 + φ\_H) or η\_He(1 + φ\_H) for the dominant allele. The NB fit of the summed counts, which we write φ̂\*\_Σ, estimates this variance and so carries the transcriptome share correction, which we subtracted. A simulation of the summed expression factor with shifted exponential deviations and 8 × 10⁶ cells matched this variance to within 0.0002 in three settings.
 
 $$
 \hat{\varphi}^*_{\Sigma} \approx \mathrm{Var}[a^*_{\mathrm{H}i}] = \varphi_{\Sigma} + \left(1 + \sigma^2_d\right)\left[\pi^2\eta_{\mathrm{Hc}} + (1-\pi)^2\eta_{\mathrm{He}} - 2\pi(1-\pi)\,\sqrt{\eta_{\mathrm{Hc}}\,\eta_{\mathrm{He}}}\right] + \sigma^2_q\left[\pi^2\eta_{\mathrm{Hc}} + (1-\pi)^2\eta_{\mathrm{He}}\right]
 $$
 
-We subtracted the estimate of this term, built from the corrected variance estimates, the estimated weight π̂ and the estimates η̂_Hc, η̂_He and √(η̂_Hc η̂_He) of the multiplier moments, and set a corrected dispersion below zero to zero.
+We subtracted the estimate of this term, built from the corrected variance estimates, the estimated weight π̂ and the estimates η̂\_Hc, η̂\_He and √(η̂\_Hc η̂\_He) of the multiplier moments, and set a corrected dispersion below zero to zero.
 
 $$
 \hat{\varphi}_{\Sigma} = \hat{\varphi}^*_{\Sigma} - \left(1 + \hat{\sigma}^2_d\right)\left[\hat{\pi}^2\hat{\eta}_{\mathrm{Hc}} + (1-\hat{\pi})^2\hat{\eta}_{\mathrm{He}} - 2\hat{\pi}(1-\hat{\pi})\,\sqrt{\hat{\eta}_{\mathrm{Hc}}\,\hat{\eta}_{\mathrm{He}}}\right] - \hat{\sigma}^2_q\left[\hat{\pi}^2\hat{\eta}_{\mathrm{Hc}} + (1-\hat{\pi})^2\hat{\eta}_{\mathrm{He}}\right]
@@ -1148,11 +1165,17 @@ $$
 
 ## References
 
+Andrews DWK (2000) Inconsistency of the bootstrap when a parameter is on the boundary of the parameter space. Econometrica 68:399–405. https://doi.org/10.1111/1468-0262.00114
+
 Cox DR, Reid N (1987) Parameter orthogonality and approximate conditional inference. Journal of the Royal Statistical Society, Series B 49:1–39. https://doi.org/10.1111/j.2517-6161.1987.tb01422.x
 
 Elowitz MB, Levine AJ, Siggia ED, Swain PS (2002) Stochastic gene expression in a single cell. Science 297:1183–1186. https://doi.org/10.1126/science.1070919
 
 Fraser HB (2019) Improving estimates of compensatory *cis*-*trans* regulatory divergence. Trends in Genetics 35:3–5. https://doi.org/10.1016/j.tig.2018.09.003
+
+Giersdorf et al. (2026) \[title and authors to be completed\]. bioRxiv. https://doi.org/10.64898/2026.06.18.733122
+
+Hall P, Wilson SR (1991) Two guidelines for bootstrap hypothesis testing. Biometrics 47:757–762. https://doi.org/10.2307/2532163
 
 Lawless JF (1987) Negative binomial and mixed Poisson regression. Canadian Journal of Statistics 15:209–225. https://doi.org/10.2307/3314912
 
@@ -1168,43 +1191,43 @@ Wedderburn RWM (1974) Quasi-likelihood functions, generalized linear models, and
 
 Wittes J, Brittain E (1990) The role of internal pilot studies in increasing the efficiency of clinical trials. Statistics in Medicine 9:65–72. https://doi.org/10.1002/sim.4780090113
 
-Wittkopp PJ, Haerum BK, Clark AG (2004) Evolutionary changes in *cis* and* trans* gene regulation. Nature 430:85–88. https://doi.org/10.1038/nature02698
+Wittkopp PJ, Haerum BK, Clark AG (2004) Evolutionary changes in *cis* and *trans* gene regulation. Nature 430:85–88. https://doi.org/10.1038/nature02698
 
 ## Notes for revision
 
 ### Decisions
 
-- **Informativeness thresholds.** The 5% test level and the near-zero threshold φM̄_r < 0.1 in Informative estimates are provisional. Report how class counts and results change across nearby thresholds.
-- **Transcriptome share variance.** Whether to estimate σ²_c within replicates.
 - **ML fit of non-gamma expression factors.** The NB fit converges to the variance of the expression factor only when that factor is gamma, and the factor seen by the allele fits, t·a, is not exactly gamma. A more systematic approach is needed to quantify the departure across the means, dispersions and allele weights in the data, and to decide whether the allele dispersions should use the moment estimator of Appendix A instead.
-- **Coexpression.** Whether the coexpression results enter the paper. If they do, add the coexpression ploidy correction as a short paragraph in Per-genome hybrid estimates.
+- **Cox–Reid adjustment.** Simulations cannot resolve the effect that the adjustment targets, and the non-gamma result adds a concern. With a gamma factor, 800 cells and the ratio mean (300 replicates per setting), the unadjusted and Cox–Reid estimates both had bias within 0.06 of their SD when the mean count was 1 or more, which is within Monte Carlo noise. The order 1/(N M̄ φ) estimate of the first-order bias is about 1% in these settings, below what 300 replicates resolve, and further simulations at 300 to 2000 cells showed the same. At a mean count of 0.2 and φ = 0.1 both estimates were biased upward by 0.29 to 0.42 SD, with 32% to 40% of estimates at zero, and the adjustment did not lower the bias. Equal offsets, where the ratio mean equals the profile maximum likelihood mean, gave the same pattern, so the ratio mean does not explain it, and the upward bias most likely comes from truncation at zero, which we did not test directly. The adjustment slightly lowered the SD and the fraction of zero estimates in sparse cells, so its main effect is on the boundary rule and on which genes pass the boundary gate. At 1000 cells a sparse gene (mean count 0.2, φ = 0.1) had a bias of 0.012 in φM̄ units, and 86% of such genes were not resolved above zero by a likelihood ratio test at the 5% level, so the bias matters mainly for genes that the boundary gate is likely to exclude. Simulations on stand-in cell depths, because the Section 2 checkpoint is not in the repository, found bias/SD up to 0.61 in sparse cells, no smaller than for the unadjusted estimator. For non-gamma factors with 20,000 cells and equal offsets, the relative bias of the Cox–Reid estimate ran from −4.5% to −28.1% for lognormal factors and from +3.1% to +40.3% for bimodal factors across mean counts of 1 and 5 and φ of 0.3 and 1, growing with both, while the moment estimator stayed within 2%. The bias does not depend on the number of cells. At 1000 and 2000 cells it was −28% and +40% at mean count 5 and φ = 1, where the SD of the estimate is 4% to 8% of φ, and it was within the SD at mean count 1 and φ = 0.3. Stand-in depth simulations gave medians of −6.3% and +4.2%. Decide whether Cox–Reid stays the primary estimator for parental and allele dispersions, with these biases reported, or whether the moment estimator of Appendix A replaces it at some cost in precision. Rerun the simulations at the observed depths before deciding.
+- **Coexpression.** The coexpression results will be in the paper. Add the coexpression ploidy correction as a short paragraph in Per-genome hybrid estimates.
 
 ### Checks to run
 
-- **Code.** In .fit_one(), replace the Pearson pre-check with the Cox–Reid adjusted fit and its slope rule, setting φ̂ = 0 when Σ(y − M̂_i)² ≤ ΣM̂_i − ΣM̂_i²/ΣM̂_i, and remove PHI.FLOOR. Keep the truncation at zero after the transcriptome share correction, and record fits whose maximum reaches either end of LOG.THETA.RANGE, which spans φ from about 3 × 10⁻⁷ to 55.
-- **Code.** Classify every dispersion estimate as resolved above zero, resolved near zero or uninformative, using the boundary likelihood ratio test and the upper bound on φM̄_r in Informative estimates, and gate each raw and log₂ contrast and each kinetic balance contrast on the classes of the groups it uses. Classify after the transcriptome share correction. Report excluded gene counts per contrast, keep a gene set for each contrast and scale for the supplement, and flag a single matched set, class 1 in every group of every partition, for every main-text comparison. In bootstrap replicates, map a zero estimate to −∞ on the log₂ scale and take log₂ intervals and SEs from percentiles.
-- **Code.** Estimate γ and f_κ for kinetic balance, add a third hybrid partition at f_κ, and fit the mean and dispersion on the same cells of that partition for the kinetic balance contrasts, pooling γ over genes in class 1 on both sides. Report a supplementary version from the f_μ and f_φ partitions.
-- **Analysis.** Report γ̂_x, f_x and the cis and trans partition sizes for x = μ, φ and κ, and confirm that each partition keeps about 800 cells or more.
-- **Analysis.** Flag genes with more than 2.5% of bootstrap replicates at zero, and report whether any of them has a significant contrast.
+- **Code.** In .fit\_one(), replace the Pearson pre-check with the Cox–Reid adjusted fit and its slope rule, setting φ̂ = 0 when Σ(y − M̂\_i)² ≤ ΣM̂\_i − ΣM̂\_i²/ΣM̂\_i, and remove PHI.FLOOR. Keep the truncation at zero after the transcriptome share correction, and record fits whose maximum reaches either end of LOG.THETA.RANGE, which spans φ from about 3 × 10⁻⁷ to 55.
+- **Code.** Record for every group of every gene the fraction of bootstrap replicates at zero, and gate each raw, log₂, burst size and kinetic balance contrast on this fraction being at most 2.5% in every group it uses. Apply the gate after the transcriptome share correction, and compute the upper and lower 95% likelihood bounds at the critical value 2.71. Report excluded gene counts per contrast, keep a gene set for each contrast and scale for the supplement, and flag a single matched set, resolved in every group of every partition, for every main-text comparison. In bootstrap replicates, map a zero estimate to −∞ on the log₂ scale and take log₂ intervals and SEs from percentiles.
+- **Code.** Estimate γ and f for kinetic balance (f\_κ) and burst size (f\_ζ), add a third and a fourth hybrid partition at f\_κ and f\_ζ, and fit the mean and dispersion on the same cells of each partition for its contrasts, pooling γ over genes whose groups are resolved on both sides.
+- **Analysis.** Report γ̂\_x, f\_x and the cis and trans partition sizes for x = μ, φ and κ, and confirm that each partition keeps about 800 cells or more.
+- **Analysis.** Report the number of genes excluded by the boundary gate for each group and contrast, and for genes with one resolved group, the number whose likelihood bounds separate.
 - **Code.** Normalize each allele by the ratio of summed counts to summed offsets rather than the average of the cell rates.
 - **Code.** Reinstate the allele transcriptome share correction and add the variance corrections of Appendix B. Truncate negative variance estimates only after the correction, not at the star estimators.
-- **Code.** Refit the transcriptome share corrections inside each bootstrap replicate, and apply the observed c̄̂ and η̂_r inside every refit of the null distributions, permuted or simulated.
-- **Code.** Replace the permutation nulls for the dispersion contrasts with the simulated nulls of Null distributions: null dispersions by projection on each scale, inflated allele dispersions for the transcriptome share, and a shared extrinsic factor with variance σ̂²_d for the two alleles of a cell. Build the parental mean null from rescaled hybrid cells, the trans mean null with allele offsets that include the abundance factor and k̂, and the midparent mean null by simulation with null allele means scaled to the midparent, without δ̂ or δ̂_syn.
-- **Code.** Confirm that c̄̂ is the unweighted mean of ĉ_i.
+- **Code.** Refit the transcriptome share corrections inside each bootstrap replicate, and apply the observed c̄̂ and η̂\_r inside every refit of the permuted and simulated null distributions, and refit them inside every draw of the shifted bootstrap nulls.
+- **Code.** Replace the permutation nulls for the dispersion contrasts with the shifted bootstrap nulls of Null distributions: resample the parental cells and the undivided hybrid cells once per draw, refit every group with the share corrections, and multiply each refitted dispersion by the ratio of its null value to its fitted value on each scale. Build the parental mean null from rescaled hybrid cells, the trans mean null with allele offsets that include the abundance factor and k̂, and the midparent mean null by simulation with null allele means scaled to the midparent, without δ̂ or δ̂\_syn.
+- **Code.** Confirm that c̄̂ is the unweighted mean of ĉ\_i.
 - **Code.** Rescale the allele fits by 2c̄̂ and 2(1 − c̄̂) before averaging in the midparent and parental mean contrasts.
-- **Code.** Compute the dominance dispersion contrasts from the corrected allele dispersions, as a geometric mean on the log₂ scale and an arithmetic mean on the raw scale. Compute δ̂ and δ̂_raw for reporting only.
-- **Code.** Rename the contrasts dom and dpar to mid and par in .contrast_value() and the output tables.
+- **Code.** Compute the dominance dispersion contrasts from the corrected allele dispersions, as a geometric mean on the log₂ scale and an arithmetic mean on the raw scale. Compute δ̂ and δ̂\_raw for reporting only.
+- **Code.** Rename the contrasts dom and dpar to mid and par in .contrast\_value() and the output tables.
 - **Simulation.** Simulate known depths, means, dispersions, mean transcriptome share and transcriptome share variance through the full pipeline to test the remaining bias of the dominance contrasts.
 - **Simulation.** Add the Oct 23, 2026 simulation scripts for the NB fit of the summed counts, the mean and dispersion correlation, and Appendix B to the repository, and rerun them at the study's parameter estimates.
-- **Simulation.** Check the calibration of the dispersion nulls. Simulate genes with known equal dispersions and different means, and confirm that the simulated nulls give uniform p-values on both scales, including the cis contrast with its shared extrinsic factor.
+- **Simulation.** Check the calibration of the shifted bootstrap nulls for the log₂ dispersion, raw dispersion, burst size and kinetic balance contrasts. Simulate genes with known equal dispersions and different means, with gamma, lognormal and bimodal expression factors and with a shared and a private part for the two alleles, and confirm that the p-values are uniform on both scales, including the cis contrast, and report the departure for genes near the zero boundary.
 - **Analysis.** Test the observed correlation of Δ(κ) and Δ(μ) across genes against its structural value, as done for burst size.
 - **Analysis.** Support the statement that φ is estimated imprecisely with the median bootstrap SE of log φ.
 - **Analysis.** Confirm the calibration of the level-adjusted *trans* mean null and the simulated midparent mean null in the null calibration simulation, including genes whose hybrid level differs from the parents'.
 - **Analysis.** Compare the parental NB fits with and without a dropout term by AIC, and report whether dropout can be ignored for UMI data (suggested by Giersdorf et al. 2026).
-- **Analysis.** Fit cell-state clusters directly, with cluster-specific means and a shared noise parameter, to estimate how much of φ comes from cell-state variation, which bears on σ²_d (suggested by Giersdorf et al. 2026).
+- **Analysis.** Fit cell-state clusters directly, with cluster-specific means and a shared noise parameter, to estimate how much of φ comes from cell-state variation, which bears on σ²\_d (suggested by Giersdorf et al. 2026).
 - **Analysis.** Report the correlation of φ̂ with μ̂ across genes as a check on the offset-NB fits.
-- **Analysis.** To do after the splits are rerun. The offset caps are computed (CV and cap 1 + CV²(O) of 0.72 and 1.52 for Pc, 0.87 and 1.76 for Pe, 0.44 and 1.19 for H). Compute each gene's realized variance ratio with var_ratio() on the MIX.SC, MIX.SE and hybrid fits, replace the illustrative CV of 0.53 in Estimating μ with the per-group caps and realized ratios, and decide whether the parental means should use the NB estimate μ̃ if their realized cost is large.
-- **Analysis.** Confirm the choice of the allele average for φ_H over the summed hybrid route with the Cox–Reid fits on a subset of genes. A moment-based comparison on all genes (compare_phiG_routes.R) gave a Spearman correlation of 0.97 and a median bootstrap SD ratio of 0.965, summed route over allele route.
+- **Analysis.** To do after the splits are rerun. The offset caps are computed (CV and cap 1 + CV²(O) of 0.72 and 1.52 for Pc, 0.87 and 1.76 for Pe, 0.44 and 1.19 for H). Compute each gene's realized variance ratio with var\_ratio() on the MIX.SC, MIX.SE and hybrid fits, report the per-group caps and realized ratios in Estimating μ, and decide whether the parental means should use the NB estimate μ̃ if their realized cost is large.
+- **Analysis.** Confirm the choice of the allele average for φ\_H over the summed hybrid route with the Cox–Reid fits on a subset of genes. A moment-based comparison on all genes (compare\_phiG\_routes.R) gave a Spearman correlation of 0.97 and a median bootstrap SD ratio of 0.965, summed route over allele route.
+- **Analysis.** Measure the correlation of the mean and dispersion errors in the bootstrap replicates for each group and for the cis, trans and parental contrasts on the f\_μ, f\_φ, f\_κ and f\_ζ partitions, because Separate partitions for each quantity shows it is zero only for disjoint cell sets or a gamma factor. Extend the Oct 23 mean and dispersion correlation simulation to non-gamma factors and compare it with the covariance formula.
 
 ### Reference checks
 
@@ -1212,4 +1235,3 @@ Wittkopp PJ, Haerum BK, Clark AG (2004) Evolutionary changes in *cis* and* trans
 - Consider citing Larsson AJM et al. (2019) Genomic encoding of transcriptional burst kinetics. Nature 565:251–254, https://doi.org/10.1038/s41586-018-0836-1, where θ and ζ are introduced, as a precedent for allele-specific burst kinetics from single-cell data.
 - DOIs for Lawless (1987), McCullagh and Nelder (1989) and Wittes and Brittain (1990) were added from publisher and Crossref records. For McCullagh and Nelder, the Springer DOI 10.1007/978-1-4899-3242-6 is the one Crossref uses in citing works; Routledge also lists the eBook as 10.1201/9780203753736.
 - Add a full citation with DOI for Giersdorf et al. 2026 (bioRxiv) if its suggested analyses enter the paper.
-
