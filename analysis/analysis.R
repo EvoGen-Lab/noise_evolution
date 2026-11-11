@@ -958,8 +958,8 @@ local({
 })
 
 # Diagnostic panel, before classification exists: top row cis vs trans
-# (mean, dispersion, burst size), middle row mean vs burst
-# frequency (total, cis, trans), bottom row burst kinetics (total, cis,
+# (mean, dispersion, burst size), middle row mean vs dispersion
+# (total, cis, trans), bottom row burst kinetics (total, cis,
 # trans)
 fig_pdf("extra/contrasts_panels.pdf", 13, 13, useDingbats = TRUE)
 par(mfrow = c(3, 3), mar = c(4, 4, 3, 1))
@@ -1074,8 +1074,8 @@ set.seed(SEED.SECTION + 3)
 QUANTITIES <- c("mean", "disp", "bsize", "kbal")
 REG.VEC <- lapply(setNames(QUANTITIES, QUANTITIES), function(q) reg_class_vec(BURST.CONTRASTS, PR, q))
 
-## Figure 1: cis vs trans scatter above class counts, mean/burst
-# frequency/burst size. Scatter row on top, class-count barplots below
+## Figure 1: cis vs trans scatter above class counts, mean/dispersion/
+# burst size. Scatter row on top, class-count barplots below
 fig_pdf("main/01_cis_trans.pdf", 13, 10)
 par(mfrow = c(2, 3), mar = c(5, 4.5, 2, 1))
 plot_cis_trans_class(BURST.CONTRASTS, PR, "mean")
@@ -2808,8 +2808,8 @@ GO.SETS <- list(Mean_Total_Sc  = MEAN.SC.UP,  Mean_Total_Se  = MEAN.SE.UP,
                 Disp_Total_Sc = DISP.SC.UP, Disp_Total_Se = DISP.SE.UP,
                 Bsize_Total_Sc = BSIZE.SC.UP, Bsize_Total_Se = BSIZE.SE.UP)
 
-## 8.2 Regulatory classes, each split by direction: mean, burst
-## frequency, burst size, frequency-size balance
+## 8.2 Regulatory classes, each split by direction: mean, dispersion,
+## burst size, frequency-size balance (the direction of a dispersion class is that of phi, the opposite of burst frequency theta = 1 / phi)
 # Twenty class sets: five classes (Conserved, Cis, Trans, Cis + Trans,
 # Compensatory) x two directions (Sc-higher, Se-higher), for each of
 # four quantities.
