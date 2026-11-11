@@ -26,9 +26,10 @@ stopifnot(abs(.contrast_value("mid", ph, "DISP") - (0.5 * log2(0.1 * 0.3) - 0.5 
           abs(.contrast_value("par_se", ph, "DISP") - (0.5 * log2(0.1 * 0.3) - log2(0.4))) < 1e-12)
 stopifnot(.contrast_value("total", list(MIX.SC = 0, MIX.SE = 1), "DISP", zero_inf = TRUE) == -Inf,
           is.na(.disp_contrasts("total", list(MIX.SC = 0, MIX.SE = 0), zero_inf = TRUE)[["log"]]))
-## the hybrid CV2 is 1 / mu_H + the arithmetic mean of the allele dispersions
+## the per-genome hybrid dispersion is the geometric mean of the allele dispersions on the log2 scale, the arithmetic mean on the raw scale
 mc <- .mode_contrasts(gmu[c("MIX.SC", "MIX.SE", "HYB.SC", "HYB.SE")], ph, cb, modes = "par_sc")
-stopifnot(abs(mc["par_sc", "cv2"] - (log2(1 / mu0 + 0.2) - log2(1 / mu0 + 0.2))) < 1e-12)
+stopifnot(colnames(mc) == c("mean", "disp", "raw"), abs(mc["par_sc", "disp"] - (0.5 * log2(0.1 * 0.3) - log2(0.2))) < 1e-12,
+          abs(mc["par_sc", "raw"] - (0.5 * (0.1 + 0.3) - 0.2)) < 1e-12)
 
 ## ---- null dispersions: the projection zeroes every contrast type on both scales ----
 for (md in c("total", "cis", "trans", "mid", "par_sc")) {
@@ -100,7 +101,7 @@ need <- c("mean_total_p", "mean_cis_p", "mean_trans_p", "mean_mid_p", "mean_par_
           "rdisp_cis_p", "rdisp_trans_p", "rdisp_mid_p", "bsize_cis_p", "kbal_trans_p", "wdisp_mid_p", "wkbal_par_sc_p", "wrdisp_total_p", "disp_cis_infrac", "k_trans")
 stopifnot(all(need %in% names(p1)))
 pv <- unlist(p1[grep("_p$", names(p1))]); stopifnot(all(is.na(pv) | (pv > 0 & pv <= 1)), all(!is.na(unlist(p1[need[need != "k_trans"]]))))
-stopifnot(is.na(p1$cv2_cis_p), !is.na(p1$cv2_cis_obs))
+stopifnot(!any(grepl("cv2", c(names(p1), names(bo)))))
 stopifnot(!any(grepl("kbalsup", names(p1))))
 ## the shifted bootstrap null of a log2 dispersion contrast is the resampled contrast minus the observed one: with the same draws, the null draws of disp_total
 ## are the bootstrap draws shifted by the estimate, so the p-value equals the share of bootstrap draws at least |estimate| away from it

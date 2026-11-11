@@ -53,8 +53,8 @@ flush.console()
 results <- vector("list", length(chunks))
 t0 <- Sys.time(); done <- 0
 for (k in seq_along(chunks)) {
-  ## One gene's paired bootstrap: refits all 13 groups on each pre-drawn resample, forms every mode's
-  ## mean, disp (NB dispersion) and CV2 contrast per replicate, and returns the point estimate, bootstrap SE,
+  ## One gene's paired bootstrap: refits all 20 contrast groups on each pre-drawn resample, forms every mode's
+  ## mean and dispersion contrasts per replicate, and returns the point estimate, bootstrap SE,
   ## boundary fraction and mean-disp draw correlation for the six reportable modes. Replicates where
   ## any needed fit is non-finite give NA for that contrast and are left out of its SD.
   results[[k]] <- parLapply(cl, chunks[[k]], boot_contrasts_one, expos = CONTRAST.EXPOS, fits = CONTRAST.FITS, mats = CONTRAST.MATS, draws = DRAWS, share_cells = SHARE.CELLS, share_obs = SHARE.OBS, gates = GATES, methods = c("NB", "weighted"))

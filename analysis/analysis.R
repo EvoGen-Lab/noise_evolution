@@ -893,7 +893,7 @@ write.csv(BOUNDS.CALLS,           file.path(TABLE.DIR, "likelihood_bound_calls.c
 ## allele fits of all hybrid cells, with the parents. The wdisp_* and wrdisp_* columns repeat both scales with the weighted method of moments
 ## (fit_dispersion(method = "weighted")) on the same resamples, a sensitivity analysis next to the NB estimator. A contrast the fits do not define (GATES) is NA
 ## throughout. PR holds the null p-values of every contrast (gene_perm.R); a p-value whose groups are not all resolved (.QUANTITY.RESOLVE) is set to NA before the
-## BH adjustment; cv2 and the raw burst quantities have estimates and intervals but no null in the Methods.
+## BH adjustment; the raw burst quantities have estimates and intervals but no null in the Methods.
 BURST.CONTRASTS.INFER <- BOOT.CONTRASTS.INFER
 PR.INFER <- PERM.RESULTS.INFER[match(BURST.CONTRASTS.INFER$gene, PERM.RESULTS.INFER$gene), ]
 PR.INFER <- local({
@@ -1103,13 +1103,11 @@ dev.off()
 
 ## 3.3 Dominance classification: mean, dispersion, burst size,
 ## kinetic balance
-# par contrasts compare the hybrid with one haploid parent. On the mean axis
-# the hybrid mean rate is the average of the two allele fits, each
-# on the haploid-equivalent scale of the parents (offset S_H / 2), so an
-# additive gene sits at the midparent (exactly at c-bar = 0.5). On the noise axis the summed hybrid
-# (HYB.COMB, offset S_H) is fitted, and the sum of two
-# alleles averages their intrinsic noise, so disp falls in the hybrid and cv2
-# falls. The BURST.CONTRASTS block removes that shift from the par estimates
+# par contrasts compare the per-genome hybrid with one haploid parent. On the mean axis the hybrid mean rate is the average of
+# the two corrected allele fits, each on the haploid-equivalent scale of the parents (offset S_H / 2), so an additive gene sits
+# at the midparent. On the noise axis the per-genome hybrid dispersion is the geometric mean of the two corrected allele
+# dispersions (Route A), each a single-genome dispersion, so the fall in dispersion from summing the alleles (the ploidy shift,
+# reported in APPENDIX.B) does not enter the par estimates.
 DOM.VEC <- lapply(setNames(QUANTITIES, QUANTITIES), function(q) dom_class_vec(BURST.CONTRASTS, PR, q))
 # Genes classified for each quantity. A class is NA when the contrasts it needs have no p-value, so the counts below show how many genes each
 # classification covers; they differ by quantity because eligibility does (the log2 and kappa quantities need phi > 0 where the mean does not).

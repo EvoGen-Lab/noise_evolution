@@ -36,12 +36,11 @@
 ###     qc_gene_keep() - Cross-dataset gene QC with one relative abundance floor anchored to the shallowest dataset and an absolute detection floor, and sets the pilot gene pool.
 ###   3. PAIRED PER-GENE BOOTSTRAP OF CONTRASTS
 ###     make_draws() - Builds the resampling index draws of the bootstrap and the shifted bootstrap nulls: parents resampled whole, the undivided hybrid cells resampled once, each copy keeping its memberships in the mean, dispersion, kinetic balance and burst size partitions.
-###     .mode_contrasts() - Every contrast (mean, log2 disp with zero mapped to -Inf, raw disp, CV2) of every mode from per-group fits: the one definition for the observed fits and each bootstrap draw.
+###     .mode_contrasts() - Every contrast (mean, log2 disp with zero mapped to -Inf, raw disp) of every mode from per-group fits: the one definition for the observed fits and each bootstrap draw.
 ###     .boot_summary() / apply_gate() - Percentile interval, interquantile-range SE and zero fraction of bootstrap draws; sets the contrasts the fits do not define to NA (.QUANTITY.GATE; .QUANTITY.RESOLVE says which groups must be resolved for a p-value).
 ###     .contrast_raw() - The raw (difference) contrast of phi for one mode, defined when phi = 0.
 ###     .burst_q() / .contrast_burst_raw() - The raw burst size (mu phi) and kinetic balance (1 / (mu phi^2)) of a group, and their raw difference contrast for one reporting mode.
 ###     .contrast_value() / .correct_means() - Log2 contrast for one mode (total, cis, trans, mid, par) as a weighted sum over its groups (.MODE.WEIGHTS), with the allele means divided by their abundance factors and the per-genome hybrid built from the two alleles.
-###     .cv2_of() - CV2 (1/mu + 1/disp) of one fitted group; NA unless mu and disp are finite and positive.
 ###   4. DISATTENUATED MEAN-DISP COUPLING (population summary)
 ###     eiv_components() - Errors-in-variables mean-disp coupling for one mode: attenuation-corrected variances, covariance and correlation, plus the raw correlation.
 ###   5. PLOTTING HELPERS AND GENE-LEVEL PLOTS
@@ -84,7 +83,7 @@
 ###     class_identity_overlap() - Cohen's kappa plus per-class Jaccard overlap between two class vectors on the same genes.
 ###     summarize_class_overlap() - One printable summary row (n, concordance, kappa, permutation p) per class-overlap comparison.
 ###     plot_cis_trans_class() - Cis vs trans scatter for one quantity, coloured by class, with SE bars drawn behind points.
-###     plot_mean_disp_class() - Mean divergence vs a burst-parameter divergence (disp/bsize/kbal/cv2) scatter with per-class regulatory and dominance slopes.
+###     plot_mean_disp_class() - Mean divergence vs a burst-parameter divergence (disp/bsize/kbal) scatter with per-class regulatory and dominance slopes.
 ###   8b. GO / KEGG enrichment for the regulatory classification
 ###     build_reg_go_sets() - Builds one GO gene set per (class, direction) pair for a given classification quantity.
 ###     build_component_go_sets() - Builds pooled any-cis or any-trans GO gene sets, direction-matched on that component's own sign.
@@ -658,8 +657,7 @@ make_draws <- function(ncells, B, seed = 1, splits) {
 ## 2 c-bar mu_Hc or 2 (1 - c-bar) mu_He (the abundance factors), so each allele mean is divided by its abundance factor before any contrast (.correct_means()):
 ## mu_Hc = mu*_Hc / (2 c-bar), mu_He = mu*_He / (2 (1 - c-bar)). The allele dispersions arrive already corrected for the transcriptome share (.fit_one(share_r)).
 ## The per-genome hybrid is built from the two corrected alleles of all hybrid cells (HYB.SC, HYB.SE): mean mu_H = (mu_Hc + mu_He) / 2, log2 phi_H the mean of
-## the two log2 allele dispersions (their geometric mean), the raw-scale phi_H their arithmetic mean, and CV2_H = 1 / mu_H + (phi_Hc + phi_He) / 2. No fit of the
-## summed counts enters a contrast; HYB.COMB is fitted for reporting only (analysis.R Section 2.6).
+## the two log2 allele dispersions (their geometric mean) and the raw-scale phi_H their arithmetic mean. No fit of the summed counts enters a contrast; HYB.COMB is fitted for reporting only (analysis.R Section 2.6).
 ##
 ## cis_n, trans_n, cis_k, trans_k, cis_z and trans_z are internal only, not reported directly. They are cis and trans computed from the partitions chosen to
 ## balance the power of each quantity (Methods: Separate partitions for each quantity): dispersion (HYC.N / HYT.N, f_disp, read through .DISP_SOURCE), kinetic
@@ -731,7 +729,7 @@ make_draws <- function(ncells, B, seed = 1, splits) {
 }
 
 ## .contrast_value: the log2 contrast of one mode from a named list gv of per-group values. q is "MU" (corrected mean rates, .correct_means()), "DISP" (corrected
-## dispersions phi) or "CV2". DISP and CV2 contrasts, and the MU contrasts of total, cis and trans, are the weighted sums of the log2 group values
+## dispersions phi). DISP contrasts, and the MU contrasts of total, cis and trans, are the weighted sums of the log2 group values
 ## (.MODE.WEIGHTS). The MU contrasts of mid and par compare the arithmetic per-genome hybrid mean (mu_Hc + mu_He) / 2 with the arithmetic midparent or one parent.
 ## With zero_inf a value of zero maps to log2 = -Inf, which a bootstrap or null draw keeps as an extreme value; the result is NaN when +Inf and -Inf meet.
 .contrast_value <- function(mode, gv, q, zero_inf = FALSE) {
@@ -762,25 +760,15 @@ make_draws <- function(ncells, B, seed = 1, splits) {
 }
 
 ## .mode_contrasts: every contrast of the given modes from named lists of fitted mean rates (gv_mu, the uncorrected fits mu*, corrected here at cbar) and
-## corrected dispersions (gv_phi), as a matrix with the columns mean (log2), disp (log2, a fitted phi = 0 mapped to -Inf), raw (the raw difference of phi) and cv2
-## (log2 of 1/mu + phi; for mid and par the hybrid's CV2_H = 1 / mu_H + (phi_Hc + phi_He) / 2 against the geometric midparent or one parent). An entry is NA when a
-## group it needs is not finite. The one definition of the contrasts for the observed fits, every bootstrap draw and every null refit.
+## corrected dispersions (gv_phi), as a matrix with the columns mean (log2), disp (log2, a fitted phi = 0 mapped to -Inf) and raw (the raw difference of phi).
+## An entry is NA when a group it needs is not finite. The one definition of the contrasts for the observed fits, every bootstrap draw and every null refit.
 .mode_contrasts <- function(gv_mu, gv_phi, cbar, modes = names(.MODES)) {
   mu <- .correct_means(gv_mu, cbar)
-  out <- matrix(NA_real_, length(modes), 4, dimnames = list(modes, c("mean", "disp", "raw", "cv2")))
-  cv <- lapply(setNames(names(mu), names(mu)), function(k) .cv2_of(mu[[k]], gv_phi[[k]]))
+  out <- matrix(NA_real_, length(modes), 3, dimnames = list(modes, c("mean", "disp", "raw")))
   for (k in modes) {
     if (!all(.MODES[[k]] %in% names(mu))) next
     v <- .contrast_value(k, mu, "MU"); if (is.finite(v)) out[k, "mean"] <- v
     dc <- .disp_contrasts(k, gv_phi, zero_inf = TRUE); out[k, c("disp", "raw")] <- dc[c("log", "raw")]
-    if (k %in% c("mid", "par_sc", "par_se")) {
-      cvh <- .cv2_of(0.5 * (mu[["HYB.SC"]] + mu[["HYB.SE"]]), 0.5 * (gv_phi[["HYB.SC"]] + gv_phi[["HYB.SE"]]))
-      ref <- if (k == "mid") c(cv[["MIX.SC"]], cv[["MIX.SE"]]) else cv[[.MODES[[k]][[3]]]]
-      if (is.finite(cvh) && all(is.finite(ref) & ref > 0)) out[k, "cv2"] <- log2(cvh) - mean(log2(ref))
-    } else {
-      cg <- unlist(cv[.MODES[[k]]])
-      if (all(is.finite(cg) & cg > 0)) out[k, "cv2"] <- .contrast_value(k, cv, "CV2")
-    }
   }
   out
 }
@@ -804,15 +792,6 @@ make_draws <- function(ncells, B, seed = 1, splits) {
   mu <- .correct_means(gv_mu, cbar)
   q <- vapply(.MODES[[smd]], function(k) .burst_q(mu[[k]], gv_phi[[k]], kind), numeric(1))
   sum(.MODE.WEIGHTS[[smd]] * q)
-}
-
-## CV2 (squared coefficient of variation) of one fitted group: 1/mu + disp (disp = phi), the Poisson plus
-## overdispersion terms. Returns NA unless mu and disp are finite and positive (disp = 0 is a Poisson-like
-## fit with no identifiable dispersion), so the bootstrap
-## SD and the permutation null see only valid values. The single CV2 formula for the bootstrap,
-## the permutation null and the observed fits.
-.cv2_of <- function(mu, disp) {
-  if (is.finite(mu) && mu > 0 && is.finite(disp) && disp > 0) 1 / mu + disp else NA_real_
 }
 
 ## ============================================================
@@ -864,7 +843,7 @@ umap_plot <- function(obj, title = NULL, group.by = NULL) {
 }
 
 ## Labels of the burst quantities, shared by the figure functions below.
-QUANTITY.LABEL <- c(mean = "mean", disp = "dispersion", bsize = "burst size", kbal = "frequency-size balance", cv2 = "CV2")
+QUANTITY.LABEL <- c(mean = "mean", disp = "dispersion", bsize = "burst size", kbal = "frequency-size balance")
 
 ## fig_pdf: opens a PDF at path (relative to FIGURE.DIR) with the pipeline's figure settings.
 fig_pdf <- function(path, width, height, useDingbats = FALSE) {
@@ -954,7 +933,7 @@ class_heatmap_grid <- function(path, panels, classes, fdr, width, height, mfrow,
 
 ## plot_contrast_scatter: one gene-level contrast scatter with SE bars, drawn by .se_scatter(). type picks
 ## the pairing and what its argument:
-##   "cis_trans"      what is a quantity ("mean", "disp", "bsize", "kbal", "cv2"): cis (x) vs trans (y) on one
+##   "cis_trans"      what is a quantity ("mean", "disp", "bsize", "kbal"): cis (x) vs trans (y) on one
 ##                    symmetric range, so the dotted +/-45 degree lines (same direction, compensatory) are
 ##                    meaningful. lim overrides that range.
 ##   "mean_disp"      what is a mode: mean (x) vs dispersion (NB phi, y) contrast on one symmetric
@@ -970,7 +949,7 @@ plot_contrast_scatter <- function(BURST.CONTRASTS, type = c("cis_trans", "mean_d
   type <- match.arg(type)
   diagonals <- type != "burst_kinetics"
   if (type == "cis_trans") {
-    quantity <- match.arg(what, c("mean", "disp", "bsize", "kbal", "cv2"))
+    quantity <- match.arg(what, c("mean", "disp", "bsize", "kbal"))
     lab <- QUANTITY.LABEL[[quantity]]
     if (is.null(main)) main <- lab
     cols <- paste0(quantity, c("_cis_est", "_cis_se", "_trans_est", "_trans_se"))
@@ -1277,7 +1256,7 @@ seed_compare_core <- function(se1, se2, main, count_label) {
 ## seen as a low seed-to-seed correlation or a wide SE-ratio spread. bc1, bc2: two
 ## BURST.CONTRASTS-style data frames at the same N.BOOT and gene set that differ only in
 ## SEED.BOOT. Genes are matched by name, so row order need not agree.
-gene_seed_compare <- function(bc1, bc2, quantity = c("mean", "disp", "bsize", "kbal", "cv2"), mode = c("total", "cis", "trans", "mid", "par_sc", "par_se")) {
+gene_seed_compare <- function(bc1, bc2, quantity = c("mean", "disp", "bsize", "kbal"), mode = c("total", "cis", "trans", "mid", "par_sc", "par_se")) {
   quantity <- match.arg(quantity); mode <- match.arg(mode)
   col <- paste0(quantity, "_", mode, "_se")
   m   <- match(bc1$gene, bc2$gene)
@@ -1390,7 +1369,7 @@ clean_reg <- function(v) {
 ## ---- per-gene class vectors aligned to BURST.CONTRASTS rows -------------------------
 ## reg_class_vec: classify_reg() for one quantity; q-values come from PR (matched by gene),
 ## estimates from BURST.CONTRASTS, and the returned class vector follows BURST.CONTRASTS row order.
-reg_class_vec <- function(BURST.CONTRASTS, PR, quantity = c("mean", "disp", "bsize", "kbal", "cv2"), sig = 0.05) {
+reg_class_vec <- function(BURST.CONTRASTS, PR, quantity = c("mean", "disp", "bsize", "kbal"), sig = 0.05) {
   quantity <- match.arg(quantity)
   i <- match(BURST.CONTRASTS$gene, PR$gene)
   classify_reg(PR[[paste0(quantity, "_cis_q")]][i], PR[[paste0(quantity, "_trans_q")]][i], BURST.CONTRASTS[[paste0(quantity, "_cis_est")]], BURST.CONTRASTS[[paste0(quantity, "_trans_est")]], sig = sig)$class
@@ -1398,7 +1377,7 @@ reg_class_vec <- function(BURST.CONTRASTS, PR, quantity = c("mean", "disp", "bsi
 
 ## dom_class_vec: classify_dom() for one quantity, aligned to BURST.CONTRASTS rows, from the par q-values (_q) and estimates. The par contrasts compare the
 ## per-genome hybrid (built from the two allele fits) with each parent, so no ploidy adjustment enters. A missing column stops with a message.
-dom_class_vec <- function(BURST.CONTRASTS, PR, quantity = c("mean", "disp", "bsize", "kbal", "cv2"), sig = 0.05) {
+dom_class_vec <- function(BURST.CONTRASTS, PR, quantity = c("mean", "disp", "bsize", "kbal"), sig = 0.05) {
   quantity <- match.arg(quantity)
   i   <- match(BURST.CONTRASTS$gene, PR$gene)
   cs <- paste0(quantity, "_par_sc_q"); ce <- paste0(quantity, "_par_se_q")
@@ -1604,7 +1583,7 @@ se_alpha_col <- function(se, base_col = COLOR.GREY[["dark"]], lo = 0.05, hi = 0.
 ## regulatory class. All SE bars are drawn before the points so bars sit behind them; bar
 ## opacity follows se_alpha_col() so imprecise bars recede. Points are solid, matching the
 ## Figure 5 dominance panels.
-plot_cis_trans_class <- function(BURST.CONTRASTS, PR, quantity = c("mean", "disp", "bsize", "kbal", "cv2"), sig = 0.05, main = NULL, lim = NULL, bar_col = COLOR.GREY[["dark"]], colors = setNames(COLOR.LIST.1[seq_along(REG.CLASS)], REG.CLASS)) {
+plot_cis_trans_class <- function(BURST.CONTRASTS, PR, quantity = c("mean", "disp", "bsize", "kbal"), sig = 0.05, main = NULL, lim = NULL, bar_col = COLOR.GREY[["dark"]], colors = setNames(COLOR.LIST.1[seq_along(REG.CLASS)], REG.CLASS)) {
   quantity <- match.arg(quantity)
   lab <- QUANTITY.LABEL[[quantity]]
   cx <- BURST.CONTRASTS[[paste0(quantity,"_cis_est")]];  sx <- BURST.CONTRASTS[[paste0(quantity,"_cis_se")]]
@@ -1633,10 +1612,10 @@ class_slope_lines <- function(x, y, cls, levels, cols, lty) {
 ## plot_mean_disp_class: mean divergence (x) vs a burst-parameter divergence (y) at one mode,
 ## with per-class regression lines. Points are neutral grey; regulatory slopes are solid and
 ## dominance slopes dashed. Lines span the full panel (abline).
-plot_mean_disp_class <- function(BURST.CONTRASTS, PR, mode = "total", reg_class = NULL, dom_class = NULL, y_quantity = c("disp", "bsize", "kbal", "cv2"), class_quantity = c("mean", "disp", "bsize", "kbal", "cv2"), sig = 0.05, main = NULL, reg_colors = setNames(COLOR.LIST.1[seq_along(REG.CLASS)], REG.CLASS), dom_colors = setNames(COLOR.LIST.2[seq_along(DOM.CLASS)], DOM.CLASS)) {
+plot_mean_disp_class <- function(BURST.CONTRASTS, PR, mode = "total", reg_class = NULL, dom_class = NULL, y_quantity = c("disp", "bsize", "kbal"), class_quantity = c("mean", "disp", "bsize", "kbal"), sig = 0.05, main = NULL, reg_colors = setNames(COLOR.LIST.1[seq_along(REG.CLASS)], REG.CLASS), dom_colors = setNames(COLOR.LIST.2[seq_along(DOM.CLASS)], DOM.CLASS)) {
   y_quantity     <- match.arg(y_quantity)
   class_quantity <- match.arg(class_quantity)
-  y_lab <- c(disp = "dispersion", bsize = "burst size", kbal = "frequency-size balance", cv2 = "CV2")[y_quantity]
+  y_lab <- c(disp = "dispersion", bsize = "burst size", kbal = "frequency-size balance")[y_quantity]
   x <- BURST.CONTRASTS[[paste0("mean_",mode,"_est")]]
   y <- BURST.CONTRASTS[[paste0(y_quantity,"_",mode,"_est")]]
   if (is.null(reg_class)) reg_class <- reg_class_vec(BURST.CONTRASTS, PR, class_quantity, sig)
@@ -1666,7 +1645,7 @@ plot_mean_disp_class <- function(BURST.CONTRASTS, PR, mode = "total", reg_class 
 ## dropped from both sets (they still count in class totals elsewhere).
 ## Set names strip spaces/punctuation from the class label for safe list
 ## and file names, e.g. "Cis + Trans" -> "CisTrans_Sc".
-build_reg_go_sets <- function(BURST.CONTRASTS, PR, universe, quantity = c("mean", "disp", "bsize", "kbal", "cv2"), levels = REG.CLASS, sig = 0.05) {
+build_reg_go_sets <- function(BURST.CONTRASTS, PR, universe, quantity = c("mean", "disp", "bsize", "kbal"), levels = REG.CLASS, sig = 0.05) {
   quantity <- match.arg(quantity)
   cls  <- reg_class_vec(BURST.CONTRASTS, PR, quantity, sig)
   est  <- BURST.CONTRASTS[[paste0(quantity, "_total_est")]]
@@ -1708,7 +1687,7 @@ build_reg_go_sets <- function(BURST.CONTRASTS, PR, universe, quantity = c("mean"
 ##
 ## Returns a two-element named list, "AnyCis_Sc"/"AnyCis_Se" or
 ## "AnyTrans_Sc"/"AnyTrans_Se" depending on `component`
-build_component_go_sets <- function(BURST.CONTRASTS, PR, universe, component = c("cis", "trans"), quantity = c("mean", "disp", "bsize", "kbal", "cv2"), sig = 0.05) {
+build_component_go_sets <- function(BURST.CONTRASTS, PR, universe, component = c("cis", "trans"), quantity = c("mean", "disp", "bsize", "kbal"), sig = 0.05) {
   component <- match.arg(component)
   quantity  <- match.arg(quantity)
   i     <- match(BURST.CONTRASTS$gene, PR$gene)
@@ -2097,7 +2076,7 @@ shared_overlap_rng <- function(pairs, levels_common) {
 ## hybrid built from the two allele fits, so a cloud on the zero lines means hybrid noise matches the
 ## parents at the per-genome scale. Returns the class vector invisibly
 ## (finite genes only).
-plot_dom_class <- function(BURST.CONTRASTS, PR, quantity = c("mean", "disp", "bsize", "kbal", "cv2"), frame = c("parent","AD"), sig = 0.05, main = NULL, lim = NULL, bar_col = adjustcolor(COLOR.GREY[["dark"]], 0.25)) {
+plot_dom_class <- function(BURST.CONTRASTS, PR, quantity = c("mean", "disp", "bsize", "kbal"), frame = c("parent","AD"), sig = 0.05, main = NULL, lim = NULL, bar_col = adjustcolor(COLOR.GREY[["dark"]], 0.25)) {
   quantity <- match.arg(quantity); frame <- match.arg(frame)
   dsc <- BURST.CONTRASTS[[paste0(quantity,"_par_sc_est")]]; ssc <- BURST.CONTRASTS[[paste0(quantity,"_par_sc_se")]]
   dse <- BURST.CONTRASTS[[paste0(quantity,"_par_se_est")]]; sse <- BURST.CONTRASTS[[paste0(quantity,"_par_se_se")]]
@@ -3492,7 +3471,7 @@ perm_trans_pool_paired <- function(nSC, nSE, nHYT) {
        se = c(par_a, nSE + a_h, setdiff(seq_len(nSE), par_a), nSE + setdiff(seq_len(nHYT), a_h)))
 }
 
-## fit_ratio_axes: the log2 ratio of two fits (.fit_one() or fit_dispersion() results) on each axis, as c(mu, disp, cv2); an axis is NA
+## fit_ratio_axes: the log2 ratio of two fits (.fit_one() or fit_dispersion() results) on each axis, as c(mu, disp); an axis is NA
 ## unless both sides are finite and positive (the disp axis with zero_inf: finite and non-negative, a zero side giving +-Inf). With raw = TRUE a fourth element, rdisp, is the raw difference of phi, defined whenever both
 ## phi are finite and >= 0 (a phi = 0 fit counts). The one definition of a contrast between two groups for the gene-level permutation null
 ## and the power grid.
@@ -3506,8 +3485,7 @@ fit_ratio_axes <- function(fa, fb, raw = FALSE, zero_inf = FALSE) {
     if (is.nan(r)) NA_real_ else r
   }
   out <- c(mu   = ratio(fa[["mu"]], fb[["mu"]]),
-           disp = ratio_d(fa[["disp"]], fb[["disp"]]),
-           cv2  = ratio(.cv2_of(fa[["mu"]], fa[["disp"]]), .cv2_of(fb[["mu"]], fb[["disp"]])))
+           disp = ratio_d(fa[["disp"]], fb[["disp"]]))
   if (raw) out[["rdisp"]] <- if (all(is.finite(c(fa[["disp"]], fb[["disp"]])) & c(fa[["disp"]], fb[["disp"]]) >= 0)) fa[["disp"]] - fb[["disp"]] else NA_real_
   out
 }
@@ -3798,14 +3776,13 @@ pilot_split_se_one <- function(g, B, expos, mats, seed) {
 }
 
 ## fit_group_values: gene g's fitted values in every group of fits (a list of per-group data frames with MU and
-## DISP columns): lists named by group holding mu, disp (phi) and the
-## squared coefficient of variation cv2.
+## DISP columns): lists named by group holding mu and disp (phi).
 fit_group_values <- function(fits, g) {
   rows <- vector("list", length(fits)); names(rows) <- names(fits)
   for (grp in names(fits)) rows[[grp]] <- fits[[grp]][g, ]
   mu   <- lapply(rows, `[[`, "MU")
   disp <- lapply(rows, `[[`, "DISP")
-  list(mu = mu, disp = disp, cv2 = Map(.cv2_of, mu, disp))
+  list(mu = mu, disp = disp)
 }
 
 ## .boot_summary: the standard error, the 95% percentile interval and the zero fraction of a vector of bootstrap draws. NA draws (undefined contrasts)
@@ -3828,13 +3805,13 @@ fit_group_values <- function(fits, g) {
 ## mean needs informative means; log2 dispersion quantities a fitted phi > 0 in every group of the noise source; raw ones a fitted phi >= 0; burst size and
 ## kinetic balance informative means and phi > 0 in every group of their own source mode (raw burst size phi >= 0, since b = mu phi is defined at zero).
 ## Whether a defined contrast is also tested is decided from the bootstrap after the jobs (.QUANTITY.RESOLVE).
-.QUANTITY.GATE <- list(mean = "mean", disp = "log", wdisp = "log", rdisp = "raw", wrdisp = "raw", cv2 = c("mean", "log"),
+.QUANTITY.GATE <- list(mean = "mean", disp = "log", wdisp = "log", rdisp = "raw", wrdisp = "raw",
                        bsize = "bsize", wbsize = "bsize", rbsize = "rbsize", wrbsize = "rbsize",
                        kbal = "kbal", wkbal = "kbal", rkbal = "kbal", wrkbal = "kbal")
 
 ## .QUANTITY.RESOLVE: the source of the groups that must be resolved (at most RESOLVED.ZERO.MAX of their bootstrap replicates at zero) for a quantity's p-value
 ## to be kept: the noise partition for the log2 and raw dispersion contrasts, the burst size and kinetic balance partitions for their contrasts. A defined
-## contrast with an unresolved group keeps its estimate and bootstrap interval and has no p-value. Quantities without a null (cv2, the raw burst quantities)
+## contrast with an unresolved group keeps its estimate and bootstrap interval and has no p-value. Quantities without a null (the raw burst quantities)
 ## and the mean contrasts need no resolution.
 .QUANTITY.RESOLVE <- list(disp = "noise", wdisp = "noise", rdisp = "noise", wrdisp = "noise", bsize = "bsize", wbsize = "bsize", kbal = "kbal", wkbal = "kbal")
 
@@ -3878,7 +3855,7 @@ boot_contrasts_one <- function(g, expos, fits, mats, draws, share_cells, share_o
   do_w <- "weighted" %in% methods
   B <- length(draws); modes <- names(.MODES); grp_all <- .CONTRAST.GROUPS
   cb <- share_obs$cbar
-  Dm <- Ds <- Dc <- Dr <- Dws <- Dwr <- matrix(NA_real_, B, length(modes), dimnames = list(NULL, modes))
+  Dm <- Ds <- Dr <- Dws <- Dwr <- matrix(NA_real_, B, length(modes), dimnames = list(NULL, modes))
   Z <- Zw <- matrix(NA_real_, B, length(grp_all), dimnames = list(NULL, grp_all))          # refitted dispersion of every group, for its zero fraction
   ## raw burst size and kinetic balance draws for the reporting modes: NB (rb., rk.) and weighted (wrb., wrk.)
   BQ <- matrix(NA_real_, B, 4 * length(.OUT_MODES), dimnames = list(NULL, c(paste0("rb.", .OUT_MODES), paste0("rk.", .OUT_MODES), paste0("wrb.", .OUT_MODES), paste0("wrk.", .OUT_MODES))))
@@ -3895,7 +3872,7 @@ boot_contrasts_one <- function(g, expos, fits, mats, draws, share_cells, share_o
     gv.mu <- lapply(f, function(x) unname(x[["mu"]])); gv.bf <- lapply(f, function(x) unname(x[["disp"]]))
     Z[b, ] <- unlist(gv.bf[grp_all])
     mc <- .mode_contrasts(gv.mu, gv.bf, st$cbar)
-    Dm[b, ] <- mc[, "mean"]; Ds[b, ] <- mc[, "disp"]; Dr[b, ] <- mc[, "raw"]; Dc[b, ] <- mc[, "cv2"]
+    Dm[b, ] <- mc[, "mean"]; Ds[b, ] <- mc[, "disp"]; Dr[b, ] <- mc[, "raw"]
     for (md in .OUT_MODES) {
       BQ[b, paste0("rb.", md)] <- .contrast_burst_raw(md, gv.mu, gv.bf, "bsize", st$cbar)
       BQ[b, paste0("rk.", md)] <- .contrast_burst_raw(md, gv.mu, gv.bf, "kbal", st$cbar)
@@ -3937,7 +3914,6 @@ boot_contrasts_one <- function(g, expos, fits, mats, draws, share_cells, share_o
     put("mean", md, oc[md, "mean"], Dm[, md])
     put("disp", md, oc[smd, "disp"], Ds[, smd], inf = TRUE)
     put("rdisp", md, oc[smd, "raw"], Dr[, smd], nfin = TRUE)
-    put("cv2", md, oc[smd, "cv2"], Dc[, smd])
     put("bsize", md, oc[zmd, "mean"] + oc[zmd, "disp"], Dm[, zmd] + Ds[, zmd], inf = TRUE)
     put("kbal", md, -oc[kmd, "mean"] - 2 * oc[kmd, "disp"], -Dm[, kmd] - 2 * Ds[, kmd], inf = TRUE)
     for (kd in c("bsize", "kbal")) {
@@ -4061,7 +4037,7 @@ simulate_groups <- function(m, phi, s2d) {
 ## dispersions. A group with a fitted dispersion of zero has no ratio, so a contrast that uses it has no shifted null; such a group is not resolved (analysis.R).
 ## The p-value is two-sided with an add-one correction (perm_pval()); a log2 null draw with a zero dispersion is +-Inf and counts as extreme, and its share is
 ## recorded (_infrac), and nzero_<dataset> gives each group's fraction of null resamples refit to zero. gates (genes x contrasts, apply_gate()) NAs the contrasts
-## the fits do not define. Quantities without a null in the Methods (cv2 and the raw burst quantities) carry an observed value and no p-value.
+## the fits do not define. Quantities without a null in the Methods (the raw burst quantities) carry an observed value and no p-value.
 null_contrasts_one <- function(g, expos, fits, mats, perms, draws, share_cells, share_obs, n_sim, seed = 1, gates = NULL, methods = "NB") {
   stopifnot(all(methods %in% c("NB", "weighted")), "NB" %in% methods, all(c("cbar", "r", "sigma_d") %in% names(share_obs)),
             is.list(share_cells), all(c("chat", "lib") %in% names(share_cells)), is.list(draws), length(draws) >= 1,
@@ -4180,7 +4156,6 @@ null_contrasts_one <- function(g, expos, fits, mats, perms, draws, share_cells, 
     put("rdisp", md, oc[smd, "raw"], nul(paste0("rdisp.", md)))
     put("bsize", md, oc[zmd, "mean"] + oc[zmd, "disp"], nul(paste0("bsize.", md))); putinf("bsize", md)
     put("kbal", md, -oc[kmd, "mean"] - 2 * oc[kmd, "disp"], nul(paste0("kbal.", md))); putinf("kbal", md)
-    put("cv2", md, oc[smd, "cv2"], NULL)
     for (kd in c("bsize", "kbal")) put(paste0("r", kd), md, .contrast_burst_raw(md, gvmu, gvbf, kd, cb), NULL)
     if (do_w) {
       put("wdisp", md, ow[smd, "disp"], nul(paste0("wdisp.", md))); putinf("wdisp", md)

@@ -10,7 +10,7 @@
 ###           GATES: the contrasts each gene's fits define)
 ### Output  : gene_perm_output.rda
 ###           PERM.RESULTS, one row per gene: <quantity>_<mode>_obs / _p for mean, disp, rdisp, bsize, kbal and their weighted
-###           versions, the share of infinite null draws (_infrac) and k_trans, the level factor of the trans mean null. cv2 and the raw
+###           versions, the share of infinite null draws (_infrac) and k_trans, the level factor of the trans mean null. The raw
 ###           burst quantities carry the observed value only. analysis.R keeps a p-value only when every group of the contrast is resolved.
 ###
 ### The log2 mean contrasts are tested by permutation (total: pooled parents; cis: swapped rescaled allele counts; trans: each parent
