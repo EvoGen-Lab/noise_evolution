@@ -1023,3 +1023,32 @@ state_gene <- function(g, mats, expos, eta, totals, members) {
   }
   out
 }
+
+## ============================================================
+## Estimator mean squared error (estimator_mse.R)
+## ============================================================
+
+## mse_cell: one cell of the estimator comparison, row i of grid (group, family, mu, phi). R datasets are simulated on the group's observed offsets
+## (expos[[group]], the Section 2 depth factors), each count Poisson with mean O mu a and the expression factor a of mean one and variance phi drawn from the
+## family (sim_pos_factor(): gamma gives NB counts, lognormal and bimodal factors depart from the NB in their third moment). Each dataset is fitted with the
+## pipeline's Cox-Reid estimator (fit_dispersion(method = "NB")) and the Appendix A weighted method of moments (method = "weighted"), both truncated at zero as
+## in the pipeline. The replicates are dealt into nbatch equal batches; in each batch the bias (mean estimate minus phi), the variance and the mean squared
+## error of the estimates are computed, and the result is their mean over batches with its SE (SD over batches / sqrt(nbatch)). Relative versions divide the
+## bias by phi and the variance and MSE by phi^2, so genes of different phi share one scale. Returns one row per estimator with the share of estimates at
+## zero and the number of finite estimates.
+mse_cell <- function(i, grid, expos, R, nbatch, streams) with_stream(streams[[i]], {
+  g <- grid[i, ]; e <- expos[[as.character(g$group)]]; n <- length(e)
+  stopifnot(is.numeric(R), R >= 2 * nbatch, nbatch >= 2, g$mu > 0, g$phi > 0)
+  est <- vapply(seq_len(R), function(r) { y <- rpois(n, g$mu * e * sim_pos_factor(n, as.character(g$family), 1, g$phi))
+    c(NB = fit_dispersion(y, e, 0, "NB")[["disp"]], weighted = fit_dispersion(y, e, 0, "weighted")[["disp"]]) }, numeric(2))
+  b <- rep(seq_len(nbatch), length.out = R)
+  do.call(rbind, lapply(rownames(est), function(m) {
+    x <- est[m, ]; ok <- is.finite(x)
+    st <- vapply(seq_len(nbatch), function(k) { z <- x[b == k & ok]; c(bias = mean(z) - g$phi, var = var(z), mse = mean((z - g$phi)^2)) }, numeric(3))
+    av <- rowMeans(st); se <- apply(st, 1, sd) / sqrt(nbatch); sc <- c(bias = g$phi, var = g$phi^2, mse = g$phi^2)
+    data.frame(g, estimator = m, n_cells = n, mbar = g$mu * mean(e), n_ok = sum(ok), zero = mean(x[ok] == 0),
+               bias = av[["bias"]], bias_se = se[["bias"]], var = av[["var"]], var_se = se[["var"]], mse = av[["mse"]], mse_se = se[["mse"]],
+               rel_bias = av[["bias"]] / sc[["bias"]], rel_bias_se = se[["bias"]] / sc[["bias"]], rel_var = av[["var"]] / sc[["var"]], rel_var_se = se[["var"]] / sc[["var"]],
+               rel_mse = av[["mse"]] / sc[["mse"]], rel_mse_se = se[["mse"]] / sc[["mse"]], row.names = NULL)
+  }))
+})
