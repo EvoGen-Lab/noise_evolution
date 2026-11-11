@@ -1052,3 +1052,47 @@ mse_cell <- function(i, grid, expos, R, nbatch, streams) with_stream(streams[[i]
                rel_mse = av[["mse"]] / sc[["mse"]], rel_mse_se = se[["mse"]] / sc[["mse"]], row.names = NULL)
   }))
 })
+
+## mse_contrast_cell: one cell of the contrast-level comparison (M2 of estimator_mse.R), row i of grid (family, mu, phi, design, effect). Each of R
+## datasets simulates the two parents on their observed offsets (expos$Pc, expos$Pe) and the two alleles of every hybrid cell on the allele offset (expos$H),
+## all with mean count O mu. The alleles of a cell share an extrinsic factor of variance ext_share x the smaller allele dispersion and carry private factors
+## that bring each allele to its dispersion ((1 + phi) = (1 + s2d)(1 + v_q)); every factor has mean one and the family's shape (sim_pos_factor()). The design
+## sets the true log2 dispersion ratios: "null" all equal; "cis" alleles and parents both differ by 2^effect (cis = total = effect, trans = 0); "trans" only
+## the parents differ (trans = total = effect, cis = 0). The hybrid cells are split as in the pipeline into cis cells and trans cells (hyb_split, positions in
+## expos$H). Each dataset is fitted with both estimators, truncated at zero, and the three log2 contrasts are formed: total = log2 phi_Pc - log2 phi_Pe,
+## cis on the cis cells, trans = total - the allele ratio on the trans cells. A contrast is defined when every group it uses has phi > 0 (a zero gives
+## +-Inf); the bias, variance and MSE against the true contrast are computed over the defined datasets, averaged over nbatch batches with their SE, and the
+## share of defined datasets is returned with them. Returns one row per estimator and contrast.
+mse_contrast_cell <- function(i, grid, expos, hyb_split, R, nbatch, ext_share, streams) with_stream(streams[[i]], {
+  g <- grid[i, ]; r <- 2^g$effect; fam <- as.character(g$family)
+  stopifnot(R >= 2 * nbatch, nbatch >= 2, g$mu > 0, g$phi > 0, ext_share >= 0, ext_share <= 1)
+  phi <- switch(as.character(g$design), null = c(Pc = g$phi, Pe = g$phi, Hc = g$phi, He = g$phi), cis = c(Pc = g$phi, Pe = g$phi / r, Hc = g$phi, He = g$phi / r),
+                trans = c(Pc = g$phi, Pe = g$phi / r, Hc = g$phi, He = g$phi))
+  truth <- c(total = log2(phi[["Pc"]] / phi[["Pe"]]), cis = log2(phi[["Hc"]] / phi[["He"]]),
+             trans = log2(phi[["Pc"]] / phi[["Pe"]]) - log2(phi[["Hc"]] / phi[["He"]]))
+  eP1 <- expos$Pc; eP2 <- expos$Pe; eH <- expos$H; nH <- length(eH); ic <- hyb_split$c; it <- hyb_split$t
+  s2d <- ext_share * min(phi[["Hc"]], phi[["He"]]); vq <- function(p) max((1 + p) / (1 + s2d) - 1, 0)
+  ests <- c("NB", "weighted"); cons <- c("total", "cis", "trans")
+  est <- vapply(seq_len(R), function(rep) {
+    yPc <- rpois(length(eP1), g$mu * eP1 * sim_pos_factor(length(eP1), fam, 1, phi[["Pc"]]))
+    yPe <- rpois(length(eP2), g$mu * eP2 * sim_pos_factor(length(eP2), fam, 1, phi[["Pe"]]))
+    d <- sim_pos_factor(nH, fam, 1, s2d)
+    yHc <- rpois(nH, g$mu * eH * d * sim_pos_factor(nH, fam, 1, vq(phi[["Hc"]])))
+    yHe <- rpois(nH, g$mu * eH * d * sim_pos_factor(nH, fam, 1, vq(phi[["He"]])))
+    unlist(lapply(ests, function(m) {
+      l <- log2(c(Pc = fit_dispersion(yPc, eP1, 0, m)[["disp"]], Pe = fit_dispersion(yPe, eP2, 0, m)[["disp"]],
+                  Hcc = fit_dispersion(yHc[ic], eH[ic], 0, m)[["disp"]], Hec = fit_dispersion(yHe[ic], eH[ic], 0, m)[["disp"]],
+                  Hct = fit_dispersion(yHc[it], eH[it], 0, m)[["disp"]], Het = fit_dispersion(yHe[it], eH[it], 0, m)[["disp"]]))
+      c(l[["Pc"]] - l[["Pe"]], l[["Hcc"]] - l[["Hec"]], (l[["Pc"]] - l[["Pe"]]) - (l[["Hct"]] - l[["Het"]]))
+    }))
+  }, numeric(length(ests) * length(cons)))
+  rownames(est) <- paste(rep(ests, each = length(cons)), cons, sep = ".")
+  b <- rep(seq_len(nbatch), length.out = R)
+  do.call(rbind, lapply(rownames(est), function(k) {
+    x <- est[k, ]; ok <- is.finite(x); tr <- truth[[sub("^[^.]+\\.", "", k)]]
+    st <- vapply(seq_len(nbatch), function(j) { z <- x[b == j & ok]; c(bias = mean(z) - tr, var = var(z), mse = mean((z - tr)^2)) }, numeric(3))
+    av <- rowMeans(st, na.rm = TRUE); se <- apply(st, 1, sd, na.rm = TRUE) / sqrt(rowSums(is.finite(st)))   # batches with too few defined datasets drop out
+    data.frame(g, estimator = sub("\\..*$", "", k), contrast = sub("^[^.]+\\.", "", k), truth = tr, defined = mean(ok),
+               bias = av[["bias"]], bias_se = se[["bias"]], var = av[["var"]], var_se = se[["var"]], mse = av[["mse"]], mse_se = se[["mse"]], row.names = NULL)
+  }))
+})
