@@ -1,12 +1,14 @@
 ###############################################################
 ### power_analysis.R
-### Section 10 of the pipeline: power of the permutation test for
+### Section 10 of the pipeline: power of the pipeline's test for
 ### a burst-frequency (NB size) difference between two groups,
 ### simulated over mean expression, cell count, burst frequency and
-### size ratio.
+### size ratio. The dispersion contrasts are tested as in Section 2.3:
+### against the shifted bootstrap null, and only when every group is
+### resolved (at most RESOLVED.ZERO.MAX of the resamples at zero).
 ###
 ### Run after analysis.R has written the Section 2 checkpoint
-### (section2_checkpoint.rda, which supplies PR and N.PERM).
+### (section2_checkpoint.rda, which supplies PR, N.PERM and N.SIM).
 ### Functions live in R/functions_power.R (this analysis and the
 ### cluster script power_grid.R) and R/functions.R (shared NB fit).
 ### Cluster round trip: this script writes power_inputs.rda (10.1),
@@ -23,17 +25,16 @@ library(here)
 source(here("R", "setup.R"))
 source(here("R", "functions_power.R"))
 
-# PR (per-gene permutation results with BH q-values) and N.PERM come from the
-# Section 2 checkpoint
+# PR (per-gene null p-values with BH q-values), N.PERM (permutations of the mean nulls) and N.SIM (draws of the shifted
+# bootstrap nulls of the dispersion contrasts) come from the Section 2 checkpoint
 SEC2 <- new.env()
 load(ckpt_path(2), envir = SEC2)
-if (!all(c("PR", "N.PERM") %in% ls(SEC2)))
-  stop("The Section 2 checkpoint lacks PR or N.PERM. Checkpoints written before the power ",
-       "analysis moved out of analysis.R do not hold N.PERM; add it with ",
-       "load(ckpt_path(2)); N.PERM <- <value used in analysis.R Section 2>; save(list = ls(), file = ckpt_path(2)) ",
-       "or rerun the Section 2 checkpoint save.")
+if (!all(c("PR", "N.PERM", "N.SIM") %in% ls(SEC2)))
+  stop("The Section 2 checkpoint lacks PR, N.PERM or N.SIM. Checkpoints written before methods revision 18037 do not hold ",
+       "N.SIM; rerun Section 2, whose checkpoint save includes it.")
 PR     <- SEC2$PR
 N.PERM <- SEC2$N.PERM
+N.SIM  <- SEC2$N.SIM
 # SEC2 stays loaded for Section 10.9, which reads the real design parameters
 
 console_start(10)
@@ -44,9 +45,9 @@ set.seed(SEED.SECTION + 10)
 # Run through 10.1 to build power_inputs.rda, then submit
 # power.sub (a SLURM job array) to the cluster. Once every power_output_<k>of<K>.rda
 # exists, run 10.2 onward to reshape them back into POWER and reproduce every plot.
-# PR (permutation results with BH q-values) and N.PERM come from the Section 2
-# checkpoint: PR sets PI1, the fraction of truly different genes in the simulated
-# mixture, and N.PERM matches the permutation count to the gene-level analysis.
+# PR (null p-values with BH q-values) and N.SIM come from the Section 2 checkpoint:
+# PR sets PI1, the fraction of truly different genes in the simulated mixture, and
+# N.SIM matches the number of null draws to the gene-level dispersion test.
 
 
 # Significance level for power analysis. Power is judged at this Benjamini-Hochberg
@@ -70,7 +71,7 @@ CELL.RATIO <- 1
 EXPOSURE.CV <- 0.8
 
 NJ <- 1000 # Simulated datasets per row
-NI <- N.PERM # Permutations per dataset, matched to the gene-level analysis
+NI <- N.SIM # Shifted bootstrap null draws per dataset, matched to the gene-level dispersion test
 PI1 <- min(0.5, max(0.02, mean(PR$disp_total_q < ALPHA, na.rm = TRUE)))
 cat(sprintf("PI1 (fraction of genes called by BH at q < %.2f, parental burst frequency) = %.3f\n", ALPHA, PI1))
 N.MIX <- 50 # Random mixtures averaged per grid cell
@@ -239,11 +240,12 @@ console_stop()
 ## 10.9 CIS AND TRANS POWER ON PAIRED-ALLELE DATA                           ##
 ##############################################################################
 # Sections 10.1 to 10.8 simulate one two-group contrast. The pipeline tests two others:
-# cis (the alleles of the same hybrid cells, nulled by the within-cell allele swap) and
-# trans (the parental ratio minus the hybrid allele ratio, nulled by pooling parent and
-# hybrid cells). Sections 10.9 to 10.14 simulate each with the data structure and the null the
-# pipeline uses (power_modes_row() in R/functions_power.R, null helpers in R/functions.R), so the
-# modes are directly comparable at the same effect and depth. The effect stays SIZE.RATIO, a
+# cis (the alleles of the same hybrid cells) and trans (the parental ratio minus the hybrid allele ratio).
+# Sections 10.9 to 10.14 simulate each with the data structure and the nulls the pipeline uses
+# (power_modes_row() in R/functions_power.R, null helpers in R/functions.R): on the dispersion axis the
+# shifted bootstrap null with the resolution gate, on the mean axis the permutation nulls (the within-cell
+# allele swap for cis, pooled parent and hybrid cells for trans), so the modes are directly comparable at
+# the same effect and depth. The effect stays SIZE.RATIO, a
 # ratio of NB sizes (burst frequency), in log2 units:
 #   null          ratio 1 everywhere
 #   cis effect    hybrid allele ratio = ratio, parental ratio = ratio (trans = 0)
@@ -252,9 +254,9 @@ console_stop()
 # an intrinsic gamma factor v, so the alleles' latent correlation is phi and each allele has latent CV^2
 # 1 / SIZE; phi = 0 gives unpaired alleles and, as a control, cis and trans should then follow the
 # total result. The counts are Poisson, so the marginal law is close to negative binomial; the check below
-# confirms the recovered size. The trans null runs in two versions on the same data: the independent
-# shuffles that the earlier permutation null used and a pairing-preserving swap (perm_trans_pool_paired()),
-# so the SIZE.RATIO == 1 type I error validates the pairing fix.
+# confirms the recovered size. The trans mean null runs in two versions on the same data: the pipeline's
+# independent shuffles (mode "trans") and a pairing-preserving swap (perm_trans_pool_paired(), mode
+# "trans_paired", mean axis only), so the SIZE.RATIO == 1 type I error compares them.
 
 # Real design parameters from the Section 2 checkpoint: hybrid and parent cell counts, the split
 # fraction f* the pipeline chose, the hybrid-to-parent per-allele depth ratio, and the allele
@@ -301,8 +303,8 @@ FRAC.M       <- sort(unique(round(c(0.1, 0.2, 0.3, 0.4, 0.5, MODES.REAL$f_star[i
 DEPTH.RATIO.M <- round(MODES.REAL$depth, 3)
 SIZE.RATIO.M <- c(1, 1.25, 1.5, 2, 3, 4, 6, 8)
 NJ.M <- 200    # simulated datasets per row
-NI.M <- 2000   # permutations per dataset (the pipeline uses N.PERM)
-# BH power needs the permutation p-values to resolve small values: the smallest p-value is 1 / (NI.M + 1), and BH
+NI.M <- 2000   # permutations (mean axis) and shifted bootstrap draws (dispersion axis) per dataset; the pipeline uses N.PERM and N.SIM
+# BH power needs the null p-values to resolve small values: the smallest p-value is 1 / (NI.M + 1), and BH
 # over the pooled null and alternative datasets rejects only when enough alternatives sit at or below
 # ALPHA * rank / total. A small NI.M therefore makes the BH power curve a step that stays at zero until the raw power
 # is high. The number of alternatives that must reach the p-value floor is checked here, and the tables fall back
@@ -328,7 +330,7 @@ MODES.INPUTS <- list(GRID = GRID.M, MEAN.READS = MEAN.READS.M, SIZE = SIZE.M, PH
 ## Reads power_modes_inputs.rda (saved below), writes one power_modes_output_<k>of<K>.rda per array task
 ## (ROWS.PART, RESULTS.PART), reassembled in 10.10
 save(MODES.INPUTS, file = file.path(INPUT.DIR, "power_modes_inputs.rda"))
-cat(sprintf("power modes inputs written: %d rows x %d SIZE.RATIO values x 3 modes\n", nrow(GRID.M), length(SIZE.RATIO.M)))
+cat(sprintf("power modes inputs written: %d rows x %d SIZE.RATIO values, cis and trans (and the paired trans mean null)\n", nrow(GRID.M), length(SIZE.RATIO.M)))
 cat("Submit power_modes.sub (job array) now; resume below once every power_modes_output_<k>of<K>.rda exists.\n")
 ## ---- end cluster round trip ----
 
@@ -344,8 +346,8 @@ stopifnot(!any(vapply(MODES.RES, is.null, logical(1))))   # every array task mus
 MODES <- modes_long(MODES.RES, GRID.M, MEAN.READS.M, SIZE.M, PHI.M, FRAC.M, DESIGN.M, DEPTH.RATIO.M)
 MODES.POWER <- MODES$power
 MODES.SD    <- MODES$sd_null
-MODES.COL   <- c(cis = SPECIES.COLOR[["Sc"]], trans_indep = SPECIES.COLOR[["Se"]], trans_paired = COLOR.ACCENT)
-MODES.LTY   <- c(cis = 1, trans_indep = 1, trans_paired = 2)
+MODES.COL   <- c(cis = SPECIES.COLOR[["Sc"]], trans = SPECIES.COLOR[["Se"]])     # the dispersion axis has one trans null, the shifted bootstrap
+MODES.LTY   <- c(cis = 1, trans = 1)
 
 ## 10.11 Power against effect size, by mode, at every grid point (size axis)
 # One PDF per (mean reads, size): panels over f (rows) and phi (columns), one curve per mode, power at
@@ -363,7 +365,7 @@ for (mr in MEAN.READS.M) for (sz in SIZE.M) {
   dev.off()
 }
 fig_pdf("extended/Power.Modes.legend.pdf", 3, 2)
-plot.new(); legend("center", legend = c("cis", "trans, independent shuffles", "trans, pairing-preserving"), col = MODES.COL, lty = MODES.LTY, lwd = 2, bty = "n")
+plot.new(); legend("center", legend = c("cis", "trans"), col = MODES.COL, lty = MODES.LTY, lwd = 2, bty = "n")
 dev.off()
 
 ## 10.12 Minimum detectable log2 ratio at 80% power, and the trans-to-cis ratio (open item 4)
@@ -373,21 +375,19 @@ MODES.MDE <- modes_mde(MODES.POWER[MODES.POWER$axis == "disp", ], target = 0.8, 
 MODES.MDE.WIDE <- reshape(MODES.MDE[, c("i", "mean_reads", "size", "phi", "f", "N.P", "N.H", "depth", "mode", "mde_log2")],
                           idvar = c("i", "mean_reads", "size", "phi", "f", "N.P", "N.H", "depth"), timevar = "mode", direction = "wide")
 write.csv(MODES.MDE, file.path(TABLE.DIR, "power_modes_mde.csv"), row.names = FALSE)
-MDE.RATIO <- do.call(rbind, lapply(c("trans_indep", "trans_paired"), function(tm) {
+MDE.RATIO <- do.call(rbind, lapply("trans", function(tm) {
   w <- MODES.MDE.WIDE
   data.frame(w[c("mean_reads", "size", "phi", "f", "N.P", "N.H", "depth")], trans_mode = tm,
              mde_cis = w[["mde_log2.cis"]], mde_trans = w[[paste0("mde_log2.", tm)]],
              mde_ratio = w[[paste0("mde_log2.", tm)]] / w[["mde_log2.cis"]])
 }))
 write.csv(MDE.RATIO, file.path(TABLE.DIR, "power_modes_mde_ratio.csv"), row.names = FALSE)
-cat("MDE_trans / MDE_cis (independent-shuffle trans null), median over the grid by phi and f:\n")
-print(round(tapply(MDE.RATIO$mde_ratio[MDE.RATIO$trans_mode == "trans_indep"],
-                   list(phi = MDE.RATIO$phi[MDE.RATIO$trans_mode == "trans_indep"], f = MDE.RATIO$f[MDE.RATIO$trans_mode == "trans_indep"]),
-                   median, na.rm = TRUE), 2))
+cat("MDE_trans / MDE_cis (dispersion axis), median over the grid by phi and f:\n")
+print(round(tapply(MDE.RATIO$mde_ratio, list(phi = MDE.RATIO$phi, f = MDE.RATIO$f), median, na.rm = TRUE), 2))
 fig_pdf("extended/Power.Modes.mde_ratio_by_f.pdf", 3.2 * length(SIZE.M), 3 * length(MEAN.READS.M))
 par(mfrow = c(length(MEAN.READS.M), length(SIZE.M)), mar = c(3.5, 3.5, 2, 1), mgp = c(2, 0.6, 0))
 for (mr in MEAN.READS.M) for (sz in SIZE.M) {
-  d <- MDE.RATIO[MDE.RATIO$mean_reads == mr & MDE.RATIO$size == sz & MDE.RATIO$trans_mode == "trans_indep", ]
+  d <- MDE.RATIO[MDE.RATIO$mean_reads == mr & MDE.RATIO$size == sz, ]
   plot(NA, xlim = range(FRAC.M), ylim = c(0.5, 3), xlab = "hybrid split fraction f (cis cells)", ylab = "MDE trans / MDE cis",
        main = sprintf("mean %s, size %s", mr, sz), cex.main = 0.8)
   abline(h = 1, col = COLOR.GREY[["mid"]], lty = 3)
@@ -398,20 +398,23 @@ plot.new(); legend("center", legend = paste("phi =", PHI.M), col = colorRampPale
 dev.off()
 
 ## 10.13 Type I error at ratio 1, by mode and null version, and the split fraction at which cis and trans cross
-# The SIZE.RATIO == 1 entry of power_bh is the raw false-positive rate at p < ALPHA. The binomial SE with NJ.M
-# datasets is sqrt(ALPHA * (1 - ALPHA) / NJ.M). The size axis carries the effect; the mean axis has no effect in
-# this parametrization, so its rate is a second control.
+# The SIZE.RATIO == 1 entry of power_bh is the raw false-positive rate at p < ALPHA among the tested datasets. The
+# binomial SE with NJ.M datasets is sqrt(ALPHA * (1 - ALPHA) / NJ.M). The size axis carries the effect; the mean axis has
+# no effect in this parametrization, so its rate is a second control. The tested share at ratio 1 (MODES.TESTED) is the
+# fraction of datasets whose groups are all resolved, which the dispersion test needs.
 MODES.TYPE1 <- aggregate(power_bh ~ mode + axis + phi, data = MODES.POWER[MODES.POWER$ratio == 1, ], FUN = function(x) c(mean = mean(x), max = max(x)))
 MODES.TYPE1 <- do.call(data.frame, MODES.TYPE1)
 names(MODES.TYPE1) <- c("mode", "axis", "phi", "type1_mean", "type1_max")
 write.csv(MODES.TYPE1, file.path(TABLE.DIR, "power_modes_type1.csv"), row.names = FALSE)
+MODES.TESTED <- aggregate(tested ~ mode + axis + phi + mean_reads + size, data = MODES.POWER[MODES.POWER$ratio == 1, ], FUN = mean)
+write.csv(MODES.TESTED, file.path(TABLE.DIR, "power_modes_tested.csv"), row.names = FALSE)
 cat(sprintf("type I error at SIZE.RATIO = 1 (nominal %.2f; binomial SE per row %.3f), mean and max over the grid:\n", ALPHA, sqrt(ALPHA * (1 - ALPHA) / NJ.M)))
 print(MODES.TYPE1, digits = 3, row.names = FALSE)
 CROSS.RATIO <- SIZE.RATIO.M[which.min(abs(SIZE.RATIO.M - 2))]
-F.CROSS <- do.call(rbind, lapply(c("trans_indep", "trans_paired"), function(tm) modes_f_cross(MODES.POWER, CROSS.RATIO, trans_mode = tm, axis = "disp", col = MODES.PW.COL)))
+F.CROSS <- modes_f_cross(MODES.POWER, CROSS.RATIO, trans_mode = "trans", axis = "disp", col = MODES.PW.COL)
 write.csv(F.CROSS, file.path(TABLE.DIR, "power_modes_f_cross.csv"), row.names = FALSE)
 cat(sprintf("split fraction at which cis and trans power are equal (SIZE.RATIO = %s, size axis); pipeline f_disp = %.3f:\n", CROSS.RATIO, MODES.REAL$f_star[["f_disp"]]))
-print(F.CROSS[F.CROSS$trans_mode == "trans_indep", c("mean_reads", "size", "phi", "f_cross")], digits = 3, row.names = FALSE)
+print(F.CROSS[, c("mean_reads", "size", "phi", "f_cross")], digits = 3, row.names = FALSE)
 
 ## 10.14 Observed null contrast: simulated SD against the variance statement in the project notes
 # project_context.md states var_trans = var_cis + 4 / N_p. At ratio 1 the SD of the observed size contrast is
@@ -435,5 +438,5 @@ if (nrow(SD.HALF) > 0) {
   print(round(tapply(SD.HALF$const_ln, SD.HALF$phi, median, na.rm = TRUE), 2))
 }
 
-save(MODES.INPUTS, MODES.REAL, GEN.CHECK, MODES.POWER, MODES.SD, MODES.MDE, MDE.RATIO, MODES.TYPE1, F.CROSS, SD.WIDE,
+save(MODES.INPUTS, MODES.REAL, GEN.CHECK, MODES.POWER, MODES.SD, MODES.MDE, MDE.RATIO, MODES.TYPE1, MODES.TESTED, F.CROSS, SD.WIDE,
      file = file.path(CHECKPOINT.DIR, "section10_modes_checkpoint.rda"))

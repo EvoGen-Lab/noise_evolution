@@ -205,7 +205,7 @@ The code now follows the methods artifact at revision 18037 (the repository copy
   - `share_ploidy_check.R` and `fit_dispersion_check.R`;
   - a synthetic run of the new Section 2.3 code with the real jobs' functions.
   - One local calibration task also ran. `calib_dataset()` now masks unresolved p-values and keeps the unmasked ones in `_p_all`, and checks_sim reports them as D1_boundary.
-- **Not changed.** The power analysis (Section 10) still builds its own permutation nulls for the dispersion contrasts (`R/functions_power.R`), not the shifted bootstrap.
+- **Power analysis (Section 10, Nov 11).** `power_grid_row()` and `power_modes_row()` test the dispersion axis as the pipeline does: a shifted bootstrap null (NI resamples per group, the undivided hybrid cells resampled with their cis or trans membership), and a test only when every group is resolved. An untested dataset is outside the BH family and counts as not called (`bh_power()`), and each row reports the tested share. The total grid uses `N.SIM` draws (now in the Section 2 checkpoint). The mean axis keeps its permutation nulls, with the pairing-preserving trans arm as mode `trans_paired`. cv2 is no longer simulated, because the pipeline does not test it. `docs/methods.md` is refreshed to revision 18037.
 
 ## Rerun note
 

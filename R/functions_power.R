@@ -2,20 +2,20 @@
 ### functions_power.R
 ### Functions for the power analysis (Section 10), sourced by
 ### power_analysis.R and by the SLURM cluster script power_grid.R
-### after functions.R, whose .fit_one(), .fit_split() and
-### perm_pval() they build on.
+### after functions.R, whose .fit_one(), perm_pval(), the null helpers
+### and RESOLVED.ZERO.MAX they build on.
 ###
 ### Outline (function name - purpose):
 ###     open_grid_pdf() - Opens a PDF sized to the panel grid it is about to hold, with tight margins throughout.
 ###     plot_lines() - Plots one line per column of a matrix against a shared x vector, with reference lines at power 0.05 and 0.9.
 ###     legend_page() - One legend page mapping each line color to the value it represents.
 ###     power_line_figure() - Multi-panel PDF of power curves from the POWER array: one panel per (outer, inner) pair, one line per series value, with a legend page.
-###     power_grid_row() - power of one grid row i (mean reads x cell count x burst-frequency size) over the SIZE.RATIO sweep.
+###     power_grid_row() - power of one grid row i (mean reads x cell count x burst-frequency size) over the SIZE.RATIO sweep, with the shifted bootstrap null and the resolution gate.
 ###     gamma_unit() - Gamma draws with mean 1 and a given CV^2 (1 when the CV^2 is 0).
 ###     sim_allele_counts() - Counts of one hybrid allele: Poisson with rate mu * expo * u * v, u the factor shared by both alleles of a cell and v the allele's own.
 ###     paired_alleles_check() - Checks the paired-allele generator: recovered NB size against the target and the allele correlation against phi.
-###     bh_power() - Power at a Benjamini-Hochberg FDR from the p-values of null and alternative datasets (the rule power_grid_row() uses).
-###     power_modes_row() - power of the cis and trans contrasts (trans under two nulls) for one grid row, on paired-allele hybrid data, with the pipeline's own nulls.
+###     bh_power() - Power at a Benjamini-Hochberg FDR from the p-values of null and alternative datasets; untested datasets are outside the family and count as not called.
+###     power_modes_row() - power of the cis and trans contrasts for one grid row, on paired-allele hybrid data, with the pipeline's own nulls (permutation for the mean, shifted bootstrap with the resolution gate for the dispersion).
 ###     mde_interp() - Smallest log2 effect at which a power curve reaches a target, by linear interpolation.
 ###     modes_long() - Stacks the per-row results of power_modes_row() into long tables with the grid values attached.
 ###     modes_mde() - Minimum detectable log2 ratio at a target power for every grid point, mode and axis.
@@ -104,16 +104,15 @@ power_line_figure <- function(file, power, grid, outer, inner, x, series, main_f
 ## Simulation of one grid row (the cluster script power_grid.R)
 ## ============================================================
 
-## power_grid_row: power of one grid row i (mean reads x cell count x burst-frequency size) over the SIZE.RATIO sweep. The reference group's
-## counts and fit are drawn once per replicate and reused across the sweep, so the sweep isolates the effect of SIZE.RATIO.
+## power_grid_row: power of one grid row i (mean reads x cell count x burst-frequency size) over the SIZE.RATIO sweep, for the log2 dispersion contrast of
+## two independent groups tested as the pipeline tests it (Methods: Null for the log2 dispersion contrasts, Informative estimates). The null is the shifted
+## bootstrap: NI resamples of each group's cells with replacement, each refitted with .fit_one(); on the log2 scale a null draw is the resampled contrast minus
+## the observed one, and a refit at phi = 0 stays as -Inf. A dataset is tested only when both groups are resolved (fitted phi > 0 and at most
+## RESOLVED.ZERO.MAX of the resamples refit to zero); an untested dataset has no p-value, is left out of the BH family of the null datasets and counts as
+## not called among the alternatives (bh_power()). The reference group's counts, fit and resampled fits are drawn once per replicate and reused across the
+## sweep, so the sweep isolates the effect of SIZE.RATIO. Returns the power per SIZE.RATIO (at ratio 1 the false-positive rate at p < ALPHA among the tested
+## datasets).
 power_grid_row <- function(i, ALPHA, CELL.RATIO, EXPOSURE.CV, GRID, MEAN.READS, N.CELLS, N.MIX, NI, NJ, PI1, SEED.BASE, SIZE, SIZE.RATIO) {
-  ## size_log2_ratio: log2 ratio of the NB size (disp, the noise axis) between two
-  ## .fit_one() results, NA if either side is non-positive or non-finite.
-  size_log2_ratio <- function(fit_a, fit_b) {
-    a <- fit_a[["disp"]]; b <- fit_b[["disp"]]
-    if (is.finite(a) && a > 0 && is.finite(b) && b > 0) log2(a) - log2(b) else NA_real_
-  }
-
   row <- GRID[i, ]
   MEAN.READS.X <- MEAN.READS[row$m]
   N.SC.X       <- N.CELLS[row$n]
@@ -124,14 +123,17 @@ power_grid_row <- function(i, ALPHA, CELL.RATIO, EXPOSURE.CV, GRID, MEAN.READS, 
   sdlog <- sqrt(log(1 + EXPOSURE.CV^2))
   EXPO.X.LIST <- replicate(NJ, rlnorm(N.SC.X, meanlog = -0.5*sdlog^2, sdlog = sdlog), simplify = FALSE)
   EXPO.Y.LIST <- replicate(NJ, rlnorm(N.SE.X, meanlog = -0.5*sdlog^2, sdlog = sdlog), simplify = FALSE)
-  PERM.LIST   <- replicate(NI, sample.int(N.SC.X + N.SE.X), simplify = FALSE)
+  BOOT.X <- replicate(NI, sample.int(N.SC.X, N.SC.X, replace = TRUE), simplify = FALSE)   #resampling draws of the shifted bootstrap null,
+  BOOT.Y <- replicate(NI, sample.int(N.SE.X, N.SE.X, replace = TRUE), simplify = FALSE)   #shared by every dataset of the row as in the pipeline
 
+  l2 <- function(x) ifelse(x == 0, -Inf, log2(x))                                         #a zero refit is -Inf on the log2 scale
+  refit <- function(y, e, draws) vapply(draws, function(ix) .fit_one(y[ix], e[ix])[["disp"]], numeric(1))
   set.seed(SEED.BASE + i)  #row-specific draws (X depends on m, p, n)
-  X.LIST  <- vector("list", NJ)
-  FA.LIST <- vector("list", NJ)
+  X.LIST <- FA.LIST <- XB.LIST <- vector("list", NJ)
   for (j in seq_len(NJ)) {
     X.LIST[[j]]  <- rnbinom(n = N.SC.X, size = SIZE.1.X, mu = MEAN.READS.X*EXPO.X.LIST[[j]])
-    FA.LIST[[j]] <- .fit_one(X.LIST[[j]], EXPO.X.LIST[[j]])  #shared across SIZE.RATIO below
+    FA.LIST[[j]] <- .fit_one(X.LIST[[j]], EXPO.X.LIST[[j]])                #shared across SIZE.RATIO below
+    XB.LIST[[j]] <- refit(X.LIST[[j]], EXPO.X.LIST[[j]], BOOT.X)            #the reference group's resampled fits, also shared
   }
 
   P.ALL <- matrix(NA_real_, NJ, length(SIZE.RATIO))
@@ -140,40 +142,31 @@ power_grid_row <- function(i, ALPHA, CELL.RATIO, EXPOSURE.CV, GRID, MEAN.READS, 
     for (j in seq_len(NJ)) {
       EXPO.Y <- EXPO.Y.LIST[[j]]
       Y  <- rnbinom(n = N.SE.X, size = SIZE.2.X, mu = MEAN.READS.X*EXPO.Y)
-      fb <- .fit_one(Y, EXPO.Y)   #same estimator as the null below
-      OBS <- size_log2_ratio(FA.LIST[[j]], fb)
-
-      XY <- c(X.LIST[[j]], Y); EXPO.XY <- c(EXPO.X.LIST[[j]], EXPO.Y)
-      NULL.DIST <- numeric(NI)
-      for (k in seq_len(NI)) {
-        sp <- .fit_split(XY, EXPO.XY, PERM.LIST[[k]], N.SC.X)  #same estimator as the observed contrast
-        NULL.DIST[k] <- size_log2_ratio(sp$a, sp$b)
-      }
+      fa <- FA.LIST[[j]][["disp"]]; fb <- .fit_one(Y, EXPO.Y)[["disp"]]
+      YB <- refit(Y, EXPO.Y, BOOT.Y)
+      resolved <- isTRUE(fa > 0 && fb > 0) && mean(XB.LIST[[j]] == 0, na.rm = TRUE) <= RESOLVED.ZERO.MAX && mean(YB == 0, na.rm = TRUE) <= RESOLVED.ZERO.MAX
+      if (!resolved) next
+      OBS <- log2(fa) - log2(fb)
+      NULL.DIST <- l2(XB.LIST[[j]]) - l2(YB) - OBS
+      NULL.DIST[is.nan(NULL.DIST)] <- NA_real_
       P.ALL[j, qi] <- perm_pval(OBS, NULL.DIST)
     }
   }
 
   i0     <- which(SIZE.RATIO == 1)
   P.NULL <- P.ALL[, i0]
-  n_alt  <- min(NJ, round(NJ * PI1 / (1 - PI1)))
-  vapply(seq_along(SIZE.RATIO), function(qi) {
-    if (qi == i0) return(mean(P.NULL < ALPHA, na.rm = TRUE))
-    mean(replicate(N.MIX, {
-      q <- p.adjust(c(P.NULL, P.ALL[sample.int(NJ, n_alt), qi]), method = "BH")
-      mean(q[NJ + seq_len(n_alt)] < ALPHA, na.rm = TRUE)
-    }), na.rm = TRUE)
-  }, numeric(1))
+  vapply(seq_along(SIZE.RATIO), function(qi) if (qi == i0) mean(P.NULL < ALPHA, na.rm = TRUE) else bh_power(P.NULL, P.ALL[, qi], ALPHA, PI1, N.MIX), numeric(1))
 }
 
 ## ============================================================
 ## Power of the cis and trans contrasts on paired-allele hybrid data (power_modes_grid.R)
 ## ============================================================
 ## power_grid_row() simulates one two-group contrast. The functions below simulate the contrasts the
-## pipeline actually tests. cis compares the two alleles of the same hybrid cells and is nulled by the
-## within-cell allele swap. trans is the parental ratio minus the hybrid allele ratio and is nulled by
-## pooling parent and hybrid cells (two versions: independent allele shuffles, as in perm_trans_pool(),
-## and a pairing-preserving one). The nulls come from the helpers the pipeline calls (null_cis_axes(),
-## null_trans_axes(), perm_trans_pool(), perm_trans_pool_paired(), fit_ratio_axes()).
+## pipeline actually tests. cis compares the two alleles of the same hybrid cells; trans is the parental ratio
+## minus the hybrid allele ratio. Their mean axis is nulled by permutation (the within-cell allele swap; pooled
+## parent and hybrid cells, with a pairing-preserving arm) through the helpers the pipeline calls (null_cis_axes(),
+## null_trans_axes(), perm_trans_pool(), perm_trans_pool_paired(), fit_ratio_axes()), and their dispersion axis by
+## the shifted bootstrap with the resolution gate.
 
 ## gamma_unit: n Gamma draws with mean 1 and CV^2 cv2 (shape = rate = 1 / cv2); all ones when cv2 is 0.
 gamma_unit <- function(n, cv2) if (cv2 > 0) rgamma(n, shape = 1 / cv2, rate = 1 / cv2) else rep(1, n)
@@ -216,15 +209,16 @@ paired_alleles_check <- function(mu, size, phi, n = 40000, expo_cv = 0.8, tol_si
 
 ## bh_power: power at a Benjamini-Hochberg FDR. p_null: p-values of datasets simulated under the null
 ## (ratio 1); p_alt: p-values of the same number of datasets under an alternative. A random subset of
-## the alternatives (a fraction pi1 of the pooled set) is pooled with the nulls, BH is applied, and power is the
-## fraction of the alternatives called at q < alpha; the mean over n_mix random subsets uses every dataset.
-## This is the rule power_grid_row() applies to the total contrast.
+## the alternatives (a fraction pi1 of the pooled set) is pooled with the nulls, BH is applied over the datasets
+## that have a p-value (an untested dataset, NA, is outside the BH family, as an unresolved gene is in the pipeline),
+## and power is the fraction of the sampled alternatives called at q < alpha, an untested alternative counting as
+## not called; the mean over n_mix random subsets uses every dataset. power_grid_row() and power_modes_row() use it.
 bh_power <- function(p_null, p_alt, alpha, pi1, n_mix) {
   nj <- length(p_null); stopifnot(length(p_alt) == nj, pi1 > 0, pi1 < 1)
   n_alt <- min(nj, round(nj * pi1 / (1 - pi1)))
   mean(replicate(n_mix, {
     q <- p.adjust(c(p_null, p_alt[sample.int(nj, n_alt)]), method = "BH")
-    mean(q[nj + seq_len(n_alt)] < alpha, na.rm = TRUE)
+    sum(q[nj + seq_len(n_alt)] < alpha, na.rm = TRUE) / n_alt
   }), na.rm = TRUE)
 }
 
@@ -253,16 +247,22 @@ mde_interp <- function(power, ratios, target = 0.8) {
 ## makes the total latent CV^2 1 / size. phi = 0 gives unpaired alleles. The N.H hybrid cells of a design are split
 ## as in the pipeline: round(f * N.H) cells (HYC) test cis and the rest (HYT) test trans. Hybrid allele mean reads
 ## are MEAN.READS * DEPTH.RATIO, the hybrid-to-parent per-allele depth ratio. Exposures are lognormal with CV
-## EXPOSURE.CV. Parental exposures are keyed by the design (as in power_grid_row()), hybrid exposures and the
-## null relabelings by design and f, so rows that share them draw the same values; the counts use their own
-## seed (SEED.BASE + i).
-## Each dataset's contrasts are tested on every axis (mu, disp, cv2) against the pipeline's nulls with
-## perm_pval(): cis by the allele swap (null_cis_axes()), trans by pooled relabelings (null_trans_axes()) in two
-## versions, "trans_indep" (independent Sc and Se shuffles, perm_trans_pool()) and "trans_paired" (the same hybrid
-## cells move in both alleles, perm_trans_pool_paired()), which share the observed contrast. Power is bh_power()
-## at ratios above 1. At ratio 1 the entry is the raw false-positive rate at p < ALPHA (type I error), and the
-## raw rejection rate at p < ALPHA is returned for every ratio. Returns list(power = data.frame of
-## mode, ratio, axis, power_bh, power_raw; sd_null = SD of the observed contrast at ratio 1, by mode and axis).
+## EXPOSURE.CV. Parental exposures are keyed by the design (as in power_grid_row()), hybrid exposures, the mean-axis
+## relabelings and the resampling draws by design and f, so rows that share them draw the same values; the counts use
+## their own seed (SEED.BASE + i).
+## Each dataset's contrasts are tested on the two axes the pipeline tests, against the pipeline's nulls with perm_pval():
+##   mu    permutation nulls: cis by the allele swap (null_cis_axes()), trans by pooled relabelings with independent Sc and
+##         Se shuffles (perm_trans_pool(), mode "trans", the pipeline's) and, as a sensitivity arm, with the same hybrid cells
+##         moved in both alleles (perm_trans_pool_paired(), mode "trans_paired", mean axis only);
+##   disp  the shifted bootstrap null: each of NI draws resamples the parents and the undivided hybrid cells, each copy keeping
+##         its cis or trans membership (as make_draws() does), refits every group, and on the log2 scale the null draw is the
+##         resampled contrast minus the observed one. A dataset is tested only when every group of the contrast is resolved
+##         (fitted phi > 0 and at most RESOLVED.ZERO.MAX of the resamples refit to zero); otherwise it has no p-value.
+## cv2 has no null in the pipeline and is not simulated. Power is bh_power() at ratios above 1, where an untested
+## alternative counts as not called. At ratio 1 the entry is the false-positive rate at p < ALPHA among the tested datasets
+## (type I error); power_raw is the share of all datasets with p < ALPHA, and tested the share with a p-value. Returns
+## list(power = data.frame of mode, ratio, axis, power_bh, power_raw, tested; sd_null = SD of the observed contrast at
+## ratio 1, by mode and axis).
 power_modes_row <- function(i, ALPHA, CELL.RATIO, DEPTH.RATIO, DESIGN, EXPOSURE.CV, FRAC, GRID, MEAN.READS, N.MIX, NI, NJ,
                             PHI, PI1, SEED.BASE, SIZE, SIZE.RATIO) {
   row <- GRID[i, ]
@@ -271,7 +271,7 @@ power_modes_row <- function(i, ALPHA, CELL.RATIO, DEPTH.RATIO, DESIGN, EXPOSURE.
   n_se <- round(n_p * CELL.RATIO)
   n_cis <- max(2, round(frac * n_h)); n_trans <- n_h - n_cis
   stopifnot(n_trans >= 2, any(SIZE.RATIO == 1), phi >= 0, phi <= 1, phi <= min(SIZE.RATIO))
-  modes <- c("cis", "trans_indep", "trans_paired"); axes <- c("mu", "disp", "cv2")
+  modes <- c("cis", "trans", "trans_paired"); axes <- c("mu", "disp")
   sdlog <- sqrt(log(1 + EXPOSURE.CV^2))
   expo_draw <- function(n) rlnorm(n, meanlog = -0.5 * sdlog^2, sdlog = sdlog)
   cv2_ext <- phi / size
@@ -282,20 +282,27 @@ power_modes_row <- function(i, ALPHA, CELL.RATIO, DEPTH.RATIO, DESIGN, EXPOSURE.
   set.seed(SEED.BASE + 2e6 + 1000 * row$n + row$f)       # hybrid exposures, keyed by design and f
   EXPO.C <- replicate(NJ, expo_draw(n_cis), simplify = FALSE)
   EXPO.T <- replicate(NJ, expo_draw(n_trans), simplify = FALSE)
-  set.seed(SEED.BASE + 3e6 + 1000 * row$n + row$f)       # null relabelings, keyed by design and f
+  set.seed(SEED.BASE + 3e6 + 1000 * row$n + row$f)       # mean-axis relabelings, keyed by design and f
   SWAP     <- replicate(NI, runif(n_cis) < 0.5, simplify = FALSE)
   PERM.IND <- replicate(NI, list(sc = perm_trans_pool(n_p, seq_len(n_trans), seq_len(n_trans))$m,
                                  se = perm_trans_pool(n_se, seq_len(n_trans), seq_len(n_trans))$m), simplify = FALSE)
   PERM.PAI <- replicate(NI, perm_trans_pool_paired(n_p, n_se, n_trans), simplify = FALSE)
+  set.seed(SEED.BASE + 4e6 + 1000 * row$n + row$f)       # resampling draws of the shifted bootstrap null, keyed by design and f
+  BOOT <- replicate(NI, list(psc = sample.int(n_p, n_p, replace = TRUE), pse = sample.int(n_se, n_se, replace = TRUE),
+                             h = sample.int(n_h, n_h, replace = TRUE)), simplify = FALSE)
+  BC <- lapply(BOOT, function(b) b$h[b$h <= n_cis])                  # copies of cis cells (hybrid cells 1..n_cis are the cis cells)
+  BT <- lapply(BOOT, function(b) b$h[b$h > n_cis] - n_cis)           # copies of trans cells, as positions among the trans cells
 
+  l2 <- function(x) ifelse(x == 0, -Inf, log2(x))                    # a zero refit is -Inf on the log2 scale
+  refit <- function(y, e, draws) vapply(draws, function(ix) .fit_one(y[ix], e[ix])[["disp"]], numeric(1))
+  resolved <- function(fit_phi, boot_phi) isTRUE(all(fit_phi > 0)) && all(vapply(boot_phi, function(x) mean(x == 0, na.rm = TRUE), numeric(1)) <= RESOLVED.ZERO.MAX)
   set.seed(SEED.BASE + i)
   nq <- length(SIZE.RATIO)
-  P   <- array(NA_real_, c(length(modes), NJ, nq, 3), dimnames = list(modes, NULL, NULL, axes))
-  OBS <- array(NA_real_, c(2, NJ, nq, 3), dimnames = list(c("cis", "trans"), NULL, NULL, axes))
-  pvals <- function(obs, null) vapply(axes, function(a) perm_pval(obs[[a]], null[a, ]), numeric(1))
+  P   <- array(NA_real_, c(length(modes), NJ, nq, length(axes)), dimnames = list(modes, NULL, NULL, axes))
+  OBS <- array(NA_real_, c(2, NJ, nq, length(axes)), dimnames = list(c("cis", "trans"), NULL, NULL, axes))
   for (j in seq_len(NJ)) {
     ## Draws shared across the ratio sweep: the Sc parent, the trans-effect hybrid (allele ratio 1), and the
-    ## Sc allele and extrinsic factor of the cis-effect hybrid
+    ## Sc allele and extrinsic factor of the cis-effect hybrid, with their resampled fits
     par_sc <- rnbinom(n_p, size = size, mu = mu_p * EXPO.PSC[[j]]); fit_psc <- .fit_one(par_sc, EXPO.PSC[[j]])
     u_t <- gamma_unit(n_trans, cv2_ext)
     t_sc <- sim_allele_counts(mu_h, EXPO.T[[j]], u_t, size, cv2_ext)
@@ -303,28 +310,39 @@ power_modes_row <- function(i, ALPHA, CELL.RATIO, DEPTH.RATIO, DESIGN, EXPOSURE.
     fit_tsc <- .fit_one(t_sc, EXPO.T[[j]]); fit_tse <- .fit_one(t_se, EXPO.T[[j]])
     u_c <- gamma_unit(n_cis, cv2_ext)
     c_sc <- sim_allele_counts(mu_h, EXPO.C[[j]], u_c, size, cv2_ext); fit_csc <- .fit_one(c_sc, EXPO.C[[j]])
+    B.PSC <- refit(par_sc, EXPO.PSC[[j]], lapply(BOOT, `[[`, "psc"))
+    B.TSC <- refit(t_sc, EXPO.T[[j]], BT); B.TSE <- refit(t_se, EXPO.T[[j]], BT); B.CSC <- refit(c_sc, EXPO.C[[j]], BC)
     for (qi in seq_len(nq)) {
       ratio <- SIZE.RATIO[qi]
       par_se <- rnbinom(n_se, size = size / ratio, mu = mu_p * EXPO.PSE[[j]]); fit_pse <- .fit_one(par_se, EXPO.PSE[[j]])
       c_se <- sim_allele_counts(mu_h, EXPO.C[[j]], u_c, size / ratio, cv2_ext); fit_cse <- .fit_one(c_se, EXPO.C[[j]])
-      obs_cis   <- fit_ratio_axes(fit_csc, fit_cse)
-      obs_trans <- fit_ratio_axes(fit_psc, fit_pse) - fit_ratio_axes(fit_tsc, fit_tse)
-      null_cis   <- vapply(SWAP, function(s) null_cis_axes(c_sc, c_se, EXPO.C[[j]], EXPO.C[[j]], s), numeric(3))
-      null_ind   <- vapply(PERM.IND, function(p) null_trans_axes(par_sc, par_se, t_sc, t_se, EXPO.PSC[[j]], EXPO.PSE[[j]], EXPO.T[[j]], EXPO.T[[j]], p$sc, p$se), numeric(3))
-      null_pai   <- vapply(PERM.PAI, function(p) null_trans_axes(par_sc, par_se, t_sc, t_se, EXPO.PSC[[j]], EXPO.PSE[[j]], EXPO.T[[j]], EXPO.T[[j]], p$sc, p$se), numeric(3))
-      P[1, j, qi, ] <- pvals(obs_cis, null_cis)
-      P[2, j, qi, ] <- pvals(obs_trans, null_ind)
-      P[3, j, qi, ] <- pvals(obs_trans, null_pai)
+      obs_cis   <- fit_ratio_axes(fit_csc, fit_cse)[axes]
+      obs_trans <- (fit_ratio_axes(fit_psc, fit_pse) - fit_ratio_axes(fit_tsc, fit_tse))[axes]
       OBS[1, j, qi, ] <- obs_cis; OBS[2, j, qi, ] <- obs_trans
+      ## mean axis: permutation nulls
+      P["cis", j, qi, "mu"] <- perm_pval(obs_cis[["mu"]], vapply(SWAP, function(s) null_cis_axes(c_sc, c_se, EXPO.C[[j]], EXPO.C[[j]], s)[["mu"]], numeric(1)))
+      P["trans", j, qi, "mu"] <- perm_pval(obs_trans[["mu"]], vapply(PERM.IND, function(p) null_trans_axes(par_sc, par_se, t_sc, t_se, EXPO.PSC[[j]], EXPO.PSE[[j]], EXPO.T[[j]], EXPO.T[[j]], p$sc, p$se)[["mu"]], numeric(1)))
+      P["trans_paired", j, qi, "mu"] <- perm_pval(obs_trans[["mu"]], vapply(PERM.PAI, function(p) null_trans_axes(par_sc, par_se, t_sc, t_se, EXPO.PSC[[j]], EXPO.PSE[[j]], EXPO.T[[j]], EXPO.T[[j]], p$sc, p$se)[["mu"]], numeric(1)))
+      ## dispersion axis: the shifted bootstrap null, tested only when every group is resolved
+      B.PSE <- refit(par_se, EXPO.PSE[[j]], lapply(BOOT, `[[`, "pse")); B.CSE <- refit(c_se, EXPO.C[[j]], BC)
+      if (resolved(c(fit_csc[["disp"]], fit_cse[["disp"]]), list(B.CSC, B.CSE))) {
+        nb <- l2(B.CSC) - l2(B.CSE) - obs_cis[["disp"]]; nb[is.nan(nb)] <- NA_real_
+        P["cis", j, qi, "disp"] <- perm_pval(obs_cis[["disp"]], nb)
+      }
+      if (resolved(c(fit_psc[["disp"]], fit_pse[["disp"]], fit_tsc[["disp"]], fit_tse[["disp"]]), list(B.PSC, B.PSE, B.TSC, B.TSE))) {
+        nb <- (l2(B.PSC) - l2(B.PSE)) - (l2(B.TSC) - l2(B.TSE)) - obs_trans[["disp"]]; nb[is.nan(nb)] <- NA_real_
+        P["trans", j, qi, "disp"] <- perm_pval(obs_trans[["disp"]], nb)
+      }
     }
   }
   i0 <- which(SIZE.RATIO == 1)[1]
-  power <- do.call(rbind, lapply(modes, function(md) do.call(rbind, lapply(axes, function(ax) {
+  power <- do.call(rbind, lapply(modes, function(md) do.call(rbind, lapply(if (md == "trans_paired") "mu" else axes, function(ax) {
     pn <- P[md, , i0, ax]
     data.frame(mode = md, ratio = SIZE.RATIO, axis = ax,
                power_bh = vapply(seq_len(nq), function(qi) if (qi == i0) mean(pn < ALPHA, na.rm = TRUE)
                                  else bh_power(pn, P[md, , qi, ax], ALPHA, PI1, N.MIX), numeric(1)),
-               power_raw = vapply(seq_len(nq), function(qi) mean(P[md, , qi, ax] < ALPHA, na.rm = TRUE), numeric(1)))
+               power_raw = vapply(seq_len(nq), function(qi) sum(P[md, , qi, ax] < ALPHA, na.rm = TRUE) / NJ, numeric(1)),
+               tested = vapply(seq_len(nq), function(qi) mean(!is.na(P[md, , qi, ax])), numeric(1)))
   }))))
   sd_null <- do.call(rbind, lapply(c("cis", "trans"), function(md)
     data.frame(mode = md, axis = axes, sd = vapply(axes, function(ax) sd(OBS[md, , i0, ax], na.rm = TRUE), numeric(1)),
@@ -333,7 +351,7 @@ power_modes_row <- function(i, ALPHA, CELL.RATIO, DEPTH.RATIO, DESIGN, EXPOSURE.
 }
 
 ## modes_long: stacks the list `res` of power_modes_row() results (one per row of GRID) into two data.frames, power
-## (mode, ratio, axis, power_bh, power_raw) and sd_null (mode, axis, sd, mean of the observed null contrast), each with
+## (mode, ratio, axis, power_bh, power_raw, tested) and sd_null (mode, axis, sd, mean of the observed null contrast), each with
 ## the row index i and the grid values (mean reads, size, phi, f, N.P, N.H, depth ratio) of its row.
 modes_long <- function(res, GRID, MEAN.READS, SIZE, PHI, FRAC, DESIGN, DEPTH.RATIO) {
   vals <- data.frame(i = seq_len(nrow(GRID)), mean_reads = MEAN.READS[GRID$m], size = SIZE[GRID$p], phi = PHI[GRID$h],
@@ -349,7 +367,7 @@ modes_mde <- function(pw, target = 0.8, col = "power_bh") {
   key <- interaction(pw$i, pw$mode, pw$axis, drop = TRUE)
   do.call(rbind, lapply(split(pw, key), function(d) {
     d <- d[order(d$ratio), ]
-    out <- d[1, setdiff(names(d), c("ratio", "power_bh", "power_raw"))]
+    out <- d[1, setdiff(names(d), c("ratio", "power_bh", "power_raw", "tested"))]
     out$mde_log2 <- mde_interp(d[[col]], d$ratio, target)
     out
   }))
@@ -359,7 +377,7 @@ modes_mde <- function(pw, target = 0.8, col = "power_bh") {
 ## values other than f (and each axis), the power of cis minus the power of the trans version `trans_mode` at SIZE.RATIO ==
 ## `ratio` is interpolated linearly over f, and the first sign change gives f_cross (NA when the two curves do not
 ## cross). pw: long power table from modes_long(); col: power_bh or power_raw.
-modes_f_cross <- function(pw, ratio, trans_mode = "trans_indep", axis = "disp", col = "power_bh") {
+modes_f_cross <- function(pw, ratio, trans_mode = "trans", axis = "disp", col = "power_bh") {
   d <- pw[pw$ratio == ratio & pw$axis == axis & pw$mode %in% c("cis", trans_mode), ]
   wide <- reshape(d[, c("mean_reads", "size", "phi", "f", "N.P", "N.H", "depth", "mode", col)],
                   idvar = c("mean_reads", "size", "phi", "f", "N.P", "N.H", "depth"), timevar = "mode", direction = "wide")
