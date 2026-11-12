@@ -1096,3 +1096,56 @@ mse_contrast_cell <- function(i, grid, expos, hyb_split, R, nbatch, ext_share, s
                bias = av[["bias"]], bias_se = se[["bias"]], var = av[["var"]], var_se = se[["var"]], mse = av[["mse"]], mse_se = se[["mse"]], row.names = NULL)
   }))
 })
+
+## mse_rare_cell: one cell of M3 (estimator_mse.R), the type I error of the pipeline's dispersion test when a rare cell state occurs at the same frequency p in
+## every group (row i of grid: mu, phi, p, J). Each of R datasets draws, per group, which cells are in the rare state (binomial with probability p per cell: the
+## parents separately, and once per hybrid cell, so both alleles of a hybrid cell share it) and multiplies their expression factor by J; the bulk factor is
+## gamma with dispersion phi (the hybrid alleles share an extrinsic part of variance ext_share x phi). All groups have the same mu, phi, p and J, so every
+## true contrast is zero and any rejection is a false positive. The hybrid cells are split into cis and trans cells (hyb_split). For each estimator the
+## observed log2 contrasts are total (Pc - Pe), cis (alleles of the cis cells) and trans (total minus the allele ratio of the trans cells). The null is the
+## pipeline's shifted bootstrap: B resamples of the parents and of the undivided hybrid cells (each copy keeping its cis or trans membership), every group
+## refitted, and on the log2 scale the null draw is the resampled contrast minus the observed one (a zero refit is -Inf, perm_pval() counts it as extreme).
+## A contrast is tested, as in analysis.R, only when every group it uses has a fitted phi > 0 and at most RESOLVED.ZERO.MAX of its resamples refit to zero.
+## Returns, per estimator and contrast: the share of datasets tested, the rejection rate at 0.05 and 0.01 among them with binomial SEs, the ratio of the SD of
+## the observed contrast over the tested datasets to their median null SD (above 1 means the null is too narrow), and the rejection rate among tested datasets
+## whose rare-cell counts differ between the parents by at least two (rare_split).
+mse_rare_cell <- function(i, grid, expos, hyb_split, R, B, ext_share, estimators, streams) with_stream(streams[[i]], {
+  g <- grid[i, ]
+  stopifnot(R >= 10, B >= 20, g$mu > 0, g$phi > 0, g$p >= 0, g$p < 1, g$J >= 1, all(estimators %in% c("NB", "weighted")))
+  e1 <- expos$Pc; e2 <- expos$Pe; eH <- expos$H; n1 <- length(e1); n2 <- length(e2); nH <- length(eH); ic <- hyb_split$c; it <- hyb_split$t
+  s2d <- ext_share * g$phi; vq <- max((1 + g$phi) / (1 + s2d) - 1, 0)
+  cons <- c("total", "cis", "trans"); l2 <- function(x) ifelse(x == 0, -Inf, log2(x))
+  fit6 <- function(y, ix, m) c(Pc = fit_dispersion(y$Pc[ix$Pc], e1[ix$Pc], 0, m)[["disp"]], Pe = fit_dispersion(y$Pe[ix$Pe], e2[ix$Pe], 0, m)[["disp"]],
+                               Hcc = fit_dispersion(y$Hc[ix$c], eH[ix$c], 0, m)[["disp"]], Hec = fit_dispersion(y$He[ix$c], eH[ix$c], 0, m)[["disp"]],
+                               Hct = fit_dispersion(y$Hc[ix$t], eH[ix$t], 0, m)[["disp"]], Hec2 = fit_dispersion(y$He[ix$t], eH[ix$t], 0, m)[["disp"]])
+  contr <- function(f) { l <- l2(f); x <- c(l[["Pc"]] - l[["Pe"]], l[["Hcc"]] - l[["Hec"]], (l[["Pc"]] - l[["Pe"]]) - (l[["Hct"]] - l[["Hec2"]])); x[is.nan(x)] <- NA; x }
+  used <- list(total = c("Pc", "Pe"), cis = c("Hcc", "Hec"), trans = c("Pc", "Pe", "Hct", "Hec2"))
+  res <- array(NA_real_, c(length(estimators), length(cons), R, 4), dimnames = list(estimators, cons, NULL, c("p", "obs", "null_sd", "tested")))
+  split2 <- logical(R)
+  for (r in seq_len(R)) {
+    k1 <- rbinom(n1, 1, g$p); k2 <- rbinom(n2, 1, g$p); kH <- rbinom(nH, 1, g$p); split2[r] <- abs(sum(k1) - sum(k2)) >= 2
+    d <- sim_pos_factor(nH, "gamma", 1, s2d) * ifelse(kH == 1, g$J, 1)
+    y <- list(Pc = rpois(n1, g$mu * e1 * sim_pos_factor(n1, "gamma", 1, g$phi) * ifelse(k1 == 1, g$J, 1)),
+              Pe = rpois(n2, g$mu * e2 * sim_pos_factor(n2, "gamma", 1, g$phi) * ifelse(k2 == 1, g$J, 1)),
+              Hc = rpois(nH, g$mu * eH * d * sim_pos_factor(nH, "gamma", 1, vq)), He = rpois(nH, g$mu * eH * d * sim_pos_factor(nH, "gamma", 1, vq)))
+    draws <- lapply(seq_len(B), function(b) { h <- sample.int(nH, nH, replace = TRUE)
+      list(Pc = sample.int(n1, n1, replace = TRUE), Pe = sample.int(n2, n2, replace = TRUE), c = h[h %in% ic], t = h[h %in% it]) })
+    for (m in estimators) {
+      fo <- fit6(y, list(Pc = seq_len(n1), Pe = seq_len(n2), c = ic, t = it), m); obs <- contr(fo)
+      fb <- vapply(draws, fit6, numeric(6), y = y, m = m); cb <- apply(fb, 2, contr)
+      zero <- rowMeans(fb == 0, na.rm = TRUE)
+      for (j in seq_along(cons)) {
+        gr <- used[[cons[j]]]; ok <- isTRUE(all(fo[gr] > 0)) && all(zero[gr] <= RESOLVED.ZERO.MAX)
+        nul <- cb[j, ] - obs[j]
+        res[m, j, r, ] <- c(if (ok) perm_pval(obs[j], nul) else NA_real_, obs[j], sd(nul[is.finite(nul)]), ok)
+      }
+    }
+  }
+  do.call(rbind, lapply(estimators, function(m) do.call(rbind, lapply(cons, function(cn) {
+    x <- res[m, cn, , ]; t <- x[, "tested"] == 1; pv <- x[t, "p"]; nt <- sum(t); r05 <- mean(pv < 0.05); r01 <- mean(pv < 0.01)
+    ps <- x[t & split2, "p"]
+    data.frame(g, estimator = m, contrast = cn, datasets = R, tested = mean(t), type1_05 = r05, type1_05_se = binom_se(r05, nt), type1_01 = r01, type1_01_se = binom_se(r01, nt),
+               sd_ratio = sd(x[t, "obs"]) / median(x[t, "null_sd"]), rare_split_share = mean(split2[t]), type1_05_rare_split = if (length(ps)) mean(ps < 0.05) else NA_real_,
+               type1_05_rare_split_se = if (length(ps)) binom_se(mean(ps < 0.05), length(ps)) else NA_real_, row.names = NULL)
+  }))))
+})

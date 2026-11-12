@@ -16,7 +16,9 @@
 ### phi values share an axis; "raw" plots the raw quantities.
 ### M2 repeats the comparison on the log2 total, cis and trans contrasts the pipeline tests, with a shared extrinsic factor for the two alleles of a hybrid
 ### cell, the hybrid cells split into cis and trans cells, and three designs (null, a cis effect, a trans effect); results in M2.rds, M2_contrast_mse.csv,
-### M2_contrast_mse_ratio.csv and figures/extra/check_M2_<measure>.pdf.
+### M2_contrast_mse_ratio.csv and figures/extra/check_M2_<measure>.pdf. M3 measures the false-positive rate of the pipeline's dispersion test (shifted
+### bootstrap null, resolution gate) when a rare cell state occurs at the same frequency in every group; results in M3.rds, M3_rare_state_type1.csv and
+### figures/extra/check_M3_type1.pdf.
 ### Runtime: M1 about MSE.R x 2 fits per cell; at MSE.R = 500 on one core expect roughly 30 to 60 minutes for the default grid. M2 fits six groups with
 ### both estimators per dataset; at MSE.C.R = 300 and 5 mu values it takes about as long as M1.
 ###############################################################
@@ -37,7 +39,7 @@ MSE.MIN.CELLS  <- 50                      # this many cells with a count in its 
 MSE.FAMILIES   <- c("gamma", "lognormal", "bimodal")
 MSE.GROUPS     <- c("Pc", "Pe", "H")
 MSE.PLOT.SCALE <- "relative"              # "relative" or "raw"
-MSE.RUN        <- c("M1", "M2")           # which parts to run; M2 needs only the ranges, not M1
+MSE.RUN        <- c("M1", "M2", "M3")     # which parts to run; M2 and M3 need only the ranges, not M1
 set.seed(SEED.SECTION + 25)
 
 stopifnot("estimator_mse.R needs the Section 1 checkpoint" = file.exists(ckpt_path(1)))
@@ -214,4 +216,71 @@ if ("M2" %in% MSE.RUN) {
     }
     dev.off()
   }
+}
+
+##############################################################################
+## M3. Rare cell states and the false-positive rate of the dispersion test (Methods: Null for the log2 dispersion contrasts, Informative estimates)
+# A rare cell state (a few cells with expression J times the bulk) at the same frequency p in every group adds binomial noise in how many such cells each group
+# happens to contain, for example 3 in one parent and 0 in the other. That noise is part of the true sampling variance of a dispersion contrast. The pipeline's
+# shifted bootstrap resamples each group's own cells, so a group that sampled none of the rare cells never produces one in its resamples, and the null may be
+# too narrow for total and trans. cis is expected to be protected, because the state belongs to the cell and lifts both alleles together. M3 measures it:
+# every group shares mu, phi, p and J (all true contrasts zero), each dataset is tested with the pipeline's rule (shifted bootstrap null, resolution gate),
+# and the rejection rate among tested datasets is the type I error (mse_rare_cell()). p = 0 is the baseline. sd_ratio is the SD of the observed contrast over
+# datasets divided by the median SD of its null; above 1 means the null is too narrow. The rate among datasets whose parents' rare-cell counts differ by two
+# or more isolates the case of concern. Runtime grows with M3.R x M3.B x 6 fits per estimator; on 8 cores the defaults take roughly half an hour.
+if ("M3" %in% MSE.RUN) {
+  M3.R     <- 200                         # datasets per cell
+  M3.B     <- 199                         # shifted bootstrap draws per dataset
+  M3.P     <- c(0, 0.001, 0.003, 0.01)    # rare-state frequency per cell
+  M3.J     <- c(10, 50)                   # fold of expression in the rare state
+  M3.MU    <- MSE.MU[unique(round(quantile(seq_along(MSE.MU), c(0.3, 0.7))))]   # two mu values of the M1 grid
+  M3.PHI   <- MSE.PHI[unique(round(quantile(seq_along(MSE.PHI), c(0.5, 0.75))))] # bulk phi: the median and upper-quartile M1 values
+  M3.EST   <- "NB"                        # estimators to test; add "weighted" for the moment estimator (doubles the runtime)
+  M3.GRID <- rbind(expand.grid(mu = M3.MU, phi = M3.PHI, p = 0, J = 1), expand.grid(mu = M3.MU, phi = M3.PHI, p = M3.P[M3.P > 0], J = M3.J))
+  M3.STREAMS <- check_streams(nrow(M3.GRID), SEED.MSE + 2)
+  M3.HYB.SPLIT <- local({ ord <- order(MSE.EXPOS$H, decreasing = TRUE); sp <- split_indices_by_depth(length(ord), 0.5); list(c = ord[sp$c], t = ord[sp$t]) })
+  t0 <- Sys.time()
+  M3 <- do.call(rbind, mclapply(seq_len(nrow(M3.GRID)), mse_rare_cell, grid = M3.GRID, expos = MSE.EXPOS, hyb_split = M3.HYB.SPLIT, R = M3.R, B = M3.B,
+                                ext_share = 0.5, estimators = M3.EST, streams = M3.STREAMS, mc.cores = CORES, mc.preschedule = FALSE))
+  cat(sprintf("M3: %d grid cells x %d datasets x %d null draws in %.1f min\n", nrow(M3.GRID), M3.R, M3.B, as.numeric(difftime(Sys.time(), t0, units = "mins"))))
+  print(M3[, c("mu", "phi", "p", "J", "estimator", "contrast", "tested", "type1_05", "type1_05_se", "sd_ratio", "rare_split_share", "type1_05_rare_split")], digits = 3, row.names = FALSE)
+  write.csv(M3, file.path(CHECK.DIR, "M3_rare_state_type1.csv"), row.names = FALSE)
+  M3.FLAG <- M3[M3$type1_05 - 0.05 > 2 * M3$type1_05_se & is.finite(M3$type1_05_se), ]
+  check_save("M3", list(cells = M3, grid = M3.GRID, settings = list(R = M3.R, B = M3.B, ext_share = 0.5, f_cis = 0.5)), "run",
+             headline = c(sprintf("%s %s, p %g, J %g, mu %s, phi %s: tested %.2f, type I %.3f (SE %.3f), SD ratio %.2f", M3$estimator, M3$contrast, M3$p, M3$J, M3$mu, M3$phi,
+                                  M3$tested, M3$type1_05, M3$type1_05_se, M3$sd_ratio),
+                          sprintf("type I above 0.05 by more than 2 SE in %d of %d cells", nrow(M3.FLAG), nrow(M3))),
+             mc_error = sprintf("binomial SE over the tested datasets of %d per cell; %d null draws per dataset", M3.R, M3.B), script = CHECK.SCRIPT)
+
+  ## Figure (figures/extra/check_M3_type1.pdf): page 1 the type I error at 0.05 against the rare-state frequency p, one line per fold J (single-hue ramp), the
+  ## mean solid and +- 1 SE light, the nominal 0.05 dashed; panels by contrast (rows) and (mu, phi) (columns). p is drawn at equal spacing with p = 0 first.
+  ## Page 2 the SD ratio of the observed contrast to its null on the same layout (1 dashed).
+  M3.COLS <- colorRampPalette(c("#6BAED6", "#08306B"))(length(M3.J))
+  M3.CELLS <- unique(M3.GRID[, c("mu", "phi")])
+  fig_pdf("extra/check_M3_type1.pdf", 3 * nrow(M3.CELLS) + 0.5, 2.6 * 3 + 0.8)
+  for (ms in c("type1_05", "sd_ratio")) for (est in M3.EST) {
+    layout(rbind(matrix(seq_len(3 * nrow(M3.CELLS)), nrow = 3, byrow = TRUE), 3 * nrow(M3.CELLS) + 1), heights = c(1, 1, 1, 0.25))
+    par(mar = c(3.6, 4, 2.2, 1), mgp = c(2.2, 0.6, 0), cex.axis = 0.8)
+    for (cn in c("total", "cis", "trans")) for (q in seq_len(nrow(M3.CELLS))) {
+      d <- M3[M3$estimator == est & M3$contrast == cn & M3$mu == M3.CELLS$mu[q] & M3$phi == M3.CELLS$phi[q], ]
+      base <- d[d$p == 0, ]
+      yr <- if (ms == "type1_05") range(c(0, 0.1, d$type1_05 + d$type1_05_se), na.rm = TRUE) else range(c(0.8, 1.2, d$sd_ratio), na.rm = TRUE)
+      plot(NA, xlim = c(1, length(M3.P)), ylim = yr, xaxt = "n", xlab = "rare-state frequency p", ylab = if (ms == "type1_05") "type I error at 0.05" else "SD(observed) / SD(null)",
+           main = sprintf("%s, mu %s, phi %s (%s)", cn, M3.CELLS$mu[q], M3.CELLS$phi[q], est), cex.main = 0.85, las = 1)
+      axis(1, at = seq_along(M3.P), labels = M3.P)
+      abline(h = if (ms == "type1_05") 0.05 else 1, col = "grey55", lty = 2)
+      for (j in seq_along(M3.J)) {
+        x <- rbind(base, d[d$J == M3.J[j], ]); x <- x[order(x$p), ]; xp <- match(x$p, M3.P)
+        if (ms == "type1_05") {
+          lines(xp, x$type1_05 - x$type1_05_se, col = adjustcolor(M3.COLS[j], 0.35), lwd = 1)
+          lines(xp, x$type1_05 + x$type1_05_se, col = adjustcolor(M3.COLS[j], 0.35), lwd = 1)
+        }
+        lines(xp, x[[ms]], col = M3.COLS[j], lwd = 2); points(xp, x[[ms]], col = M3.COLS[j], pch = 19, cex = 0.6)
+      }
+    }
+    par(mar = c(0, 0, 0, 0)); plot.new()
+    legend("center", legend = sprintf("J = %s", M3.J), col = M3.COLS, lwd = 2, horiz = TRUE, bty = "n", cex = 0.85,
+           title = if (ms == "type1_05") "solid: rejection rate among tested datasets; light: +- 1 binomial SE" else "SD ratio of the observed contrast to its shifted bootstrap null")
+  }
+  dev.off()
 }
