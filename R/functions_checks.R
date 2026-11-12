@@ -1149,3 +1149,20 @@ mse_rare_cell <- function(i, grid, expos, hyb_split, R, B, ext_share, estimators
                type1_05_rare_split_se = if (length(ps)) binom_se(mean(ps < 0.05), length(ps)) else NA_real_, row.names = NULL)
   }))))
 })
+
+## ============================================================
+## State groups (analysis/checks/state_groups.R)
+## ============================================================
+
+## state_assign: one label per cell on each of three state axes, from the cell's module z-scores (one column per module, named by level). Metabolism:
+## derepressed when the derepression score exceeds thr, otherwise respiratory when the respiration score exceeds thr, otherwise fermentative, the
+## default of glucose-grown cells; derepression is checked first because derepressed cells also raise respiration. Cell cycle: the phase with the
+## highest score, since every cell is at some phase. Stress: stressed when the stress score exceeds thr.
+state_assign <- function(z, thr, cycle_levels) {
+  stopifnot(is.matrix(z), is.numeric(thr), length(thr) == 1, is.finite(thr), all(c("Derepressed", "Respiratory", "Stressed", cycle_levels) %in% colnames(z)))
+  data.frame(metabolism = factor(ifelse(z[, "Derepressed"] > thr, "Derepressed", ifelse(z[, "Respiratory"] > thr, "Respiratory", "Fermentative")),
+                                 levels = c("Fermentative", "Respiratory", "Derepressed")),
+             cycle      = factor(cycle_levels[max.col(z[, cycle_levels, drop = FALSE], ties.method = "first")], levels = cycle_levels),
+             stress     = factor(ifelse(z[, "Stressed"] > thr, "Stressed", "Unstressed"), levels = c("Unstressed", "Stressed")),
+             row.names  = rownames(z))
+}
