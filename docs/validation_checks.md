@@ -207,6 +207,21 @@ The code now follows the methods artifact at revision 18037 (the repository copy
   - One local calibration task also ran. `calib_dataset()` now masks unresolved p-values and keeps the unmasked ones in `_p_all`, and checks_sim reports them as D1_boundary.
 - **Power analysis (Section 10, Nov 11).** `power_grid_row()` and `power_modes_row()` test the dispersion axis as the pipeline does: a shifted bootstrap null (NI resamples per group, the undivided hybrid cells resampled with their cis or trans membership), and a test only when every group is resolved. An untested dataset is outside the BH family and counts as not called (`bh_power()`), and each row reports the tested share. The total grid uses `N.SIM` draws (now in the Section 2 checkpoint). The mean axis keeps its permutation nulls, with the pairing-preserving trans arm as mode `trans_paired`. cv2 is no longer simulated, because the pipeline does not test it. `docs/methods.md` is refreshed to revision 18037.
 
+## Dispersion estimator choice: M1 and M2 on the observed depths (Nov 12)
+
+`analysis/checks/estimator_mse.R`, real Section 1 depths. mu 0.45 to 39.4 (5% to 95% of the genes' rates), phi 0.017 to 0.75 (10% to 90% of the fitted phi). M1 used 500 datasets per cell and M2 used 300. Wins count cells whose MSE difference exceeds 2 SE.
+
+- **M1, phi of one group.**
+  - At phi <= 0.1 the two estimators tie.
+  - With a gamma factor Cox-Reid has the lower MSE at phi >= 0.3 (25 of 30 cells at 0.75).
+  - With lognormal or bimodal factors the moment estimator wins at phi 0.75 (22 and 26 of 30 cells). Cox-Reid's bias there is -22% to -26% (lognormal) or +15% to +19% (bimodal) and grows with mu; the moment estimator stays within 0.5%.
+- **M2, log2 contrasts** (effect 1 log2; allele pairs sharing an extrinsic factor of 0.5 times the smaller allele phi; hybrid cells split 50:50).
+  - Of 225 cells per contrast, Cox-Reid wins 43 total, 28 cis and 36 trans cells. The moment estimator wins 10 total, 1 cis and 0 trans cells.
+  - The median MSE ratio Cox-Reid / moment (mu > 1) is 1.0 at phi <= 0.04 and falls to 0.72 to 0.76 at phi 0.75.
+  - A bias shared by the groups cancels: under the null design both estimators have the same bias (largest at low mu, from truncation).
+  - With a true effect Cox-Reid shrinks the contrast under lognormal factors (phi 0.75, mu 14.6: cis -0.17, trans -0.26 log2 on a true 1) and inflates the total under bimodal factors (+0.10). Its lower variance keeps its MSE at or below the moment estimator's for cis and trans; the moment estimator wins only on the total contrast with an effect, a non-gamma factor and phi >= 0.3.
+  - At the lowest mu (0.45) a contrast exists (every phi > 0) in 9% to 88% of datasets (trans at phi 0.017 to 0.75).
+
 ## Rerun note
 
 Commit 1ffbccb changes `fit_dispersion(method = "weighted")` (Appendix A). It needs a rerun of Section 2.3 (`SPLIT.FITS.W` and the weighted columns of `GENE.TABLE`) and of the weighted columns of `BOOT.CONTRASTS` and `PR` with every table read from them, and resubmission of `gene_boot` and `gene_perm`. `SPLIT.FITS.W` can be refitted locally; the bootstrap and null columns need the cluster. The NB results are unchanged. The other check commits change no code in `R/functions.R`, `analysis/analysis.R` or the pipeline's cluster scripts, so no section or pipeline cluster job needs a rerun. The checks run as follows:
