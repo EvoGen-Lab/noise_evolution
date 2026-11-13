@@ -344,13 +344,52 @@ BOUND.CRIT        <- qchisq(0.90, 1)
 # .cr_loglik: the Cox-Reid adjusted profile log-likelihood of the dispersion for one gene in one group, as a function of phi. The mean is fixed at the ratio
 # estimate, so m_i = O_i mu-hat enters as data: ell(phi) = sum_i log NB(y_i; m_i, phi) - 0.5 log sum_i m_i / (1 + phi m_i). The second term is half the log
 # Fisher information for the mean and removes the first-order bias that the degree of freedom spent on the mean puts into phi. phi = 0 is the Poisson limit.
-.cr_loglik <- function(y, m) {
+# With a design matrix X (the state-conditioned fit, an intercept and the state covariate), the mean has one parameter per column and the adjustment is half
+# the log determinant of its information, 0.5 log det(X' W X) with W = diag(m_i / (1 + phi m_i)); the intercept-only X gives the term above.
+.cr_loglik <- function(y, m, X = NULL) {
   sm <- sum(m); lfy <- lgamma(y + 1)
+  if (!is.null(X)) {
+    logdet <- function(w) as.numeric(determinant(crossprod(X, w * X), logarithm = TRUE)$modulus)
+    return(function(phi) {
+      if (phi == 0) return(sum(y * log(m) - m - lfy) - 0.5 * logdet(m))
+      k <- 1 / phi
+      sum(lgamma(y + k) - lgamma(k) - lfy + k * log(k / (k + m)) + y * log(m / (k + m))) - 0.5 * logdet(m / (1 + phi * m))
+    })
+  }
   function(phi) {
     if (phi == 0) return(sum(y * log(m) - m - lfy) - 0.5 * log(sm))
     k <- 1 / phi
     sum(lgamma(y + k) - lgamma(k) - lfy + k * log(k / (k + m)) + y * log(m / (k + m))) - 0.5 * log(sum(m / (1 + phi * m)))
   }
+}
+
+# .pois_loglinear: the state-conditioned mean of one gene in one group. The log mean is linear in the cell-state covariates, log m_i = log O_i + a + z_i' beta,
+# and (a, beta) solve the Poisson score equations sum_i x_i (y_i - m_i) = 0 with x_i = (1, z_i). These are the quasi-likelihood equations of any count model
+# whose mean has this form, so the estimate is free of phi, as the ratio estimate is; with no covariate they give exactly the ratio estimate mu = sum(y) / sum(O).
+# Solved by Newton steps from (log of the ratio estimate, 0), halved while they lower the Poisson log-likelihood. A covariate with no variance carries no
+# information and gets beta = 0. Returns mu0 = exp(a), the rate at z = 0 (the reference state), the fitted m_i, the design X, beta and converged (1 when the
+# last step is below tol).
+.pois_loglinear <- function(y, e, z, maxit = 50, tol = 1e-8) {
+  z <- as.matrix(z)
+  stopifnot(nrow(z) == length(y), length(e) == length(y), all(is.finite(z)))
+  info <- apply(z, 2, function(v) length(v) > 1 && var(v) > 0)
+  X <- cbind(1, z[, info, drop = FALSE])
+  off <- log(e)
+  b <- c(log(sum(y) / sum(e)), rep(0, ncol(X) - 1))
+  ll <- function(b) { eta <- off + drop(X %*% b); sum(y * eta - exp(eta)) }
+  cur <- ll(b); conv <- 0
+  for (it in seq_len(maxit)) {
+    m <- exp(off + drop(X %*% b))
+    step <- tryCatch(drop(solve(crossprod(X, m * X), crossprod(X, y - m))), error = function(e) NULL)
+    if (is.null(step) || !all(is.finite(step))) break
+    s <- 1; nb <- b + step; nl <- ll(nb)
+    while (!(is.finite(nl) && nl >= cur - 1e-10) && s > 1e-6) { s <- s / 2; nb <- b + s * step; nl <- ll(nb) }
+    if (!(is.finite(nl) && nl >= cur - 1e-10)) break
+    b <- nb; cur <- nl
+    if (max(abs(s * step)) < tol) { conv <- 1; break }
+  }
+  beta <- rep(0, ncol(z)); beta[info] <- b[-1]
+  list(mu0 = exp(b[[1]]), m = exp(off + drop(X %*% b)), X = X, beta = beta, converged = conv)
 }
 
 # The pipeline's single NB estimator: mu = sum(y)/sum(exposure), and phi = the maximizer of the Cox-Reid adjusted profile likelihood (.cr_loglik()) over
@@ -385,12 +424,23 @@ BOUND.CRIT        <- qchisq(0.90, 1)
 #   boundary (1 when disp = 0, a valid Poisson-limit estimate), converged (NB: 1 unless the fit failed; weighted: 1 when the iteration met WEIGHTED.TOL), iter (weighted only) and
 #   hit_range (1 when the NB maximum lies within 1e-3 of either end of the search range, NB only).
 # NA mu and disp mean too few cells; mu = 0 and NA disp mean no counts; mu with NA disp is a failed fit.
-fit_dispersion <- function(counts, expo, share_r = 0, method = c("NB", "weighted"), share_sub = 0) {
+#
+# z (NB only) conditions the fit on cell state: one value per cell, or a cells x covariates matrix (Methods appendix: State-conditioned estimates). The mean is
+# then log-linear in z (.pois_loglinear()), mu is the rate at z = 0, phi maximizes the Cox-Reid likelihood adjusted for every mean parameter (.cr_loglik() with
+# the design matrix), and the boundary rule uses the adjusted slope at zero, sum((y - m)^2) - sum(m) + tr[(X' M X)^-1 X' M^2 X] with M = diag(m), which is the
+# rule above for an intercept alone. The output then also holds beta1, beta2, ... (the log mean per unit of each covariate) and mean_converged.
+fit_dispersion <- function(counts, expo, share_r = 0, method = c("NB", "weighted"), share_sub = 0, z = NULL) {
   method <- match.arg(method)
   stopifnot(is.numeric(share_r), length(share_r) == 1, is.finite(share_r), share_r >= 0,
             is.numeric(share_sub), length(share_sub) == 1, is.finite(share_sub), share_sub >= 0)
+  if (!is.null(z)) {
+    if (method != "NB") stop("a state covariate is supported by the NB estimator only")
+    z <- as.matrix(z)
+    stopifnot(is.numeric(z), nrow(z) == length(counts), all(is.finite(z)))
+  }
   out <- c(mu = NA_real_, disp = NA_real_, theta = NA_real_, disp_app = NA_real_, disp_raw = NA_real_,
            boundary = NA_real_, converged = NA_real_, iter = NA_real_, hit_range = NA_real_)
+  if (!is.null(z)) out <- c(out, setNames(rep(NA_real_, ncol(z)), paste0("beta", seq_len(ncol(z)))), mean_converged = NA_real_)
   keep <- is.finite(counts) & is.finite(expo) & expo > 0
   y <- counts[keep]; e <- expo[keep]
   if (length(y) < 2) return(out)
@@ -400,15 +450,22 @@ fit_dispersion <- function(counts, expo, share_r = 0, method = c("NB", "weighted
   if (sum(y) == 0) { out[["mu"]] <- 0; return(out) }
 
   mu_i <- mu_hat * e
+  X <- NULL
+  if (!is.null(z)) {
+    pl <- .pois_loglinear(y, e, z[keep, , drop = FALSE])
+    mu_i <- pl$m; X <- pl$X; out[["mu"]] <- pl$mu0
+    out[paste0("beta", seq_len(ncol(z)))] <- pl$beta; out[["mean_converged"]] <- pl$converged
+  }
   phi_app <- NA_real_
   if (method == "NB") {
-    slope0 <- sum((y - mu_i)^2) - sum(mu_i) + sum(mu_i^2) / sum(mu_i)       # twice the adjusted slope at phi = 0
+    slope0 <- if (is.null(X)) sum((y - mu_i)^2) - sum(mu_i) + sum(mu_i^2) / sum(mu_i)       # twice the adjusted slope at phi = 0
+              else sum((y - mu_i)^2) - sum(mu_i) + sum(diag(solve(crossprod(X, mu_i * X), crossprod(X, mu_i^2 * X))))
     out[["converged"]] <- 1
     if (slope0 <= 0) {
       phi_app <- 0; out[["hit_range"]] <- 0                                 # the maximum sits on the boundary
     } else {
       lrange <- -rev(LOG.THETA.RANGE)
-      ll <- .cr_loglik(y, mu_i)
+      ll <- .cr_loglik(y, mu_i, X)
       opt <- tryCatch(optimize(function(lp) ll(exp(lp)), lrange, maximum = TRUE), error = function(e) NULL)
       if (is.null(opt)) { out[["converged"]] <- 0; return(out) }
       phi_app <- exp(opt$maximum)
@@ -903,12 +960,15 @@ class_heatmap_grid <- function(path, panels, classes, fdr, width, height, mfrow,
 ## bar_col is one colour or list(x, y) with one colour per bar on each axis (already restricted to the plotted points); pt_col is one colour or one per point. legend_labels with legend_cols adds a top-left legend. With diagonals = TRUE both axes
 ## share one symmetric range (unless lim is given) and the dotted +/-45 degree lines are drawn, so
 ## same-direction and opposite-direction changes are readable. With diagonals = FALSE each axis gets its
-## own symmetric range. Only points with a finite x, y and (when given) SEs are drawn.
+## own symmetric range. Only points with a finite x, y and (when given) SEs are drawn. flag marks the genes whose call the state program carries
+## (state_flag_vec()): they are drawn last, as open triangles (STATE.PCH) in their own colour, and the legend gains their symbol.
 .se_scatter <- function(x, sx = NULL, y, sy = NULL, xlab, ylab, main, lim = NULL, diagonals = TRUE, bar_col = NULL, pt_col,
-                        pt_cex = 0.5, legend_labels = NULL, legend_cols = NULL) {
+                        pt_cex = 0.5, legend_labels = NULL, legend_cols = NULL, flag = NULL) {
   ok <- is.finite(x) & is.finite(y)
   if (!is.null(sx)) ok <- ok & is.finite(sx) & is.finite(sy)
-  x <- x[ok]; y <- y[ok]
+  if (is.null(flag)) flag <- rep(FALSE, length(ok))
+  stopifnot(length(flag) == length(ok))
+  x <- x[ok]; y <- y[ok]; flag <- flag[ok] %in% TRUE
   if (length(pt_col) == length(ok)) pt_col <- pt_col[ok]
   bars <- !is.null(sx)
   if (bars) { sx <- sx[ok]; sy <- sy[ok] } else sx <- sy <- numeric(length(x))
@@ -927,8 +987,12 @@ class_heatmap_grid <- function(path, panels, classes, fdr, width, height, mfrow,
     segments(x - sx, y, x + sx, y, col = if (is.list(bar_col)) bar_col$x else bar_col)
     segments(x, y - sy, x, y + sy, col = if (is.list(bar_col)) bar_col$y else bar_col)
   }
-  points(x, y, pch = 16, cex = pt_cex, col = pt_col)
-  if (!is.null(legend_labels)) legend("topleft", legend = legend_labels, col = legend_cols, pch = 16, bty = "n", cex = 0.8)
+  pt_col <- rep_len(pt_col, length(x))
+  points(x[!flag], y[!flag], pch = STATE.PCH[["unflagged"]], cex = pt_cex, col = pt_col[!flag])
+  points(x[flag], y[flag], pch = STATE.PCH[["flagged"]], cex = pt_cex * 1.6, col = pt_col[flag])
+  if (any(flag)) { legend_labels <- c(legend_labels, "carried by state program"); legend_cols <- c(legend_cols, COLOR.ACCENT) }
+  if (!is.null(legend_labels)) legend("topleft", legend = legend_labels, col = legend_cols, bty = "n", cex = 0.8,
+                                      pch = c(rep(STATE.PCH[["unflagged"]], length(legend_labels) - any(flag)), if (any(flag)) STATE.PCH[["flagged"]]))
 }
 
 ## plot_contrast_scatter: one gene-level contrast scatter with SE bars, drawn by .se_scatter(). type picks
@@ -954,6 +1018,7 @@ plot_contrast_scatter <- function(BURST.CONTRASTS, type = c("cis_trans", "mean_d
     if (is.null(main)) main <- lab
     cols <- paste0(quantity, c("_cis_est", "_cis_se", "_trans_est", "_trans_se"))
     xlab <- paste(lab, "cis (log2)"); ylab <- paste(lab, "trans (log2)")
+    flag <- state_flag_vec(BURST.CONTRASTS, quantity, c("cis", "trans"))
   } else {
     mode <- match.arg(what, .OUT_MODES)
     lim <- NULL
@@ -961,15 +1026,17 @@ plot_contrast_scatter <- function(BURST.CONTRASTS, type = c("cis_trans", "mean_d
       if (is.null(main)) main <- paste0("mean vs noise: ", mode)
       cols <- paste0(c("mean_", "mean_", "disp_", "disp_"), mode, c("_est", "_se", "_est", "_se"))
       xlab <- "mean (log2)"; ylab <- "dispersion (log2)"
+      flag <- state_flag_vec(BURST.CONTRASTS, c("mean", "disp"), mode)
     } else {
       if (is.null(main)) main <- paste0("burst kinetics: ", mode)
       cols <- paste0(c("mean_", "mean_", "kbal_", "kbal_"), mode, c("_est", "_se", "_est", "_se"))
       xlab <- "net mean change (log2)"; ylab <- "frequency - amplitude (kinetic balance, log2)"
+      flag <- state_flag_vec(BURST.CONTRASTS, c("mean", "kbal"), mode)
     }
   }
   v <- BURST.CONTRASTS[cols]
   .se_scatter(v[[1]], v[[2]], v[[3]], v[[4]], xlab = xlab, ylab = ylab, main = main, lim = lim, diagonals = diagonals,
-              bar_col = bar_col, pt_col = pt_col)
+              bar_col = bar_col, pt_col = pt_col, flag = flag)
 }
 
 ## sig_hist_panel: histogram of one contrast (quantity, mode) with the genes significant at q < sig shaded by
@@ -1593,7 +1660,7 @@ plot_cis_trans_class <- function(BURST.CONTRASTS, PR, quantity = c("mean", "disp
   if (is.null(main)) main <- paste0(lab,": cis vs trans")
   .se_scatter(cx[ok], sx[ok], cy[ok], sy[ok], xlab = "log2(Sc/Se) in hybrid", ylab = "parents - hybrid (log2)", main = main, lim = lim,
               bar_col = list(x = se_alpha_col(sx[ok], bar_col), y = se_alpha_col(sy[ok], bar_col)), pt_col = colors[match(cls[ok], REG.CLASS)],
-              legend_labels = REG.CLASS, legend_cols = colors)
+              legend_labels = REG.CLASS, legend_cols = colors, flag = state_flag_vec(BURST.CONTRASTS, quantity, c("cis", "trans"))[ok])
   invisible(cls[ok])
 }
 
@@ -1621,10 +1688,12 @@ plot_mean_disp_class <- function(BURST.CONTRASTS, PR, mode = "total", reg_class 
   if (is.null(reg_class)) reg_class <- reg_class_vec(BURST.CONTRASTS, PR, class_quantity, sig)
   if (is.null(dom_class)) dom_class <- dom_class_vec(BURST.CONTRASTS, PR, class_quantity, sig)
   ok <- is.finite(x) & is.finite(y)
+  fl <- state_flag_vec(BURST.CONTRASTS, c("mean", y_quantity), mode)[ok]
   x<-x[ok]; y<-y[ok]; rc<-reg_class[ok]; dc<-dom_class[ok]
   if (is.null(main)) main <- paste0("mean vs ", y_lab, ": ", mode)
   px <- diff(range(x))*0.04; py <- diff(range(y))*0.04
-  plot(x, y, pch=16, cex=0.4, col=COLOR.GREY[["light"]], xlim=range(x)+c(-px, px), ylim=range(y)+c(-py, py), xlab="mean divergence (log2)", ylab=paste0(y_lab, " divergence (log2)"), main=main)
+  plot(x[!fl], y[!fl], pch=STATE.PCH[["unflagged"]], cex=0.4, col=COLOR.GREY[["light"]], xlim=range(x)+c(-px, px), ylim=range(y)+c(-py, py), xlab="mean divergence (log2)", ylab=paste0(y_lab, " divergence (log2)"), main=main)
+  points(x[fl], y[fl], pch = STATE.PCH[["flagged"]], cex = 0.6, col = COLOR.GREY[["dark"]])   # calls the state program carries (state_flag_vec())
   abline(h=0,v=0,col=COLOR.GREY[["mid"]])
   class_slope_lines(x, y, rc, REG.CLASS, reg_colors, lty = 1)
   class_slope_lines(x, y, dc, DOM.CLASS, dom_colors, lty = 2)
@@ -2084,6 +2153,7 @@ plot_dom_class <- function(BURST.CONTRASTS, PR, quantity = c("mean", "disp", "bs
   rdp_all <- if (rdp_col %in% names(BURST.CONTRASTS)) BURST.CONTRASTS[[rdp_col]] else NULL
   cls <- dom_class_vec(BURST.CONTRASTS, PR, quantity, sig)
   ok  <- is.finite(dsc)&is.finite(dse)&is.finite(ssc)&is.finite(sse)&!is.na(cls)
+  flag <- state_flag_vec(BURST.CONTRASTS, quantity, c("mid", "par_sc", "par_se"))[ok]
   dsc<-dsc[ok]; dse<-dse[ok]; ssc<-ssc[ok]; sse<-sse[ok]; cls<-cls[ok]
   rdp <- if (!is.null(rdp_all)) { r<-rdp_all[ok]; ifelse(is.finite(r),r,0) } else rep(0,sum(ok))
   if (frame=="parent") {
@@ -2097,7 +2167,7 @@ plot_dom_class <- function(BURST.CONTRASTS, PR, quantity = c("mean", "disp", "bs
   }
   if (is.null(main)) main<-paste0("dominance (",quantity,", ",frame,")")
   .se_scatter(x, sx, y, sy, xlab = xl, ylab = yl, main = main, lim = lim, bar_col = bar_col, pt_col = COLOR.LIST.2[match(cls,DOM.CLASS)],
-              legend_labels = DOM.CLASS, legend_cols = COLOR.LIST.2)
+              legend_labels = DOM.CLASS, legend_cols = COLOR.LIST.2, flag = flag)
   invisible(cls)
 }
 
@@ -3818,15 +3888,21 @@ fit_group_values <- function(fits, g) {
 ## .RESOLVE.SOURCE: the mode that supplies the groups of each resolution source, per reporting mode.
 .RESOLVE.SOURCE <- list(noise = .DISP_SOURCE, bsize = .BSIZE_SOURCE, kbal = .KBAL_SOURCE)
 
+## .COND.QUANTITIES: the NB quantities of the state-conditioned layer (cond_contrasts_one()), with the definition flag each needs, as in .QUANTITY.GATE.
+## .COND.GATE maps their output prefixes, c<quantity> (the conditioned estimate) and d<quantity> (unconditioned minus conditioned), to those flags.
+.COND.QUANTITIES <- c(mean = "mean", disp = "log", rdisp = "raw", bsize = "bsize", kbal = "kbal", rbsize = "rbsize", rkbal = "kbal")
+.COND.GATE <- as.list(c(setNames(.COND.QUANTITIES, paste0("c", names(.COND.QUANTITIES))), setNames(.COND.QUANTITIES, paste0("d", names(.COND.QUANTITIES)))))
+
 ## apply_gate: sets to NA every output of a gene whose contrast is not defined. out is the list of one gene's columns (boot_contrasts_one() or
 ## null_contrasts_one()) and gate a named logical vector with one entry per scale_mode (scale one of mean, raw, log, bsize, rbsize, kbal, mode one of
 ## .OUT_MODES): TRUE when the fits of every group the contrast uses define it (analysis.R Section 2.3). A column belongs to a quantity and a mode by its prefix
 ## <quantity>_<mode>_, so the estimate, SE, interval, null summaries and p-values of an undefined contrast all go. NULL gate leaves the outputs alone.
-apply_gate <- function(out, gate) {
+## map gives the flag of each quantity prefix: .QUANTITY.GATE for the main outputs, .COND.GATE for the state-conditioned layer.
+apply_gate <- function(out, gate, map = .QUANTITY.GATE) {
   if (is.null(gate)) return(out)
   nm <- names(out)
-  for (q in names(.QUANTITY.GATE)) for (md in .OUT_MODES) {
-    need <- paste(rep(.QUANTITY.GATE[[q]], each = 1), md, sep = "_")
+  for (q in names(map)) for (md in .OUT_MODES) {
+    need <- paste(rep(map[[q]], each = 1), md, sep = "_")
     if (!all(gate[need], na.rm = FALSE) || anyNA(gate[need])) {
       hit <- startsWith(nm, paste0(q, "_", md, "_"))
       for (k in nm[hit]) out[[k]] <- NA_real_
@@ -3940,6 +4016,136 @@ boot_contrasts_one <- function(g, expos, fits, mats, draws, share_cells, share_o
   out$cor_par_disp <- cor_fin(Ds[, "par_sc"], Ds[, "par_se"])
   data.frame(apply_gate(out, if (is.null(gates)) NULL else gates[g, ]), row.names = NULL, check.names = FALSE)
 }
+
+## ============================================================
+## STATE-CONDITIONED ESTIMATES (Methods appendix: State-conditioned estimates)
+## ============================================================
+## The parents were cultured in one tube and the hybrid in another, so every contrast between them (trans, mid, par) carries any difference between the
+## cultures. One such difference is measured: a program of glucose derepression and stress response that a few percent of parental cells and almost no
+## hybrid cells enter. The conditioned layer refits every group with that program's cell-level score in the NB mean, so phi is the dispersion around the
+## state-conditioned mean and mu the rate at the group's typical state, and reports every contrast on the same bootstrap draws with and without the
+## covariate. The unconditioned estimates stay the main analysis; the conditioned ones flag the calls that the program carries.
+
+## .state_tube: the culture a dataset's cells come from: "Pc" and "Pe" (the parental tube, one score centre per species) and "H" (the hybrid tube).
+.state_tube <- function(grp) if (grp == "MIX.SC") "Pc" else if (grp == "MIX.SE") "Pe" else "H"
+
+## state_scores: gene g's program score for every cell of every contrast dataset, as a named list of vectors in the column order of mats. state$cells holds,
+## per tube, each cell's summed program-module count (total) and library size (lib), named by cell barcode; state$members the module's genes; state$pseudo
+## the pseudocount. The score is log2((total - own + pseudo) / lib), where own is gene g's own count in the cell (both alleles in a hybrid cell) when g is a
+## module gene, so a gene never enters its own covariate. It is centred at its median within the tube (each parent separately), so z = 0 is the group's
+## typical cell and the conditioned mean is the rate at that state. Every hybrid dataset reads the hybrid tube's score of its cells, so the alleles of a cell
+## and every partition share the cell's state.
+state_scores <- function(g, mats, state) {
+  stopifnot(is.list(state$cells), all(c("Pc", "Pe", "H") %in% names(state$cells)), is.numeric(state$pseudo), state$pseudo > 0)
+  member <- g %in% state$members
+  own <- list(Pc = if (member) mats$MIX.SC[g, ] else NULL, Pe = if (member) mats$MIX.SE[g, ] else NULL,
+              H = if (member) mats$HYB.SC[g, ] + mats$HYB.SE[g, ] else NULL)
+  zt <- list()
+  for (tb in c("Pc", "Pe", "H")) {
+    tot <- state$cells[[tb]]$total
+    if (member) tot <- tot - own[[tb]][names(tot)]
+    L <- log2(pmax(tot, 0) + state$pseudo) - log2(state$cells[[tb]]$lib[names(tot)])
+    zt[[tb]] <- L - median(L)
+  }
+  out <- lapply(setNames(.CONTRAST.GROUPS, .CONTRAST.GROUPS), function(grp) unname(zt[[.state_tube(grp)]][colnames(mats[[grp]])]))
+  if (any(vapply(out, anyNA, logical(1)))) stop("state_scores(): a dataset holds cells without a program score; check the barcodes of state$cells")
+  out
+}
+
+## cond_contrasts_one: one gene's state-conditioned contrasts with their bootstrap, the unit of work of gene_cond.R. Every replicate of draws (the same
+## resamples as the reported bootstrap, make_draws()) refits every group twice with the NB estimator and the replicate's share corrections, without and with
+## the gene's program score in the mean (state_scores(), fit_dispersion(z = )), and builds every contrast from each set of fits (.mode_contrasts(),
+## .contrast_burst_raw()), as boot_contrasts_one() does. Resampled cells keep their scores. For every quantity of .COND.QUANTITIES and every reporting mode
+## the output holds the conditioned estimate with its SE and 95% interval (c<quantity>_<mode>_est, _se, _lo, _hi, and _zero for the log2 dispersion
+## quantities) and the paired change, unconditioned minus conditioned, with its interval from the same draws (d<quantity>_<mode>_est, _lo, _hi). Per group:
+## czero_<dataset>, the fraction of replicates whose conditioned dispersion is zero, and cbeta_<dataset>, the observed log2 change of the gene's mean per log2
+## unit of program score. gates sets the contrasts the fits do not define to NA (apply_gate() with .COND.GATE).
+cond_contrasts_one <- function(g, expos, mats, draws, share_cells, share_obs, state, gates = NULL) {
+  stopifnot(is.list(share_cells), all(c("chat", "lib") %in% names(share_cells)), all(c("cbar", "r") %in% names(share_obs)),
+            all(.CONTRAST.GROUPS %in% names(share_obs$r)), length(draws) >= 3)
+  B <- length(draws); modes <- names(.MODES); grp_all <- .CONTRAST.GROUPS
+  zs <- state_scores(g, mats, state)
+  arrs <- function() matrix(NA_real_, B, length(modes), dimnames = list(NULL, modes))
+  D <- list(u = list(m = arrs(), s = arrs(), r = arrs()), c = list(m = arrs(), s = arrs(), r = arrs()))
+  BQ <- lapply(c(u = "u", c = "c"), function(k) matrix(NA_real_, B, 2 * length(.OUT_MODES), dimnames = list(NULL, c(paste0("rb.", .OUT_MODES), paste0("rk.", .OUT_MODES)))))
+  Zc <- matrix(NA_real_, B, length(grp_all), dimnames = list(NULL, grp_all))
+  for (b in seq_len(B)) {
+    d <- draws[[b]]; hi <- d$HYB
+    st <- share_terms(share_cells$chat[hi], share_cells$lib[hi]); sr <- share_r_groups(st$r_c, st$r_e)
+    fu <- fc <- vector("list", length(grp_all)); names(fu) <- names(fc) <- grp_all
+    for (grp in grp_all) {
+      ix <- d[[.DRAW.KEY[[grp]]]]; y <- mats[[grp]][g, ix]; e <- expos[[grp]][ix]
+      fu[[grp]] <- .fit_one(y, e, sr[[grp]])
+      fc[[grp]] <- fit_dispersion(y, e, sr[[grp]], "NB", 0, z = zs[[grp]][ix])
+    }
+    Zc[b, ] <- vapply(fc[grp_all], function(x) unname(x[["disp"]]), numeric(1))
+    for (k in c("u", "c")) {
+      f <- if (k == "u") fu else fc
+      gm <- lapply(f, function(x) unname(x[["mu"]])); gp <- lapply(f, function(x) unname(x[["disp"]]))
+      mc <- .mode_contrasts(gm, gp, st$cbar)
+      D[[k]]$m[b, ] <- mc[, "mean"]; D[[k]]$s[b, ] <- mc[, "disp"]; D[[k]]$r[b, ] <- mc[, "raw"]
+      for (md in .OUT_MODES) {
+        BQ[[k]][b, paste0("rb.", md)] <- .contrast_burst_raw(md, gm, gp, "bsize", st$cbar)
+        BQ[[k]][b, paste0("rk.", md)] <- .contrast_burst_raw(md, gm, gp, "kbal", st$cbar)
+      }
+    }
+  }
+  ## The observed fits of the full data with the observed share terms, without and with the covariate
+  cb <- share_obs$cbar
+  ou <- lapply(setNames(grp_all, grp_all), function(grp) .fit_one(mats[[grp]][g, ], expos[[grp]], share_obs$r[[grp]]))
+  oc <- lapply(setNames(grp_all, grp_all), function(grp) fit_dispersion(mats[[grp]][g, ], expos[[grp]], share_obs$r[[grp]], "NB", 0, z = zs[[grp]]))
+  obs <- list()
+  for (k in c("u", "c")) {
+    f <- if (k == "u") ou else oc
+    gm <- lapply(f, function(x) unname(x[["mu"]])); gp <- lapply(f, function(x) unname(x[["disp"]]))
+    obs[[k]] <- list(mc = .mode_contrasts(gm, gp, cb), gm = gm, gp = gp)
+  }
+  out <- list(gene = g)
+  zfrac <- function(x) { x <- x[is.finite(x)]; if (length(x)) mean(x == 0) else NA_real_ }
+  for (grp in grp_all) {
+    out[[paste0("czero_", grp)]] <- zfrac(Zc[, grp])
+    out[[paste0("cbeta_", grp)]] <- unname(oc[[grp]][["beta1"]]) / log(2)
+  }
+  ## put: the conditioned estimate with its bootstrap summary, and the paired change (unconditioned minus conditioned) with its interval
+  put <- function(q, md, est_u, est_c, xu, xc, inf) {
+    s <- .boot_summary(xc, inf); dd <- .boot_summary(xu - xc, inf)
+    out[[paste0("c", q, "_", md, "_est")]] <<- est_c; out[[paste0("c", q, "_", md, "_se")]] <<- unname(s[["se"]])
+    out[[paste0("c", q, "_", md, "_lo")]] <<- unname(s[["lo"]]); out[[paste0("c", q, "_", md, "_hi")]] <<- unname(s[["hi"]])
+    if (inf) out[[paste0("c", q, "_", md, "_zero")]] <<- unname(s[["zero"]])
+    out[[paste0("d", q, "_", md, "_est")]] <<- est_u - est_c
+    out[[paste0("d", q, "_", md, "_lo")]] <<- unname(dd[["lo"]]); out[[paste0("d", q, "_", md, "_hi")]] <<- unname(dd[["hi"]])
+  }
+  for (md in .OUT_MODES) {
+    smd <- .DISP_SOURCE[[md]]; kmd <- .KBAL_SOURCE[[md]]; zmd <- .BSIZE_SOURCE[[md]]
+    mu_ <- obs$u$mc; mc_ <- obs$c$mc
+    put("mean", md, mu_[md, "mean"], mc_[md, "mean"], D$u$m[, md], D$c$m[, md], FALSE)
+    put("disp", md, mu_[smd, "disp"], mc_[smd, "disp"], D$u$s[, smd], D$c$s[, smd], TRUE)
+    put("rdisp", md, mu_[smd, "raw"], mc_[smd, "raw"], D$u$r[, smd], D$c$r[, smd], FALSE)
+    put("bsize", md, mu_[zmd, "mean"] + mu_[zmd, "disp"], mc_[zmd, "mean"] + mc_[zmd, "disp"], D$u$m[, zmd] + D$u$s[, zmd], D$c$m[, zmd] + D$c$s[, zmd], TRUE)
+    put("kbal", md, -mu_[kmd, "mean"] - 2 * mu_[kmd, "disp"], -mc_[kmd, "mean"] - 2 * mc_[kmd, "disp"],
+        -D$u$m[, kmd] - 2 * D$u$s[, kmd], -D$c$m[, kmd] - 2 * D$c$s[, kmd], TRUE)
+    for (kd in c("bsize", "kbal")) {
+      tag <- if (kd == "bsize") "rb." else "rk."
+      put(paste0("r", kd), md, .contrast_burst_raw(md, obs$u$gm, obs$u$gp, kd, cb), .contrast_burst_raw(md, obs$c$gm, obs$c$gp, kd, cb),
+          BQ$u[, paste0(tag, md)], BQ$c[, paste0(tag, md)], FALSE)
+    }
+  }
+  data.frame(apply_gate(out, if (is.null(gates)) NULL else gates[g, ], map = .COND.GATE), row.names = NULL, check.names = FALSE)
+}
+
+## state_flag_vec: for each gene (row of BURST.CONTRASTS), TRUE when any of the given quantity and mode combinations carries a state flag
+## (stateflag_<quantity>_<mode>, set in analysis.R Section 2.5: a significant call whose conditioned interval contains zero and whose change under conditioning
+## excludes zero). Absent columns count as unflagged, so the figures draw without flags when the conditioned layer has not been added.
+state_flag_vec <- function(BURST.CONTRASTS, quantities, modes) {
+  cols <- intersect(as.vector(outer(quantities, modes, function(q, m) paste0("stateflag_", q, "_", m))), names(BURST.CONTRASTS))
+  if (!length(cols)) return(rep(FALSE, nrow(BURST.CONTRASTS)))
+  m <- as.matrix(BURST.CONTRASTS[cols])
+  rowSums(matrix(m %in% TRUE, nrow(m))) > 0
+}
+
+## STATE.PCH: the plotting symbols of the gene-level scatters: unflagged genes as filled circles, genes whose call the state program carries (state_flag_vec())
+## as open triangles in the same colour, drawn on top.
+STATE.PCH <- c(unflagged = 16, flagged = 2)
 
 ## ============================================================
 ## NULL DISTRIBUTIONS (Methods: Null distributions)
