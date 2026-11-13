@@ -8,6 +8,7 @@
 ###     2.2 Split-dependent NB fits
 ###     2.3 Per-gene contrasts, bootstrap SEs, and permutation null
 ###     2.4 Bootstrap adequacy check
+###     2.5 State-conditioned sensitivity
 ###   3. REGULATORY AND DOMINANCE RESULTS
 ###     3.1 Regulatory classification
 ###     3.2 Significance histograms for total, cis, and trans effects
@@ -981,6 +982,126 @@ dev.off()
 # Expect correlation 0.9+ and a tight SE ratio 
 do.call(rbind, lapply(names(SEED.CHECK), seed_check_rows, checks = SEED.CHECK, count_label = "n_genes"))
 
+## 2.5 State-conditioned sensitivity
+# The parents were grown in one tube and the hybrid in another, so every contrast between parents and hybrid (trans, mid, par) also carries any difference
+# between the two cultures, which the design cannot separate from the genotype (Methods appendix: State-conditioned estimates). One such difference is measured
+# in the cells: a program of glucose derepression and stress response (the 20 marker genes below, chosen in analysis/checks/state_groups.R before any noise
+# result) that a few percent of parental cells and almost no hybrid cells enter, and that inflates dispersion contrasts when it is rare and unevenly sampled
+# (check M3). Every contrast of every quantity is refitted here with the program's cell-level score in the NB mean, on the bootstrap draws of the reported
+# replicate, together with the unconditioned fit, so each gene gets a conditioned estimate with its interval and the paired change that conditioning makes.
+# The unconditioned estimates and their tests stay the main analysis. A significant call is flagged (stateflag_<quantity>_<mode> in BURST.CONTRASTS) when its
+# conditioned 95% interval contains zero and its change under conditioning excludes zero: the program carries it. For trans, mid and par that marks an effect
+# confounded with the culture; for total and cis, where both groups share a culture, an effect of the program itself. The figures draw flagged genes as open
+# triangles (STATE.PCH).
+STATE.PROGRAM <- c(YER065C = "ICL1", YNL117W = "MLS1", YCR005C = "CIT2", YOL126C = "MDH2", YAL054C = "ACS1", YKR009C = "FOX2", YMR303C = "ADH2",
+                   YLR174W = "IDP2", YKL217W = "JEN1", YOR374W = "ALD4",                                    # glucose derepression
+                   YFL014W = "HSP12", YBR072W = "HSP26", YDR171W = "HSP42", YLL026W = "HSP104", YGR088W = "CTT1", YBR126C = "TPS1", YDR074W = "TPS2",
+                   YLR258W = "GSY2", YOL151W = "GRE2", YER103W = "SSA4")                                    # induced stress response
+STATE.MEMBERS <- intersect(names(STATE.PROGRAM), rownames(MIX.SC))
+stopifnot("the program needs at least 10 of its marker genes in the data" = length(STATE.MEMBERS) >= 10, identical(rownames(HYB.SC), rownames(MIX.SC)))
+STATE.FLAG.SIG <- 0.05      # BH q-value of the unconditioned call that a flag reads
+N.COND.ARRAY   <- 4         # gene blocks of gene_cond.R, one array task each; gene_cond.sub runs --array=1-4
+
+## The program score's inputs per tube: each cell's summed count of the marker genes (both alleles in a hybrid cell) and its depth factor, named by barcode.
+## state_scores() builds each gene's score from them, leaving the gene's own count out when it is a marker.
+STATE.COND <- list(cells = list(Pc = list(total = colSums(MIX.SC[STATE.MEMBERS, , drop = FALSE]), lib = EXPO.MIX.SC),
+                                Pe = list(total = colSums(MIX.SE[STATE.MEMBERS, , drop = FALSE]), lib = EXPO.MIX.SE),
+                                H  = list(total = colSums(HYB.SC[STATE.MEMBERS, , drop = FALSE]) + colSums(HYB.SE[STATE.MEMBERS, , drop = FALSE]), lib = EXPO.HYB)),
+                   members = STATE.MEMBERS, pseudo = 0.5)
+STATE.SCORE.SUMMARY <- local({
+  out <- list()
+  for (tb in names(STATE.COND$cells)) {
+    sc <- log2(STATE.COND$cells[[tb]]$total + STATE.COND$pseudo) - log2(STATE.COND$cells[[tb]]$lib); sc <- sc - median(sc)
+    out[[tb]] <- data.frame(tube = tb, cells = length(sc), mean_count = mean(STATE.COND$cells[[tb]]$total), q90 = unname(quantile(sc, 0.9)),
+                            q99 = unname(quantile(sc, 0.99)), max = max(sc), row.names = NULL)
+  }
+  do.call(rbind, out)
+})
+cat("Program score per tube (log2, centred at the tube median):\n"); print(STATE.SCORE.SUMMARY, digits = 3, row.names = FALSE)
+
+## ---- Cluster round trip: Rscript gene_cond.R (job array over gene blocks) ----
+## gene_cond.R reads gene_cond_inputs.rda and writes gene_cond_output_<k>of<K>.rda (COND.CONTRASTS for gene block k, and COND.KEY). It uses the draws of
+## bootstrap replicate 1 (DRAWS.REPS[[1]]), so its unconditioned estimates are those of BURST.CONTRASTS and the paired changes compare the two fits on the same
+## cells. COND.KEY fingerprints the inputs.
+COND.KEY <- list(genes = GENES.INFER, n_draws = length(DRAWS.REPS[[1]]), members = STATE.MEMBERS, totals = vapply(STATE.COND$cells, function(x) sum(x$total), numeric(1)),
+                 blocks = N.COND.ARRAY)
+JOB.INPUTS <- list2env(list(CONTRAST.MATS = CONTRAST.MATS.INFER, CONTRAST.EXPOS = CONTRAST.EXPOS, GENES = GENES.INFER, DRAWS = DRAWS.REPS[[1]], SHARE.OBS = SHARE.OBS,
+                            SHARE.CELLS = SHARE.CELLS, GATES = GATES, STATE.COND = STATE.COND, COND.KEY = COND.KEY, N.COND.ARRAY = N.COND.ARRAY))
+save(list = ls(JOB.INPUTS), envir = JOB.INPUTS, file = file.path(INPUT.DIR, "gene_cond_inputs.rda"))
+COND.CONTRASTS <- local({
+  out <- list()
+  for (k in seq_len(N.COND.ARRAY)) {
+    file <- sprintf("gene_cond_output_%dof%d.rda", k, N.COND.ARRAY); env <- new.env()
+    load_cluster_output(file.path(OUTPUT.DIR, file), "gene_cond.R", envir = env)
+    check_cluster_key(env$COND.KEY, COND.KEY, file, "gene_cond.R")
+    out[[k]] <- env$COND.CONTRASTS
+  }
+  do.call(rbind, out)
+})
+stopifnot(identical(sort(COND.CONTRASTS$gene), sort(GENES.INFER)))
+COND.CONTRASTS <- COND.CONTRASTS[match(BURST.CONTRASTS$gene, COND.CONTRASTS$gene), ]; rownames(COND.CONTRASTS) <- NULL
+## ---- end cluster round trip ----
+
+## The unconditioned estimates of gene_cond.R are those of the reported bootstrap: same estimator, same cells.
+local({
+  dev <- max(abs((COND.CONTRASTS$cdisp_trans_est + COND.CONTRASTS$ddisp_trans_est) - BURST.CONTRASTS$disp_trans_est), na.rm = TRUE)
+  cat(sprintf("Largest difference between gene_cond.R's unconditioned trans dispersion and BURST.CONTRASTS: %.2e\n", dev))
+  stopifnot(dev < 1e-6)
+})
+
+## Flags. For every tested quantity (the log2 mean, the log2 and raw dispersion, burst size and kinetic balance) and mode: a significant unconditioned call
+## (BH q below STATE.FLAG.SIG) whose conditioned 95% bootstrap interval contains zero and whose paired change excludes zero.
+STATE.FLAG.QUANTITIES <- c("mean", "disp", "rdisp", "bsize", "kbal")
+BURST.CONTRASTS <- local({
+  bc <- BURST.CONTRASTS
+  for (q in STATE.FLAG.QUANTITIES) for (md in .OUT_MODES) {
+    sig   <- PR[[paste0(q, "_", md, "_q")]] < STATE.FLAG.SIG
+    cover <- COND.CONTRASTS[[paste0("c", q, "_", md, "_lo")]] <= 0 & COND.CONTRASTS[[paste0("c", q, "_", md, "_hi")]] >= 0
+    moved <- COND.CONTRASTS[[paste0("d", q, "_", md, "_lo")]] > 0 | COND.CONTRASTS[[paste0("d", q, "_", md, "_hi")]] < 0
+    bc[[paste0("stateflag_", q, "_", md)]] <- (sig & cover & moved) %in% TRUE
+  }
+  bc
+})
+## Per quantity and mode: the significant calls, the flagged ones, those whose conditioned interval still excludes zero, and the median change among the calls.
+## The flagged calls, one row per gene, quantity and mode, with both estimates and the change (STATE.FLAGGED).
+STATE.FLAG.TABLES <- local({
+  STATE.FLAG.SUMMARY <- list(); STATE.FLAGGED <- list()
+  for (q in STATE.FLAG.QUANTITIES) for (md in .OUT_MODES) {
+    sig <- (PR[[paste0(q, "_", md, "_q")]] < STATE.FLAG.SIG) %in% TRUE
+    lo <- COND.CONTRASTS[[paste0("c", q, "_", md, "_lo")]]; hi <- COND.CONTRASTS[[paste0("c", q, "_", md, "_hi")]]
+    fl <- BURST.CONTRASTS[[paste0("stateflag_", q, "_", md)]]
+    STATE.FLAG.SUMMARY[[paste(q, md)]] <- data.frame(quantity = q, mode = md, reading = if (md %in% c("total", "cis")) "program effect" else "culture-confounded",
+                                                     significant = sum(sig), flagged = sum(fl), survive_conditioning = sum(sig & ((lo > 0 | hi < 0) %in% TRUE)),
+                                                     median_change_sig = median(COND.CONTRASTS[[paste0("d", q, "_", md, "_est")]][sig], na.rm = TRUE), row.names = NULL)
+    i <- which(fl)
+    if (length(i)) STATE.FLAGGED[[paste(q, md)]] <- data.frame(
+      gene = BURST.CONTRASTS$gene[i], quantity = q, mode = md, estimate = BURST.CONTRASTS[[paste0(q, "_", md, "_est")]][i], q_value = PR[[paste0(q, "_", md, "_q")]][i],
+      conditioned = COND.CONTRASTS[[paste0("c", q, "_", md, "_est")]][i], conditioned_lo = lo[i], conditioned_hi = hi[i],
+      change = COND.CONTRASTS[[paste0("d", q, "_", md, "_est")]][i], change_lo = COND.CONTRASTS[[paste0("d", q, "_", md, "_lo")]][i],
+      change_hi = COND.CONTRASTS[[paste0("d", q, "_", md, "_hi")]][i], marker = BURST.CONTRASTS$gene[i] %in% STATE.MEMBERS, row.names = NULL)
+  }
+  STATE.FLAG.SUMMARY <- do.call(rbind, STATE.FLAG.SUMMARY); rownames(STATE.FLAG.SUMMARY) <- NULL
+  STATE.FLAGGED <- if (length(STATE.FLAGGED)) do.call(rbind, STATE.FLAGGED) else data.frame(gene = character(0)); rownames(STATE.FLAGGED) <- NULL
+  list(summary = STATE.FLAG.SUMMARY, flagged = STATE.FLAGGED)
+})
+STATE.FLAG.SUMMARY <- STATE.FLAG.TABLES$summary; STATE.FLAGGED <- STATE.FLAG.TABLES$flagged
+print(STATE.FLAG.SUMMARY, digits = 3, row.names = FALSE)
+write.csv(COND.CONTRASTS,     file.path(TABLE.DIR, "state_conditioned_contrasts.csv"), row.names = FALSE)
+write.csv(STATE.FLAG.SUMMARY, file.path(TABLE.DIR, "state_flag_summary.csv"),          row.names = FALSE)
+write.csv(STATE.FLAGGED,      file.path(TABLE.DIR, "state_flagged_calls.csv"),         row.names = FALSE)
+
+## Conditioned against unconditioned estimates of the noise contrasts, flagged calls as open triangles.
+fig_pdf("extra/S_state_conditioned_disp.pdf", 12, 8)
+par(mfrow = c(2, 3), mar = c(4.5, 4.5, 3, 1), pty = "s")
+local(for (md in .OUT_MODES) {
+  x <- BURST.CONTRASTS[[paste0("disp_", md, "_est")]]; y <- COND.CONTRASTS[[paste0("cdisp_", md, "_est")]]; fl <- BURST.CONTRASTS[[paste0("stateflag_disp_", md)]]
+  ok <- is.finite(x) & is.finite(y); lim <- range(c(x[ok], y[ok]))
+  plot(x[ok], y[ok], pch = ifelse(fl[ok], STATE.PCH[["flagged"]], STATE.PCH[["unflagged"]]), cex = 0.5, col = ifelse(fl[ok], COLOR.ACCENT, adjustcolor(COLOR.GREY[["dark"]], 0.4)),
+       xlim = lim, ylim = lim, xlab = "dispersion contrast (log2)", ylab = "state-conditioned (log2)", main = sprintf("%s: %d flagged", md, sum(fl[ok])))
+  abline(0, 1, lty = 3, col = COLOR.GREY[["mid"]]); abline(h = 0, v = 0, col = COLOR.GREY[["mid"]])
+})
+dev.off()
+
 ## 2.6 Check of the hybrid normalization
 # Both hybrid alleles are offset by S_H / 2 and the summed hybrid by S_H, so the mean rate of the summed fit equals the
 # average of the two allele rates exactly. The mid and par mean contrasts read that average. The table gives the largest
@@ -1054,6 +1175,7 @@ save(GENES, GENES.INFER, GENE.TABLE, SPLIT.FITS.W, CONTRAST.FITS.INFER, PLOIDY.S
      WEIGHT.CHECK, ALLELE.DISP,
      N.COEXPR, SEED.COEXPR,
      SPLIT.IDX.MEAN, SPLIT.IDX.DISP, SPLIT.IDX.KBAL, SPLIT.IDX.BSIZE, SPLIT.FRAC, PILOT.RESOLVED, PARTITION.REPORT, PILOT.LOGPHI.SE, APPENDIX.B, ROUTE.CHECK, PHI.MU.COR,
+     STATE.PROGRAM, STATE.MEMBERS, STATE.COND, STATE.SCORE.SUMMARY, COND.CONTRASTS, STATE.FLAG.SUMMARY, STATE.FLAGGED, STATE.FLAG.SIG,
      file = ckpt_path(2))
 
 console_start(3)
