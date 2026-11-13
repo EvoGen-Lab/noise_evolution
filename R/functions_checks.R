@@ -1166,3 +1166,26 @@ state_assign <- function(z, thr, cycle_levels) {
              stress     = factor(ifelse(z[, "Stressed"] > thr, "Stressed", "Unstressed"), levels = c("Unstressed", "Stressed")),
              row.names  = rownames(z))
 }
+
+## module_z: depth-aware z of one module's summed counts per cell, within one group. The score is L = log2((T + pseudo) / s), with T the module sum
+## and s the cell's depth factor. Counting noise gives L a variance of about v = 1 / ((E + pseudo) ln(2)^2), where E = 2^m s is the count expected
+## at the group median m of L, so a shallow cell's score is noisier. The biological variance tau2 is the extra variance that brings the standardized
+## residuals (L - m) / sqrt(tau2 + v) to a median absolute value of qnorm(0.75), that of a unit normal; it is 0 when counting noise alone reaches it.
+## The median keeps a rare tail of cells from widening the scale it is measured against. z = (L - center) / sqrt(tau2 + v), the center being the
+## group median, or a pooled center when one is given. Returns z, tau2, the center and the median counting SD of a cell's score.
+module_z <- function(total, depth_factor, pseudo = 0.5, center = NULL) {
+  stopifnot(is.numeric(total), is.numeric(depth_factor), length(total) == length(depth_factor), length(total) > 2, all(is.finite(total)), all(total >= 0),
+            all(is.finite(depth_factor)), all(depth_factor > 0), is.numeric(pseudo), length(pseudo) == 1, pseudo > 0,
+            is.null(center) || (is.numeric(center) && length(center) == 1 && is.finite(center)))
+  L <- log2((total + pseudo) / depth_factor)
+  m <- median(L)
+  v <- 1 / ((2^m * depth_factor + pseudo) * log(2)^2)
+  excess <- function(t2) median(abs(L - m) / sqrt(t2 + v)) - qnorm(0.75)   # decreasing in t2
+  tau2 <- 0
+  if (excess(0) > 0) {
+    hi <- max(mad(L)^2, median(v), 1e-8)
+    while (excess(hi) > 0) hi <- 2 * hi
+    tau2 <- uniroot(excess, c(0, hi), tol = 1e-10)$root
+  }
+  list(z = (L - if (is.null(center)) m else center) / sqrt(tau2 + v), tau2 = tau2, center = if (is.null(center)) m else center, count_sd = median(sqrt(v)))
+}
