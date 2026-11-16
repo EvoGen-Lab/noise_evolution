@@ -41,7 +41,7 @@ ART.R11         <- 5        # T0 replicates that also get the T11 influence
 ART.THIN        <- 0.5      # T7a keep probability
 ART.N.CHUNKS    <- 48       # T0 gene chunks of the array
 ART.SCEN.REPS   <- 3        # replicates of scenarios A and B (T8)
-ART.LOCAL       <- FALSE    # TRUE runs the simulations here on a gene subset
+if (!exists("ART.LOCAL")) ART.LOCAL <- FALSE   # TRUE runs the simulations here on a gene subset (a value set before sourcing, as analysis/doc_checks.R does, is kept)
 ART.LOCAL.GENES <- 300
 ART.LOCAL.R     <- 50
 T2.FWER         <- 0.01

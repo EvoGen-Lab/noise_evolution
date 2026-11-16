@@ -15,9 +15,9 @@ library(parallel)
 
 CHECK.SCRIPT <- "analysis/checks/checks_sim.R"
 CORES        <- if (.Platform$OS.type == "windows") 1 else max(1, detectCores() - 1)   # mclapply forks, so Windows runs on one core
-CHECK.SIZE   <- 1
+if (!exists("CHECK.SIZE")) CHECK.SIZE <- 1   # a value set before sourcing (analysis/doc_checks.R) is kept
 SEED.CHECKS  <- 2026
-RUN.CHECKS   <- c("A2", "A1", "A7", "A9", "A10", "B2", "B3", "B4", "E1", "F1", "F2", "F3", "F4", "C4", "A4", "E3", "D5", "D6", "CAL", "CALMERGE")
+if (!exists("RUN.CHECKS")) RUN.CHECKS <- c("A2", "A1", "A7", "A9", "A10", "B2", "B3", "B4", "E1", "F1", "F2", "F3", "F4", "C4", "A4", "E3", "D5", "D6", "CAL", "CALMERGE")
 set.seed(SEED.SECTION + 20)
 
 ## The observed design: offsets, hybrid depth factors and libraries, c-bar and sigma2_c from the Section 2 checkpoint when it exists.

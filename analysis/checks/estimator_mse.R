@@ -39,7 +39,7 @@ MSE.MIN.CELLS  <- 50                      # this many cells with a count in its 
 MSE.FAMILIES   <- c("gamma", "lognormal", "bimodal")
 MSE.GROUPS     <- c("Pc", "Pe", "H")
 MSE.PLOT.SCALE <- "relative"              # "relative" or "raw"
-MSE.RUN        <- c("M1", "M2", "M3")     # which parts to run; M2 and M3 need only the ranges, not M1
+if (!exists("MSE.RUN")) MSE.RUN <- c("M1", "M2", "M3")   # which parts to run; M2 and M3 need only the ranges, not M1 (a value set before sourcing is kept)
 set.seed(SEED.SECTION + 25)
 
 stopifnot("estimator_mse.R needs the Section 1 checkpoint" = file.exists(ckpt_path(1)))

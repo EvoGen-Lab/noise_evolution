@@ -1167,25 +1167,104 @@ state_assign <- function(z, thr, cycle_levels) {
              row.names  = rownames(z))
 }
 
-## module_z: depth-aware z of one module's summed counts per cell, within one group. The score is L = log2((T + pseudo) / s), with T the module sum
-## and s the cell's depth factor. Counting noise gives L a variance of about v = 1 / ((E + pseudo) ln(2)^2), where E = 2^m s is the count expected
-## at the group median m of L, so a shallow cell's score is noisier. The biological variance tau2 is the extra variance that brings the standardized
-## residuals (L - m) / sqrt(tau2 + v) to a median absolute value of qnorm(0.75), that of a unit normal; it is 0 when counting noise alone reaches it.
-## The median keeps a rare tail of cells from widening the scale it is measured against. z = (L - center) / sqrt(tau2 + v), the center being the
-## group median, or a pooled center when one is given. Returns z, tau2, the center and the median counting SD of a cell's score.
-module_z <- function(total, depth_factor, pseudo = 0.5, center = NULL) {
-  stopifnot(is.numeric(total), is.numeric(depth_factor), length(total) == length(depth_factor), length(total) > 2, all(is.finite(total)), all(total >= 0),
-            all(is.finite(depth_factor)), all(depth_factor > 0), is.numeric(pseudo), length(pseudo) == 1, pseudo > 0,
-            is.null(center) || (is.numeric(center) && length(center) == 1 && is.finite(center)))
-  L <- log2((total + pseudo) / depth_factor)
-  m <- median(L)
-  v <- 1 / ((2^m * depth_factor + pseudo) * log(2)^2)
-  excess <- function(t2) median(abs(L - m) / sqrt(t2 + v)) - qnorm(0.75)   # decreasing in t2
-  tau2 <- 0
-  if (excess(0) > 0) {
-    hi <- max(mad(L)^2, median(v), 1e-8)
-    while (excess(hi) > 0) hi <- 2 * hi
-    tau2 <- uniroot(excess, c(0, hi), tol = 1e-10)$root
+## ============================================================
+## Document checks run by analysis/doc_checks.R
+## ============================================================
+
+## dominance_bias_cell: one cell of DOM1, the bias of the dominance contrasts (mid, par_sc, par_se) and of the full-cell total, cis and trans contrasts when
+## the hybrid truly differs from its parents. Row i of grid gives the parental mean count per cell (mean), the dispersion (phi), the expression-factor
+## family and omega. Each of G genes draws its parental per-genome rates (the Sc rate at mean / mean offset times a lognormal spread of SD 0.3, the Se rate
+## 2^N(0, 0.7) times that) and dispersions (phi times the spread, Se 2^N(0, 0.5) times it), and its hybrid alleles depart from their parents by 2^N(0, 0.5)
+## in rate and in dispersion, so every dominance contrast has a known nonzero truth. The cells are one sim_design() of the observed design; the observed
+## shares give the share terms; every group is fitted with the pipeline's NB estimator and share corrections on all of its cells, and the contrasts are built
+## by .mode_contrasts() from the fits and from the true values (allele rates times their abundance factors, so the correction recovers them). Returns, per
+## quantity (mean, disp, bsize, kbal) and contrast, the mean of estimate - truth over genes with its SE, the SD over genes and bias / SD.
+dominance_bias_cell <- function(i, grid, pools, G, streams) with_stream(streams[[i]], {
+  g <- grid[i, ]
+  stopifnot(G >= 10, g$mean > 0, g$phi > 0)
+  ds <- sim_design(pools); st <- share_terms(ds$chat, ds$L); SR <- share_r_groups(st$r_c, st$r_e); cb <- st$cbar
+  modes <- c("total", "cis", "trans", "mid", "par_sc", "par_se")
+  est <- tru <- array(NA_real_, c(G, length(modes), 4), dimnames = list(NULL, modes, c("mean", "disp", "bsize", "kbal")))
+  for (j in seq_len(G)) {
+    s <- exp(rnorm(1, 0, 0.3)); mPc <- g$mean * s / mean(ds$O_Pc); mPe <- mPc * 2^rnorm(1, 0, 0.7)
+    pPc <- g$phi * exp(rnorm(1, 0, 0.3)); pPe <- pPc * 2^rnorm(1, 0, 0.5)
+    mu <- c(Pc = mPc, Pe = mPe, Hc = mPc * 2^rnorm(1, 0, 0.5), He = mPe * 2^rnorm(1, 0, 0.5))
+    phi <- c(Pc = pPc, Pe = pPe, Hc = pPc * 2^rnorm(1, 0, 0.5), He = pPe * 2^rnorm(1, 0, 0.5))
+    sim <- sim_hybrid_dataset(ds, mu, phi, omega = g$omega, family = g$family)
+    f <- list(MIX.SC = .fit_one(sim$y$Pc, sim$O$Pc), MIX.SE = .fit_one(sim$y$Pe, sim$O$Pe),
+              HYB.SC = .fit_one(sim$y$Hc, sim$O$Hc, SR[["HYB.SC"]]), HYB.SE = .fit_one(sim$y$He, sim$O$He, SR[["HYB.SE"]]))
+    gm <- lapply(f, function(x) unname(x[["mu"]])); gp <- lapply(f, function(x) unname(x[["disp"]]))
+    gm[c("HYC.SC", "HYT.SC", "HYC.SE", "HYT.SE")] <- gm[c("HYB.SC", "HYB.SC", "HYB.SE", "HYB.SE")]
+    gp[c("HYC.SC", "HYT.SC", "HYC.SE", "HYT.SE")] <- gp[c("HYB.SC", "HYB.SC", "HYB.SE", "HYB.SE")]
+    tm <- list(MIX.SC = mu[["Pc"]], MIX.SE = mu[["Pe"]], HYB.SC = 2 * cb * mu[["Hc"]], HYB.SE = 2 * (1 - cb) * mu[["He"]])
+    tp <- list(MIX.SC = phi[["Pc"]], MIX.SE = phi[["Pe"]], HYB.SC = phi[["Hc"]], HYB.SE = phi[["He"]])
+    tm[c("HYC.SC", "HYT.SC", "HYC.SE", "HYT.SE")] <- tm[c("HYB.SC", "HYB.SC", "HYB.SE", "HYB.SE")]
+    tp[c("HYC.SC", "HYT.SC", "HYC.SE", "HYT.SE")] <- tp[c("HYB.SC", "HYB.SC", "HYB.SE", "HYB.SE")]
+    oe <- .mode_contrasts(gm, gp, cb, modes); ot <- .mode_contrasts(tm, tp, cb, modes)
+    est[j, , ] <- cbind(oe[, "mean"], oe[, "disp"], oe[, "mean"] + oe[, "disp"], -oe[, "mean"] - 2 * oe[, "disp"])
+    tru[j, , ] <- cbind(ot[, "mean"], ot[, "disp"], ot[, "mean"] + ot[, "disp"], -ot[, "mean"] - 2 * ot[, "disp"])
   }
-  list(z = (L - if (is.null(center)) m else center) / sqrt(tau2 + v), tau2 = tau2, center = if (is.null(center)) m else center, count_sd = median(sqrt(v)))
-}
+  out <- list()
+  for (q in dimnames(est)[[3]]) for (md in modes) {
+    d <- est[, md, q] - tru[, md, q]; fin <- is.finite(d)
+    out[[paste(q, md)]] <- data.frame(g, quantity = q, contrast = md, genes = sum(fin), infinite = sum(!fin), bias = if (sum(fin) > 2) mean(d[fin]) else NA_real_,
+                                      bias_se = if (sum(fin) > 2) sd(d[fin]) / sqrt(sum(fin)) else NA_real_, sd = if (sum(fin) > 2) sd(d[fin]) else NA_real_, row.names = NULL)
+  }
+  out <- do.call(rbind, out); out$bias_over_sd <- out$bias / out$sd; out
+})
+
+## rare_cond_cell: one cell of M4, whether the state-conditioned layer (analysis.R Section 2.5) catches the false calls that a rare state makes (M3). Row
+## i of grid gives mu, phi, the rare-state frequency p, its fold J and the scenario: "shared" (the state at frequency p in every group, as in M3) or
+## "parents" (the state in the parents only, the two-culture case of the data). Each dataset draws the state per cell (once per hybrid cell), multiplies the
+## gene's expression factor by J in state cells, and draws the cell's program-module count (the 20 markers) at 40 counts per unit offset, J_mod times higher in
+## state cells, with a gamma noise of variance 0.3; the score is the log2 module count per unit offset centred at the tube's median (each parent separately),
+## as state_scores() builds it. The gene's true contrasts are all zero. Every group is fitted without and with the score (fit_dispersion(z = )), on all cells
+## and on B resamples (parents and undivided hybrid cells, cis or trans membership kept). The unconditioned log2 dispersion contrasts (total, cis, trans) are
+## tested with the shifted bootstrap null and the resolution rule, as the pipeline does; a significant call is flagged when the conditioned 95% percentile
+## interval contains zero and the interval of the paired change excludes zero. Returns, per contrast: the share tested, the type I error at 0.05, the share of
+## false calls flagged, the type I error after flagged calls are set aside, the coverage of zero by the conditioned interval, and the share of all datasets
+## flagged (the false-flag rate when p = 0).
+rare_cond_cell <- function(i, grid, expos, hyb_split, R, B, ext_share = 0.5, J_mod = 20, streams) with_stream(streams[[i]], {
+  g <- grid[i, ]
+  stopifnot(R >= 10, B >= 20, g$mu > 0, g$phi > 0, g$p >= 0, g$p < 1, g$J >= 1, g$scenario %in% c("shared", "parents"))
+  e1 <- expos$Pc; e2 <- expos$Pe; eH <- expos$H; n1 <- length(e1); n2 <- length(e2); nH <- length(eH); ic <- hyb_split$c; it <- hyb_split$t
+  s2d <- ext_share * g$phi; vq <- max((1 + g$phi) / (1 + s2d) - 1, 0)
+  cons <- c("total", "cis", "trans"); l2 <- function(x) ifelse(x == 0, -Inf, log2(x))
+  score <- function(k, e) { L <- log2(rpois(length(e), 40 * e * ifelse(k == 1, J_mod, 1) * sim_pos_factor(length(e), "gamma", 1, 0.3)) + 0.5) - log2(e); L - median(L) }
+  fitd <- function(y, e, z) if (is.null(z)) fit_dispersion(y, e, 0, "NB")[["disp"]] else fit_dispersion(y, e, 0, "NB", z = z)[["disp"]]
+  fit6 <- function(y, z, ix, cond) { zz <- function(v, j) if (cond) v[j] else NULL
+    c(Pc = fitd(y$Pc[ix$Pc], e1[ix$Pc], zz(z$Pc, ix$Pc)), Pe = fitd(y$Pe[ix$Pe], e2[ix$Pe], zz(z$Pe, ix$Pe)),
+      Hcc = fitd(y$Hc[ix$c], eH[ix$c], zz(z$H, ix$c)), Hec = fitd(y$He[ix$c], eH[ix$c], zz(z$H, ix$c)),
+      Hct = fitd(y$Hc[ix$t], eH[ix$t], zz(z$H, ix$t)), Het = fitd(y$He[ix$t], eH[ix$t], zz(z$H, ix$t))) }
+  contr <- function(f) { l <- l2(f); x <- c(l[["Pc"]] - l[["Pe"]], l[["Hcc"]] - l[["Hec"]], (l[["Pc"]] - l[["Pe"]]) - (l[["Hct"]] - l[["Het"]])); x[is.nan(x)] <- NA; x }
+  used <- list(total = c("Pc", "Pe"), cis = c("Hcc", "Hec"), trans = c("Pc", "Pe", "Hct", "Het"))
+  res <- array(NA_real_, c(length(cons), R, 4), dimnames = list(cons, NULL, c("p", "tested", "flag", "cover")))
+  for (r in seq_len(R)) {
+    k1 <- rbinom(n1, 1, g$p); k2 <- rbinom(n2, 1, g$p); kH <- if (g$scenario == "shared") rbinom(nH, 1, g$p) else integer(nH)
+    d <- sim_pos_factor(nH, "gamma", 1, s2d) * ifelse(kH == 1, g$J, 1)
+    y <- list(Pc = rpois(n1, g$mu * e1 * sim_pos_factor(n1, "gamma", 1, g$phi) * ifelse(k1 == 1, g$J, 1)),
+              Pe = rpois(n2, g$mu * e2 * sim_pos_factor(n2, "gamma", 1, g$phi) * ifelse(k2 == 1, g$J, 1)),
+              Hc = rpois(nH, g$mu * eH * d * sim_pos_factor(nH, "gamma", 1, vq)), He = rpois(nH, g$mu * eH * d * sim_pos_factor(nH, "gamma", 1, vq)))
+    z <- list(Pc = score(k1, e1), Pe = score(k2, e2), H = score(kH, 2 * eH))
+    draws <- lapply(seq_len(B), function(b) { h <- sample.int(nH, nH, replace = TRUE)
+      list(Pc = sample.int(n1, n1, replace = TRUE), Pe = sample.int(n2, n2, replace = TRUE), c = h[h %in% ic], t = h[h %in% it]) })
+    all_ix <- list(Pc = seq_len(n1), Pe = seq_len(n2), c = ic, t = it)
+    fu <- fit6(y, z, all_ix, FALSE); ou <- contr(fu); oc <- contr(fit6(y, z, all_ix, TRUE))
+    bu <- vapply(draws, fit6, numeric(6), y = y, z = z, cond = FALSE); bc <- vapply(draws, fit6, numeric(6), y = y, z = z, cond = TRUE)
+    cu <- apply(bu, 2, contr); cc <- apply(bc, 2, contr); zero <- rowMeans(bu == 0, na.rm = TRUE)
+    for (j in seq_along(cons)) {
+      gr <- used[[cons[j]]]; ok <- isTRUE(all(fu[gr] > 0)) && all(zero[gr] <= RESOLVED.ZERO.MAX)
+      pv <- if (ok) perm_pval(ou[j], cu[j, ] - ou[j]) else NA_real_
+      ci <- quantile(cc[j, ], c(0.025, 0.975), type = 1, na.rm = TRUE, names = FALSE)
+      di <- quantile(cu[j, ] - cc[j, ], c(0.025, 0.975), type = 1, na.rm = TRUE, names = FALSE)
+      cover <- isTRUE(ci[1] <= 0 && ci[2] >= 0)
+      res[j, r, ] <- c(pv, ok, isTRUE(ok && pv < 0.05 && cover && (di[1] > 0 || di[2] < 0)), cover)
+    }
+  }
+  do.call(rbind, lapply(cons, function(cn) {
+    x <- res[cn, , ]; t <- x[, "tested"] == 1; rej <- t & x[, "p"] < 0.05; nt <- sum(t)
+    data.frame(g, contrast = cn, datasets = R, tested = mean(t), type1_05 = mean(x[t, "p"] < 0.05), type1_05_se = binom_se(mean(x[t, "p"] < 0.05), nt),
+               flagged_of_false_calls = if (sum(rej)) mean(x[rej, "flag"] == 1) else NA_real_,
+               type1_05_unflagged = mean(rej[t] & x[t, "flag"] == 0), cond_cover0 = mean(x[, "cover"] == 1), flag_rate = mean(x[, "flag"] == 1), row.names = NULL)
+  }))
+})
