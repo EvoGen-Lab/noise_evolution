@@ -107,4 +107,23 @@ stopifnot(all(abs(cc1$cbeta_MIX.SC - 1) < 0.25))
 BCx <- data.frame(gene = 1:3, stateflag_disp_trans = c(TRUE, NA, FALSE), stateflag_disp_cis = c(FALSE, FALSE, TRUE))
 stopifnot(identical(state_flag_vec(BCx, "disp", c("cis", "trans")), c(TRUE, FALSE, TRUE)), !any(state_flag_vec(BCx, "mean", "cis")))
 
+## ---- Section 7 state scores and the pipeline's data checks ----
+## module_z_matrix(): planted program cells score above 2.5 and the rest do not; a module without enough genes stops the call
+set.seed(31)
+nC <- 400; gm <- paste0("m", 1:60); lib <- rlnorm(nC, 8, 0.4); prog <- runif(nC) < 0.05
+mu <- matrix(rgamma(60, 2, 1), 60, nC); mu[1:10, prog] <- mu[1:10, prog] * 20
+cnt <- matrix(rpois(60 * nC, mu * lib / median(lib)), 60, nC, dimnames = list(gm, paste0("c", 1:nC)))
+zz <- module_z_matrix(cnt, lib / median(lib), list(Program = gm[1:10], Other = gm[11:30]))
+stopifnot(all(zz[prog, "Program"] > 2.5), mean(zz[!prog, "Program"] > 2.5) < 0.01, inherits(try(module_z_matrix(cnt, lib, list(A = c("x", "y"))), silent = TRUE), "try-error"))
+## nb_dropout_aic(): NB counts do not favour a dropout term; counts with 15% added zeros do, and pi is recovered
+e <- rlnorm(1500, 0, 0.5)
+nb <- replicate(20, nb_dropout_aic(rnbinom(1500, mu = 1.5 * e, size = 3), e)[["dAIC"]])
+zi <- t(replicate(20, { y <- rnbinom(1500, mu = 1.5 * e, size = 3); y[runif(1500) < 0.15] <- 0; nb_dropout_aic(y, e) }))
+stopifnot(mean(nb > 2) <= 0.1, mean(zi[, "dAIC"] > 2) >= 0.9, abs(median(zi[, "pi"]) - 0.15) < 0.03)
+## struct_coupling_row(): independent mean and dispersion contrasts give excess intervals that cover zero
+Gs <- 800; tm <- rnorm(Gs); td <- rnorm(Gs, 0, 0.7)
+BCs <- data.frame(gene = 1:Gs, mean_total_est = tm + rnorm(Gs, 0, 0.1), mean_total_se = 0.1, disp_total_est = td + rnorm(Gs, 0, 0.4), disp_total_se = 0.4, cor_total = 0)
+sc <- struct_coupling_row("total", BCs, B = 200)
+stopifnot(sc$disp_bsize_lo <= 0, sc$disp_bsize_hi >= 0, sc$mean_kbal_lo <= 0, sc$mean_kbal_hi >= 0)
+
 cat("state-conditioned checks passed\n")

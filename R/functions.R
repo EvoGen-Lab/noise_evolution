@@ -92,13 +92,15 @@
 ###     n_sig_terms() - Counts significant terms (q < threshold) in one enrichResult, 0 for a NULL or empty result.
 ###     print_enrich_brief() - Console view of one enrichResult: Description, p.adjust and Count for the n_top most significant terms.
 ###     plot_cluster_marker_enrichment() - Writes cluster_marker_enrichment()'s per-cluster up/down enrichment to one pdf (its bar-pair helper is nested inside).
-###     score_cell_cycle_by_cluster() - Cell-cycle phase scoring (CellCycleScoring()/AddModuleScore()) extended to a dataset's own validated clustering; violin plot, phase-composition-by-cluster barplot, and console table.
 ###     go_gene_set() - Pulls all genes (including descendant terms) annotated to a GO term from org.Sc.sgd.db, for building an independently-sourced module-score gene set.
-###     score_modules_by_cluster() - Continuous module-score validation (AddModuleScore()) of a cluster's marker-based identity against named, independently-sourced gene sets; violin plot, per-cluster mean +/- SE barplot, and console table.
-###     cell_cycle_continuum() - Single continuous cell-cycle axis, first PC of S.Score/G2M.Score.
+###     marker_orfs() - The first n of an ordered list of gene symbols whose ORF is in the data (CELL.CYCLE.CANDIDATES).
+###     module_z() - Depth-aware z of one module's summed counts per cell: distance from the group median over counting plus biological SD.
+###     module_z_matrix() - module_z() for every module of a named list of gene sets, as a cells x modules matrix.
+###     add_state_scores() - Adds the module z-scores and the cell-cycle phase (highest phase z) to a Seurat object; violin plot, phase and module tables by cluster.
+###     cell_cycle_continuum() - Single continuous cell-cycle axis, first PC of the G1/S and G2/M phase z-scores.
 ###     cell_cycle_continuum_shared() - Two-object version of cell_cycle_continuum(), pooled PCA so between-object means are comparable.
-###     metabolic_state_cluster() - Discrete metabolic state from joint k-means clustering on the Glycolysis/OXPHOS/RiBi module scores, k chosen by silhouette.
-###     covariate_noise_diagnostic() - Per-gene test of whether NB Pearson residual noise depends on cell-cycle position (Spearman) or metabolic state (Kruskal-Wallis, eta-squared).
+###     metabolic_state_cluster() - Discrete metabolic state from joint k-means clustering on the glycolysis, OXPHOS, ribosome biogenesis and program z-scores, k chosen by silhouette.
+###     covariate_noise_diagnostic() - Per-gene test of whether NB Pearson residual noise depends on cell-cycle position (Spearman), metabolic state (Kruskal-Wallis, eta-squared) or the derepression and stress program (Spearman).
 ###     plot_covariate_noise_diagnostic() - Histogram pair of covariate_noise_diagnostic()'s per-gene effect sizes.
 ###     species_composition_report() - Runs the Cohen's d / rank-sum bound across the cell-cycle axis and the three metabolic module scores for one species/allele pair.
 ###   9. PUBLICATION FIGURES
@@ -1872,31 +1874,6 @@ plot_cluster_marker_enrichment <- function(res, label, pdf_path, width = 7, heig
   }
 }
 
-## score_cell_cycle_by_cluster: cell-cycle phase scoring on a dataset's own validated
-## clustering (Idents already set, e.g. YSC$MIX.SE, YSC$HYB.SC, YSC$HYB.SE). Scores the
-## curated yeast regulons (S.GENES/G2M.GENES/MG1.GENES) with CellCycleScoring()/
-## AddModuleScore(), draws a violin plot and a phase-composition-by-cluster barplot, and
-## prints the phase table as a quantitative check of a GO-based reading of each cluster.
-## Returns obj with S.Score/G2M.Score/MG1.Score1/Phase added, for the caller to reassign
-## (e.g. YSC$MIX.SE <- score_cell_cycle_by_cluster(YSC$MIX.SE, ...)).
-score_cell_cycle_by_cluster <- function(obj, label, pdf_path, s_genes = S.GENES, g2m_genes = G2M.GENES, mg1_genes = MG1.GENES, width = 9, height = 8) {
-  obj <- suppressWarnings(suppressMessages(CellCycleScoring(obj, s.features = s_genes, g2m.features = g2m_genes)))
-  obj <- suppressWarnings(suppressMessages(AddModuleScore(obj, features = list(mg1_genes), name = "MG1.Score")))
-
-  pdf(pdf_path, width = width, height = height, useDingbats = FALSE)
-  on.exit(dev.off(), add = TRUE)
-  par(mfrow = c(1, 1))
-  print(suppressWarnings(VlnPlot(obj, features = c("S.Score", "G2M.Score", "MG1.Score1"), ncol = 1, pt.size = 0, cols = colorRampPalette(COLOR.CLUSTER)(nlevels(Idents(obj))))))
-
-  phase_by_cluster <- prop.table(table(Idents(obj), obj$Phase), margin = 1)
-  barplot(t(phase_by_cluster), col = COLOR.PHASE[colnames(phase_by_cluster)],
-          legend.text = TRUE, args.legend = list(x = "topright", bty = "n"),
-          las = 2, ylab = "fraction of cells", main = sprintf("%s: cell-cycle phase composition by cluster", label))
-
-  cat(sprintf("%s: cell-cycle phase composition by cluster\n", label)); print(round(phase_by_cluster, 3))
-  obj
-}
-
 ## go_gene_set: all genes annotated to a GO biological-process term, including descendant
 ## terms (GOALL), from org.Sc.sgd.db, the annotation source used for every enrichment test in
 ## this pipeline. Gene sets drawn from the annotation are independent of any cluster's own
@@ -1905,54 +1882,105 @@ go_gene_set <- function(go_id, orgdb = org.Sc.sgd.db) {
   unique(AnnotationDbi::select(orgdb, keys = go_id, keytype = "GOALL", columns = "ORF")$ORF)
 }
 
-## score_modules_by_cluster: continuous module-score validation, the counterpart of
-## score_cell_cycle_by_cluster() for gene sets without discrete phases (e.g. glycolysis,
-## oxidative phosphorylation, ribosome biogenesis). Scores obj with AddModuleScore() for each
-## named set in gene_sets, draws a violin plot per module and a per-cluster mean +/- SE
-## barplot, so a qualitative GO-term reading of a cluster's markers can be checked against
-## independently sourced scores. gene_sets is a named list (e.g. list(Glycolysis =
-## go_gene_set("GO:0006096"), ...)); names become the AddModuleScore() name prefix and the
-## plot labels.
-score_modules_by_cluster <- function(obj, gene_sets, label, pdf_path, width = 9, height = 8) {
-  score_names <- paste0(names(gene_sets), "1")
-  for (i in seq_along(gene_sets)) obj <- suppressWarnings(suppressMessages(AddModuleScore(obj, features = list(gene_sets[[i]]), name = names(gene_sets)[i])))
+## CELL.CYCLE.CANDIDATES: ordered marker candidates (gene symbols) of the four cell-cycle waves (Spellman et al. 1998): G1S, the SBF/MBF wave of the
+## CLN2 cluster; S, the histone genes; G2M, the CLB2 cluster, which includes SWI5 and ACE2, transcribed in G2/M; MG1, the SIC1 cluster with the
+## daughter-specific targets of Ace2. marker_orfs() keeps the first CELL.CYCLE.N of each whose ORF is in the data, so a gene without a one-to-one
+## ortholog passes to the next candidate. analysis/checks/state_groups.R reads the same lists.
+CELL.CYCLE.CANDIDATES <- list(
+  G1S = c("CLN1", "CLN2", "PCL1", "CLB5", "CLB6", "RNR1", "CDC21", "POL30", "RAD27", "RFA1", "CDC45", "POL1", "POL12", "MRC1"),
+  S   = c("HTA1", "HTA2", "HTB1", "HTB2", "HHT1", "HHT2", "HHF1", "HHF2", "HHO1"),
+  G2M = c("CLB1", "CLB2", "CDC5", "CDC20", "SWI5", "ACE2", "BUD4", "CHS2", "MOB1", "KIP2"),
+  MG1 = c("SIC1", "PCL9", "ASH1", "CDC6", "EGT2", "CTS1", "DSE1", "DSE2", "SCW11", "AMN1"))
+CELL.CYCLE.N <- 10
+
+## marker_orfs: the first n symbols of an ordered candidate list whose ORF (org.Sc.sgd.db, GENENAME to ORF) is among present (the genes of the data).
+marker_orfs <- function(symbols, present, n = CELL.CYCLE.N, orgdb = org.Sc.sgd.db) {
+  stopifnot(is.character(symbols), length(symbols) >= 1, is.character(present), is.numeric(n), length(n) == 1, n >= 1)
+  orf <- suppressMessages(AnnotationDbi::mapIds(orgdb, keys = symbols, keytype = "GENENAME", column = "ORF", multiVals = "first"))
+  head(unique(orf[!is.na(orf) & orf %in% present]), n)
+}
+
+## module_z: depth-aware z of one module's summed counts per cell, within one group (Section 7.6 and analysis/checks/state_groups.R). The score is L = log2((T + pseudo) / s), with T the module sum
+## and s the cell's depth factor. Counting noise gives L a variance of about v = 1 / ((E + pseudo) ln(2)^2), where E = 2^m s is the count expected
+## at the group median m of L, so a shallow cell's score is noisier. The biological variance tau2 is the extra variance that brings the standardized
+## residuals (L - m) / sqrt(tau2 + v) to a median absolute value of qnorm(0.75), that of a unit normal; it is 0 when counting noise alone reaches it.
+## The median keeps a rare tail of cells from widening the scale it is measured against. z = (L - center) / sqrt(tau2 + v), the center being the
+## group median, or a pooled center when one is given. Returns z, tau2, the center and the median counting SD of a cell's score.
+module_z <- function(total, depth_factor, pseudo = 0.5, center = NULL) {
+  stopifnot(is.numeric(total), is.numeric(depth_factor), length(total) == length(depth_factor), length(total) > 2, all(is.finite(total)), all(total >= 0),
+            all(is.finite(depth_factor)), all(depth_factor > 0), is.numeric(pseudo), length(pseudo) == 1, pseudo > 0,
+            is.null(center) || (is.numeric(center) && length(center) == 1 && is.finite(center)))
+  L <- log2((total + pseudo) / depth_factor)
+  m <- median(L)
+  v <- 1 / ((2^m * depth_factor + pseudo) * log(2)^2)
+  excess <- function(t2) median(abs(L - m) / sqrt(t2 + v)) - qnorm(0.75)   # decreasing in t2
+  tau2 <- 0
+  if (excess(0) > 0) {
+    hi <- max(mad(L)^2, median(v), 1e-8)
+    while (excess(hi) > 0) hi <- 2 * hi
+    tau2 <- uniroot(excess, c(0, hi), tol = 1e-10)$root
+  }
+  list(z = (L - if (is.null(center)) m else center) / sqrt(tau2 + v), tau2 = tau2, center = if (is.null(center)) m else center, count_sd = median(sqrt(v)))
+}
+
+## module_z_matrix: module_z() for each named gene set of sets on one group's counts (genes x cells, both alleles summed for a hybrid cell, so the state
+## is the cell's), as a cells x modules matrix of z-scores. depth_factor is each cell's library over the reference depth; a set's genes absent from mat
+## are dropped, and a set with fewer than min_genes genes left stops the call.
+module_z_matrix <- function(mat, depth_factor, sets, pseudo = 0.5, min_genes = 3) {
+  stopifnot(is.list(sets), !is.null(names(sets)), ncol(mat) == length(depth_factor))
+  sets <- lapply(sets, intersect, rownames(mat))
+  if (any(lengths(sets) < min_genes)) stop(sprintf("module_z_matrix(): fewer than %d genes in the data for %s", min_genes, paste(names(sets)[lengths(sets) < min_genes], collapse = ", ")))
+  z <- vapply(sets, function(m) module_z(colSums(mat[m, , drop = FALSE]), depth_factor, pseudo)$z, numeric(ncol(mat)))
+  rownames(z) <- colnames(mat)
+  z
+}
+
+## add_state_scores: adds the module z-scores of one dataset (module_z_matrix(), cells x modules) to its Seurat object as <module>.z, with Phase, the
+## cell-cycle wave whose z is highest (every cell is at some phase). Draws a violin plot of every z by cluster and the phase composition of each cluster,
+## and prints the phase composition and the mean z of every module by cluster, so the clusters can be named by state. Returns obj.
+add_state_scores <- function(obj, z, label, pdf_path, cycle_levels = names(CELL.CYCLE.CANDIDATES), width = 9, height = 8) {
+  stopifnot(is.matrix(z), all(cycle_levels %in% colnames(z)), all(Cells(obj) %in% rownames(z)))
+  z <- z[Cells(obj), , drop = FALSE]
+  for (m in colnames(z)) obj[[paste0(m, ".z")]] <- z[, m]
+  obj$Phase <- factor(cycle_levels[max.col(z[, cycle_levels, drop = FALSE], ties.method = "first")], levels = cycle_levels)
 
   pdf(pdf_path, width = width, height = height, useDingbats = FALSE)
   on.exit(dev.off(), add = TRUE)
-  par(mfrow = c(1, 1))
-  print(suppressWarnings(VlnPlot(obj, features = score_names, ncol = 1, pt.size = 0, cols = colorRampPalette(COLOR.CLUSTER)(nlevels(Idents(obj))))))
-
-  cl    <- Idents(obj)
-  sc    <- as.data.frame(obj[[score_names]])
-  means <- sapply(sc, tapply, cl, mean)
-  ses   <- sapply(sc, tapply, cl, sd) / sqrt(sapply(sc, tapply, cl, length))
-
-  par(mfrow = c(1, length(score_names)), mar = c(5, 4.5, 3, 1))
-  for (i in seq_along(score_names)) {
-    b <- barplot(means[, i], ylim = range(c(means[, i] - ses[, i], means[, i] + ses[, i])),
-                 main = sprintf("%s: %s", label, names(gene_sets)[i]), ylab = "mean module score", las = 2)
-    arrows(b, means[, i] - ses[, i], b, means[, i] + ses[, i], angle = 90, code = 3, length = 0.05)
-  }
-
-  cat(sprintf("%s: mean module score by cluster\n", label)); print(round(means, 3))
+  print(suppressWarnings(VlnPlot(obj, features = paste0(colnames(z), ".z"), ncol = 2, pt.size = 0, cols = colorRampPalette(COLOR.CLUSTER)(nlevels(Idents(obj))))))
+  phase_by_cluster <- prop.table(table(Idents(obj), obj$Phase), margin = 1)
+  barplot(t(phase_by_cluster), col = COLOR.PHASE[colnames(phase_by_cluster)], legend.text = TRUE, args.legend = list(x = "topright", bty = "n"),
+          las = 2, ylab = "fraction of cells", main = sprintf("%s: cell-cycle phase composition by cluster", label))
+  cat(sprintf("%s: cell-cycle phase composition by cluster\n", label)); print(round(phase_by_cluster, 3))
+  cat(sprintf("%s: mean module z by cluster\n", label)); print(round(apply(z, 2, tapply, Idents(obj), mean), 3))
   obj
 }
 
-## ============================================================
-## 8g. Covariate-noise diagnostic: does per-cell NB noise track
-## cell-cycle position or metabolic state?
-## ============================================================
+## state_cluster_table: one row per cluster of a dataset's final clustering (Idents) with its cell count, the share of its cells in each cell-cycle
+## phase, the share whose program z (Program.z) exceeds thr, and the mean z of every module, so each cluster can be named by the states it holds.
+## obj must carry add_state_scores()'s columns.
+state_cluster_table <- function(obj, dataset, thr = 2.5, cycle_levels = names(CELL.CYCLE.CANDIDATES)) {
+  stopifnot(is.numeric(thr), length(thr) == 1, "Program.z" %in% colnames(obj[[]]), "Phase" %in% colnames(obj[[]]))
+  cl <- Idents(obj); md <- obj[[]]
+  zc <- grep("\\.z$", colnames(md), value = TRUE)
+  ph <- prop.table(table(cl, factor(md$Phase, levels = cycle_levels)), margin = 1)
+  out <- data.frame(dataset = dataset, cluster = levels(cl), cells = as.vector(table(cl)), row.names = NULL)
+  for (p in cycle_levels) out[[paste0("phase_", p)]] <- as.vector(ph[, p])
+  out$program_high <- as.vector(tapply(md$Program.z > thr, cl, mean))
+  for (z in zc) out[[paste0("mean_", z)]] <- as.vector(tapply(md[[z]], cl, mean))
+  out
+}
+
 ## cell_cycle_continuum(obj): one continuous cell-cycle position per cell.
-## S.Score and G2M.Score from CellCycleScoring() trace a roughly circular
+## The G1/S and G2/M phase z-scores (add_state_scores()) trace a roughly circular
 ## path through the cycle, so their first principal component is the closest
 ## one-dimensional summary. A rank correlation against this axis is
 ## unchanged by per-object recentering or rescaling. Returns a named numeric
 ## vector, one value per cell
 cell_cycle_continuum <- function(obj) {
-  missing <- setdiff(c("S.Score", "G2M.Score"), colnames(obj[[]]))
+  missing <- setdiff(c("G1S.z", "G2M.z"), colnames(obj[[]]))
   if (length(missing) > 0)
-    stop(sprintf("cell_cycle_continuum(): %s not found; run score_cell_cycle_by_cluster() (or CellCycleScoring()) on this object first and reassign its result", paste(missing, collapse = ", ")))
-  sc  <- obj[[c("S.Score", "G2M.Score")]]
+    stop(sprintf("cell_cycle_continuum(): %s not found; run add_state_scores() on this object first and reassign its result", paste(missing, collapse = ", ")))
+  sc  <- obj[[c("G1S.z", "G2M.z")]]
   pc1 <- prcomp(sc, scale. = TRUE)$x[, 1]
   setNames(pc1, rownames(sc))
 }
@@ -1960,22 +1988,22 @@ cell_cycle_continuum <- function(obj) {
 ## cell_cycle_continuum_shared(obj1, obj2): cell-cycle axis for comparing two
 ## objects (used by species_composition_bound() in 8h). prcomp() centers its
 ## scores to mean zero, so each object's separately fitted axis has mean zero
-## by construction. One PCA on the pooled S.Score/G2M.Score of both objects,
+## by construction. One PCA on the pooled G1S.z/G2M.z of both objects,
 ## with each object's cells projected onto the shared PC1, puts both on one
 ## scale so a difference in cell-cycle composition shows up as a difference
 ## in means. Use cell_cycle_continuum() for the within-object correlation
 ## test in 8g. Returns list(x1, x2), named by cell
 cell_cycle_continuum_shared <- function(obj1, obj2) {
-  sc1    <- obj1[[c("S.Score", "G2M.Score")]]
-  sc2    <- obj2[[c("S.Score", "G2M.Score")]]
+  sc1    <- obj1[[c("G1S.z", "G2M.z")]]
+  sc2    <- obj2[[c("G1S.z", "G2M.z")]]
   scores <- prcomp(rbind(sc1, sc2), scale. = TRUE)$x[, 1]
   list(x1 = setNames(scores[seq_len(nrow(sc1))], rownames(sc1)),
        x2 = setNames(scores[(nrow(sc1) + 1):length(scores)], rownames(sc2)))
 }
 
 ## metabolic_state_cluster(obj): discrete metabolic state per cell from the
-## continuous module scores of score_modules_by_cluster() (e.g.
-## Glycolysis1/OXPHOS1/RiBi1). A cell can sit high on several pathways at
+## continuous module z-scores of add_state_scores() (e.g.
+## Glycolysis.z/OXPHOS.z/RiBi.z/Program.z). A cell can sit high on several pathways at
 ## once, so k-means on all scores jointly captures states defined by a
 ## combination that per-pathway thresholds would miss. k-means is fit once for every k in
 ## k_range (nstart = 10 random starts each) and the fit with the highest mean silhouette
@@ -1984,10 +2012,10 @@ cell_cycle_continuum_shared <- function(obj1, obj2) {
 ## and the caller's random number state is restored on exit, so the states are the same on
 ## every run and the function does not move any other draw.
 ## Returns a factor of state labels, one per cell
-metabolic_state_cluster <- function(obj, score_names = c("Glycolysis1", "OXPHOS1", "RiBi1"), k_range = 2:4, seed = 1) {
+metabolic_state_cluster <- function(obj, score_names = c("Glycolysis.z", "OXPHOS.z", "RiBi.z", "Program.z"), k_range = 2:4, seed = 1) {
   missing <- setdiff(score_names, colnames(obj[[]]))
   if (length(missing) > 0)
-    stop(sprintf("metabolic_state_cluster(): %s not found; run score_modules_by_cluster() on this object first and reassign its result", paste(missing, collapse = ", ")))
+    stop(sprintf("metabolic_state_cluster(): %s not found; run add_state_scores() on this object first and reassign its result", paste(missing, collapse = ", ")))
   scores <- scale(as.matrix(obj[[score_names]]))
   stopifnot(is.numeric(seed), length(seed) == 1, is.finite(seed),
             is.numeric(k_range), length(k_range) >= 1, all(k_range >= 2), all(k_range < nrow(scores)))
@@ -2005,14 +2033,17 @@ metabolic_state_cluster <- function(obj, score_names = c("Glycolysis1", "OXPHOS1
 ## explains, so a small effect size means unmodelled cell state contributes
 ## little to the measured noise. Cell-cycle axis: per-gene Spearman rho and
 ## BH q. Metabolic state: per-gene Kruskal-Wallis BH q and eta-squared
-## (fraction of residual variance explained by state). The fit is not
+## (fraction of residual variance explained by state). program, when given, is
+## each cell's derepression and stress program z (the covariate of Section 2.5),
+## with a per-gene Spearman rho and BH q. The fit is not
 ## refitted with these covariates. Prints the fraction of genes at q < 0.05
 ## and the median effect size, and returns one row per gene
-covariate_noise_diagnostic <- function(mat, expo, fit, cc_axis, metab_state, label) {
-  cells <- Reduce(intersect, list(colnames(mat), names(cc_axis), names(metab_state)))
+covariate_noise_diagnostic <- function(mat, expo, fit, cc_axis, metab_state, label, program = NULL) {
+  cells <- Reduce(intersect, list(colnames(mat), names(cc_axis), names(metab_state), if (is.null(program)) colnames(mat) else names(program)))
   R   <- nb_residuals(mat[, cells], expo[cells], fit)
   cc  <- cc_axis[cells]
   met <- droplevels(metab_state[cells])
+  pr  <- if (is.null(program)) NULL else program[cells]
 
   ## One pass over genes: Spearman correlation with the cell-cycle axis, and eta^2 (share of residual
   ## variance explained by metabolic state) with its Kruskal-Wallis p-value.
@@ -2027,13 +2058,20 @@ covariate_noise_diagnostic <- function(mat, expo, fit, cc_axis, metab_state, lab
   }
   cc_q  <- p.adjust(cc_p, method = "BH")
   met_q <- p.adjust(met_p, method = "BH")
+  pr_rho <- pr_q <- setNames(rep(NA_real_, nrow(R)), rownames(R))
+  if (!is.null(pr)) {
+    pr_rho <- apply(R, 1, function(r) suppressWarnings(cor(r, pr, method = "spearman", use = "complete.obs")))
+    pr_q   <- p.adjust(apply(R, 1, function(r) suppressWarnings(cor.test(r, pr, method = "spearman")$p.value)), method = "BH")
+    cat(sprintf("%s: derepression and stress program, %d / %d genes (%.1f%%) at q < 0.05, median |rho| = %.3f\n",
+                label, sum(pr_q < 0.05, na.rm = TRUE), length(pr_q), 100 * mean(pr_q < 0.05, na.rm = TRUE), median(abs(pr_rho), na.rm = TRUE)))
+  }
 
   cat(sprintf("%s: cell-cycle axis, %d / %d genes (%.1f%%) at q < 0.05, median |rho| = %.3f\n",
               label, sum(cc_q < 0.05, na.rm = TRUE), length(cc_q), 100 * mean(cc_q < 0.05, na.rm = TRUE), median(abs(cc_rho), na.rm = TRUE)))
   cat(sprintf("%s: metabolic state, %d / %d genes (%.1f%%) at q < 0.05, median eta^2 = %.3f\n",
               label, sum(met_q < 0.05, na.rm = TRUE), length(met_q), 100 * mean(met_q < 0.05, na.rm = TRUE), median(met_eta, na.rm = TRUE)))
 
-  data.frame(gene = rownames(R), cc_rho = cc_rho, cc_q = cc_q, met_eta = met_eta, met_q = met_q, row.names = NULL)
+  data.frame(gene = rownames(R), cc_rho = cc_rho, cc_q = cc_q, met_eta = met_eta, met_q = met_q, program_rho = pr_rho, program_q = pr_q, row.names = NULL)
 }
 
 ## Histogram pair for covariate_noise_diagnostic()'s output: per-gene
@@ -3616,6 +3654,50 @@ eiv_mode_ci_row <- function(m, contrasts, B) {
 
 ## se_floor_row: for attenuation floor f, the number of items (pairs or genes, named count_label) whose attenuation attn is at
 ## least f and the median bootstrap SE among them. se is a named list of SE vectors aligned with attn; each gives
+## nb_dropout_aic: one gene's NB fit with and without a dropout (zero-inflation) term, compared by AIC. Both are maximum likelihood fits with the cell's
+## offset: the NB has a mean rate and a dispersion; the zero-inflated NB adds pi, the probability that a cell's count is a structural zero, so
+## Pr(0) = pi + (1 - pi) NB(0) and Pr(y > 0) = (1 - pi) NB(y). Each fit maximizes over (log mu, log phi[, logit pi]) from the ratio mean and the
+## Cox-Reid dispersion, with log phi bounded to the pipeline's search range. dAIC = AIC_NB - AIC_ZINB, positive when the dropout term earns its parameter.
+## Returns c(ll_nb, ll_zinb, pi, dAIC), NA for a gene with no counts.
+nb_dropout_aic <- function(y, expo) {
+  stopifnot(is.numeric(y), is.numeric(expo), length(y) == length(expo), all(expo > 0))
+  out <- c(ll_nb = NA_real_, ll_zinb = NA_real_, pi = NA_real_, dAIC = NA_real_)
+  if (sum(y) == 0 || length(y) < 3) return(out)
+  f0 <- fit_dispersion(y, expo, 0, "NB")
+  lphi0 <- log(max(f0[["disp"]], exp(-LOG.THETA.RANGE[[2]])))
+  lo <- c(-Inf, -LOG.THETA.RANGE[[2]]); hi <- c(Inf, -LOG.THETA.RANGE[[1]])
+  z0 <- y == 0
+  ll_nb <- function(p) sum(dnbinom(y, size = exp(-p[2]), mu = exp(p[1]) * expo, log = TRUE))
+  ll_zi <- function(p) { w <- plogis(p[3]); l0 <- dnbinom(0, size = exp(-p[2]), mu = exp(p[1]) * expo, log = TRUE)
+                         sum(ifelse(z0, log(w + (1 - w) * exp(l0)), log1p(-w) + dnbinom(y, size = exp(-p[2]), mu = exp(p[1]) * expo, log = TRUE))) }
+  a <- optim(c(log(f0[["mu"]]), lphi0), function(p) -ll_nb(p), method = "L-BFGS-B", lower = lo, upper = hi)
+  b <- optim(c(a$par, qlogis(0.01)), function(p) -ll_zi(p), method = "L-BFGS-B", lower = c(lo, -20), upper = c(hi, 10))
+  c(ll_nb = -a$value, ll_zinb = -b$value, pi = plogis(b$par[3]), dAIC = (2 * 2 + 2 * a$value) - (2 * 3 + 2 * b$value))
+}
+
+## struct_coupling_row: the observed correlations of the dispersion with burst size and of the mean with kinetic balance across genes for one mode,
+## attenuation corrected (eiv_components()), against the values the definitions alone force when the mean and dispersion contrasts are uncorrelated
+## (bsize = mean + disp gives rho_null = Var(disp) / sqrt(Var(disp) Var(bsize)); kbal = -mean - 2 disp gives rho_null = -Var(mean) / sqrt(Var(mean) Var(kbal))).
+## The excess over the null gets a gene-resampling 95% interval from B draws (seeded, the caller's stream restored); an interval that excludes zero
+## is coupling beyond the definition.
+struct_coupling_row <- function(mode, contrasts, B = 2000, seed = 1) {
+  stopifnot(is.numeric(B), length(B) == 1, B >= 10)
+  stats <- function(bc) {
+    e <- eiv_components(bc, mode); Vm <- unname(e["Vm"]); Vf <- unname(e["Vs"]); Cmf <- unname(e["Cms"])
+    Vb <- Vm + Vf + 2 * Cmf; Vk <- Vm + 4 * Vf + 4 * Cmf
+    suppressWarnings(c(n = unname(e["n"]), disp_bsize_obs = (Cmf + Vf) / sqrt(Vf * Vb), disp_bsize_null = Vf / sqrt(Vf * Vb),
+                       mean_kbal_obs = (-Vm - 2 * Cmf) / sqrt(Vm * Vk), mean_kbal_null = -Vm / sqrt(Vm * Vk)))
+  }
+  obs <- stats(contrasts); n <- nrow(contrasts)
+  draws <- with_local_seed(seed, t(replicate(B, { s <- stats(contrasts[sample.int(n, n, TRUE), , drop = FALSE])
+                                                  c(s[["disp_bsize_obs"]] - s[["disp_bsize_null"]], s[["mean_kbal_obs"]] - s[["mean_kbal_null"]]) })))
+  ci <- function(x) if (mean(!is.finite(x)) > 0.5) c(NA_real_, NA_real_) else unname(quantile(x, c(0.025, 0.975), na.rm = TRUE))
+  data.frame(mode = mode, n = obs[["n"]], disp_bsize_obs = obs[["disp_bsize_obs"]], disp_bsize_null = obs[["disp_bsize_null"]],
+             disp_bsize_excess = obs[["disp_bsize_obs"]] - obs[["disp_bsize_null"]], disp_bsize_lo = ci(draws[, 1])[1], disp_bsize_hi = ci(draws[, 1])[2],
+             mean_kbal_obs = obs[["mean_kbal_obs"]], mean_kbal_null = obs[["mean_kbal_null"]], mean_kbal_excess = obs[["mean_kbal_obs"]] - obs[["mean_kbal_null"]],
+             mean_kbal_lo = ci(draws[, 2])[1], mean_kbal_hi = ci(draws[, 2])[2], row.names = NULL)
+}
+
 ## a median_<name> column.
 se_floor_row <- function(f, attn, se, count_label = "n_pairs") {
   keep <- attn >= f

@@ -49,10 +49,7 @@ STATE.SYMBOLS <- list(
                     Respiratory  = c("CIT1", "ACO1", "KGD1", "SDH1", "CYT1", "QCR2", "COX4", "COX5A", "COX6", "ATP2", "QCR7", "COX7", "ATP1", "CYC1", "IDH1", "MDH1"),
                     Derepressed  = c("ICL1", "MLS1", "CIT2", "MDH2", "ACS1", "FOX2", "POX1", "POT1", "PCK1", "FBP1", "ADH2", "IDP2", "SFC1", "CAT2", "YAT1",
                                      "CRC1", "JEN1", "ALD4", "FAA2", "ECI1", "PXA1")),
-  cycle      = list(G1S = c("CLN1", "CLN2", "PCL1", "CLB5", "CLB6", "RNR1", "CDC21", "POL30", "RAD27", "RFA1", "CDC45", "POL1", "POL12", "MRC1"),
-                    S   = c("HTA1", "HTA2", "HTB1", "HTB2", "HHT1", "HHT2", "HHF1", "HHF2", "HHO1"),
-                    G2M = c("CLB1", "CLB2", "CDC5", "CDC20", "SWI5", "ACE2", "BUD4", "CHS2", "MOB1", "KIP2"),
-                    MG1 = c("SIC1", "PCL9", "ASH1", "CDC6", "EGT2", "CTS1", "DSE1", "DSE2", "SCW11", "AMN1")),
+  cycle      = CELL.CYCLE.CANDIDATES,                                   # the cell-cycle lists of Section 7.6 (R/functions.R)
   stress     = list(Stressed = c("HSP12", "HSP26", "HSP42", "HSP104", "CTT1", "TPS1", "TPS2", "GSY2", "DDR2", "GRE2", "SSA4", "HSP78", "PGM2", "GPH1", "HSP30", "XBP1")))
 MET.LEVELS   <- c("Fermentative", "Respiratory", "Derepressed")
 CYCLE.LEVELS <- names(STATE.SYMBOLS$cycle)

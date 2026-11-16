@@ -9,6 +9,8 @@
 ###     2.3 Per-gene contrasts, bootstrap SEs, and permutation null
 ###     2.4 Bootstrap adequacy check
 ###     2.5 State-conditioned sensitivity
+###     2.6 Check of the hybrid normalization
+###     2.7 Dropout check
 ###   3. REGULATORY AND DOMINANCE RESULTS
 ###     3.1 Regulatory classification
 ###     3.2 Significance histograms for total, cis, and trans effects
@@ -48,7 +50,7 @@
 ###     7.3 Cluster each dataset
 ###     7.4 Cluster composition: identity, marker enrichment, and consistency
 ###     7.5 Within/between-cluster noise partitioning
-###     7.6 Cell-cycle and metabolic module scoring
+###     7.6 Cell-state scores: cell cycle, metabolism and the derepression and stress program
 ###     7.7 Covariate-noise diagnostic
 ###     7.8 Species composition comparison and confound bound
 ###   8. GO ENRICHMENT
@@ -652,6 +654,20 @@ PILOT.LOGPHI.SE <- vapply(c("MIX.SC", "MIX.SE", "HYB.SC", "HYB.SE"), function(k)
 cat("Partitions of the hybrid cells\n"); print(PARTITION.REPORT, digits = 4, row.names = FALSE)
 if (any(PARTITION.REPORT$below_min_cells)) warning(sprintf("a partition holds fewer than %d cells; the O(1/N) terms the Methods drop may matter there", PARTITION.MIN.CELLS))
 cat("Median bootstrap SE of log phi in the pilot (natural log):\n"); print(round(PILOT.LOGPHI.SE, 3))
+## How imprecise the dispersion is next to the mean (Methods: Burst kinetics). Per group, the median pilot bootstrap SE of log2 phi and of log2 mu over the
+## genes resolved in the pilot, and the median of their per-gene ratio, the factor by which the dispersion is less precise than the mean.
+PILOT.PRECISION <- local({
+  rows <- list()
+  for (k in c("MIX.SC", "MIX.SE", "HYB.SC", "HYB.SE")) {
+    i <- PILOT.SE$gene %in% PILOT.RESOLVED
+    sp <- PILOT.SE[[paste0(k, "_logdisp_se")]][i] / log(2); sm <- PILOT.SE[[paste0(k, "_logmu_se")]][i] / log(2)
+    rows[[k]] <- data.frame(dataset = k, genes = sum(is.finite(sp)), median_se_log2_phi = median(sp, na.rm = TRUE), median_se_log2_mu = median(sm, na.rm = TRUE),
+                            median_ratio_phi_to_mu = median(sp / sm, na.rm = TRUE), row.names = NULL)
+  }
+  do.call(rbind, rows)
+})
+cat("Precision of the dispersion against the mean (pilot bootstrap, resolved genes, log2 scale):\n"); print(PILOT.PRECISION, digits = 3, row.names = FALSE)
+write.csv(PILOT.PRECISION, file.path(TABLE.DIR, "pilot_precision.csv"), row.names = FALSE)
 write.csv(PARTITION.REPORT, file.path(TABLE.DIR, "partition_report.csv"), row.names = FALSE)
 
 # SPLIT.FIT.MATS/SPLIT.FIT.EXPOS hold 21 datasets, each with its own offsets (a hybrid allele S_H / 2,
@@ -835,6 +851,25 @@ GENE.TABLE <- local({
 })
 ## GENES is the matched set, the genes every log2 analysis and every main-text comparison uses
 GENES <- GENE.TABLE$gene[GENE.TABLE$in_matched_set]
+
+## CV2 and Fano factor of every gene in each full dataset and in the per-genome hybrid, reported only: they enter no contrast and no test (Methods: Negative
+## binomial model). Both are model values at the reference depth (offset 1), from the per-genome mean rate mu (an allele fit divided by its abundance factor,
+## .correct_means()) and the corrected dispersion phi: CV2 = 1 / mu + phi, the Poisson part plus the excess, and Fano = 1 + phi mu, which depends on the depth
+## it is evaluated at. The per-genome hybrid takes mu_H = (mu_Hc + mu_He) / 2 and, CV2 being a raw-scale quantity, the arithmetic mean of the two allele
+## dispersions (Methods: Per-genome hybrid estimates). A phi of zero gives the Poisson values 1 / mu and 1.
+GENE.TABLE <- local({
+  tab <- GENE.TABLE
+  mu <- .correct_means(lapply(setNames(nm = c("MIX.SC", "MIX.SE", "HYB.SC", "HYB.SE")), function(k) tab[[paste0(k, ".mu")]]), C.BAR)
+  for (k in names(mu)) {
+    ph <- tab[[paste0(k, ".disp")]]
+    tab[[paste0(k, ".cv2")]]  <- ifelse(mu[[k]] > 0, 1 / mu[[k]] + ph, NA_real_)
+    tab[[paste0(k, ".fano")]] <- 1 + ph * mu[[k]]
+  }
+  mu_h <- (mu$HYB.SC + mu$HYB.SE) / 2; ph_h <- (tab$HYB.SC.disp + tab$HYB.SE.disp) / 2
+  tab$H.cv2  <- ifelse(mu_h > 0, 1 / mu_h + ph_h, NA_real_)
+  tab$H.fano <- 1 + ph_h * mu_h
+  tab
+})
 stopifnot(all(GENES %in% GENES.INFER))
 
 ## The reach of every comparison. EXCLUDED.COUNTS gives, per contrast and scale, the genes whose fits define it and the genes excluded by reason (no fit, zero
@@ -1167,6 +1202,26 @@ hist(pmax(pmin(ALLELE.DISP$z[is.finite(ALLELE.DISP$z)], 6), -6), breaks = seq(-6
      xlab = "z = ratio / bootstrap SE", ylab = "# of genes"); abline(v = c(-1.96, 0, 1.96), col = COLOR.ACCENT, lty = c(2, 1, 2))
 dev.off()
 
+## 2.7 Dropout check
+# UMI counts are usually taken to need no zero inflation beyond the NB. For a random subsample of the matched genes (DROPOUT.GENES per dataset, its own
+# seeded stream), each full dataset is fitted by maximum likelihood with and without a dropout probability pi (nb_dropout_aic()). A positive dAIC favours
+# the dropout term; the table gives the share of genes above 2 and 10 and the median pi. The subsample keeps the run to minutes (about 0.2 s per gene at 2800 cells).
+DROPOUT.GENES <- 500; SEED.DROPOUT <- 7
+DROPOUT.AIC <- local({
+  g <- with_local_seed(SEED.DROPOUT, sample(GENES, min(DROPOUT.GENES, length(GENES))))
+  rows <- list(); per_gene <- list()
+  for (k in c("MIX.SC", "MIX.SE", "HYB.SC", "HYB.SE")) {
+    r <- t(vapply(g, function(gn) nb_dropout_aic(CONTRAST.MATS[[k]][gn, ], CONTRAST.EXPOS[[k]]), numeric(4)))
+    per_gene[[k]] <- data.frame(dataset = k, gene = g, r, row.names = NULL)
+    rows[[k]] <- data.frame(dataset = k, genes = sum(is.finite(r[, "dAIC"])), share_dAIC_above_2 = mean(r[, "dAIC"] > 2, na.rm = TRUE),
+                            share_dAIC_above_10 = mean(r[, "dAIC"] > 10, na.rm = TRUE), median_pi = median(r[, "pi"], na.rm = TRUE),
+                            q90_pi = unname(quantile(r[, "pi"], 0.9, na.rm = TRUE)), row.names = NULL)
+  }
+  list(summary = do.call(rbind, rows), genes = do.call(rbind, per_gene))
+})
+cat("NB against zero-inflated NB by AIC (dAIC > 0 favours a dropout term):\n"); print(DROPOUT.AIC$summary, digits = 3, row.names = FALSE)
+write.csv(DROPOUT.AIC$summary, file.path(TABLE.DIR, "dropout_aic.csv"), row.names = FALSE)
+
 # Checkpoint: the fitted NB models, per-gene contrasts, and every Section 2
 # object that later sections read.
 save(GENES, GENES.INFER, GENE.TABLE, SPLIT.FITS.W, CONTRAST.FITS.INFER, PLOIDY.SHIFT.INFER, PLOIDY.SHIFT.RAW.INFER, ANALYSIS.STATUS, ANALYSIS.COUNTS, FIT.COUNTS, EXCLUDED.COUNTS, GENE.SET.SIZES, RESOLUTION.COUNTS, RESOLUTION.SENSITIVITY, BOUNDS.CALLS, BOUNDS.SEPARATION, PERM.INF.SUMMARY, SHARE.OBS, SHARE.CELLS, PLOIDY.COMP, GATES, HYB.COMB, CONTRAST.FITS, CONTRAST.MATS, CONTRAST.EXPOS, SPLIT.FITS,
@@ -1176,6 +1231,7 @@ save(GENES, GENES.INFER, GENE.TABLE, SPLIT.FITS.W, CONTRAST.FITS.INFER, PLOIDY.S
      N.COEXPR, SEED.COEXPR,
      SPLIT.IDX.MEAN, SPLIT.IDX.DISP, SPLIT.IDX.KBAL, SPLIT.IDX.BSIZE, SPLIT.FRAC, PILOT.RESOLVED, PARTITION.REPORT, PILOT.LOGPHI.SE, APPENDIX.B, ROUTE.CHECK, PHI.MU.COR,
      STATE.PROGRAM, STATE.MEMBERS, STATE.COND, STATE.SCORE.SUMMARY, COND.CONTRASTS, STATE.FLAG.SUMMARY, STATE.FLAGGED, STATE.FLAG.SIG,
+     PILOT.PRECISION, DROPOUT.AIC,
      file = ckpt_path(2))
 
 console_start(3)
@@ -1405,6 +1461,13 @@ STRUCT.MEAN.KBAL <- local({
        excess_over_null = suppressWarnings((-Vm - 2 * Cmf) / sqrt(Vm * Vk) + Vm / sqrt(Vm * Vk)))
 })
 
+## The same comparisons with a test, for total, cis and trans: each excess over its definitional null gets a gene-resampling 95% interval
+## (struct_coupling_row()); an interval that excludes zero is coupling between the mean and the dispersion beyond what bsize = mean + disp and
+## kbal = -mean - 2 disp force.
+STRUCT.COUPLING <- do.call(rbind, lapply(c("total", "cis", "trans"), struct_coupling_row, contrasts = BURST.CONTRASTS, B = 2000, seed = SEED.SECTION + 31))
+cat("Structural coupling against its definitional null, with gene-resampling 95% intervals of the excess:\n"); print(STRUCT.COUPLING, digits = 3, row.names = FALSE)
+write.csv(STRUCT.COUPLING, file.path(TABLE.DIR, "structural_coupling_tests.csv"), row.names = FALSE)
+
 REG.OVERLAP.SUMMARY <- rbind(
   summarize_class_overlap(REG.OVERLAP.MEAN.DISP,  label = "Mean vs dispersion"),
   summarize_class_overlap(REG.OVERLAP.MEAN.BSIZE,  label = "Mean vs burst size"),
@@ -1432,7 +1495,7 @@ dev.off()
 # Checkpoint
 save(REG.VEC, DOM.VEC,
      REG.OVERLAP.MEAN.DISP, REG.OVERLAP.MEAN.BSIZE, REG.OVERLAP.DISP.BSIZE, REG.OVERLAP.MEAN.KBAL,
-     STRUCT.DISP.BSIZE, STRUCT.MEAN.KBAL, REG.OVERLAP.SUMMARY,
+     STRUCT.DISP.BSIZE, STRUCT.MEAN.KBAL, STRUCT.COUPLING, REG.OVERLAP.SUMMARY,
      file = ckpt_path(3))
 
 console_start(4)
@@ -2647,7 +2710,10 @@ RES.HYB.SE <- CSTAB.MARKERS$HYB.SE
 plot_cluster_marker_enrichment(RES.HYB.SE, "Hybrid, Se allele", file.path(FIGURE.DIR, "extra/S_hyb_se_cluster_marker_enrichment.pdf"))
 
 # Pseudobulk correlation of each hybrid-allele cluster against each
-# corresponding parent cluster.
+# corresponding parent cluster. The parents were grown in one culture and the
+# hybrid in another, so a hybrid cluster that matches no parental cluster can
+# reflect the culture as well as the genotype (Methods Appendix C).
+cat("Hybrid against parental clusters: the two come from different cultures, so their differences include the culture.\n")
 fig_pdf("extra/S_sc_hybrid_cluster_consistency_scatter.pdf", 4*length(SC.HYB.CLUSTERS), 4*length(SC.PAR.CLUSTERS))
 par(mfrow=c(length(SC.PAR.CLUSTERS), length(SC.HYB.CLUSTERS)))
 for (pc in SC.PAR.CLUSTERS) for (hc in SC.HYB.CLUSTERS) {
@@ -2792,6 +2858,22 @@ dev.off()
 cat(sprintf("Within/between ratio, Sc vs Se parent, n = %d genes, Spearman rho = %.3f\n",
             WB.CROSS.SPECIES$n, WB.CROSS.SPECIES$rho))
 
+## Clusters against the program of Section 2.5. If a parent's clusters split its cells along the derepression and stress program, the genes whose mean
+## follows the program (large |beta|, the log2 change per log2 unit of the program score, COND.CONTRASTS cbeta_<dataset>) carry more between-cluster
+## variance. The Spearman correlation of the between-cluster share, between / (within + between) = 1 / (1 + ratio), with |beta| measures that.
+WB.VS.PROGRAM <- local({
+  rows <- list()
+  for (k in c("MIX.SC", "MIX.SE")) {
+    wb <- if (k == "MIX.SC") WB.MIX.SC else WB.MIX.SE
+    b <- setNames(abs(COND.CONTRASTS[[paste0("cbeta_", k)]]), COND.CONTRASTS$gene)
+    share <- setNames(1 / (1 + wb$table$ratio_within_between), wb$table$gene)
+    g <- intersect(names(share)[is.finite(share)], names(b)[is.finite(b)])
+    rows[[k]] <- data.frame(dataset = k, genes = length(g), spearman = suppressWarnings(cor(share[g], b[g], method = "spearman")), row.names = NULL)
+  }
+  do.call(rbind, rows)
+})
+cat("Between-cluster share of variance against the gene's program dependence |beta|:\n"); print(WB.VS.PROGRAM, digits = 3, row.names = FALSE)
+
 CLASS.LEVELS <- list(REG = REG.CLASS, DOM = DOM.CLASS)
 CLASS.COLORS <- list(REG = COLOR.LIST.1, DOM = COLOR.LIST.2)
 for (kind in c("REG", "DOM"))
@@ -2801,92 +2883,111 @@ for (kind in c("REG", "DOM"))
       sprintf("%s class (%s)", c(REG = "regulatory", DOM = "dominance")[[kind]], QUANTITY.LABEL[[q]]),
       file.path(FIGURE.DIR, sprintf("extra/S_within_between_by_%s_%s_class.pdf", tolower(kind), q)))
 
-## 7.6 Cell-cycle and metabolic module scoring
-# Scores every cell for cell-cycle phase (three curated regulons: the
-# G1/S "CLN2 cluster", the mitotic "CLB2 cluster", and the M/G1
-# boundary wave) and for three metabolic gene sets (glycolysis,
-# oxidative phosphorylation, ribosome biogenesis), then validates each dataset's clustering
-# against these scores directly.
-S.GENES   <- c("YMR199W", "YPL256C", "YPR120C", "YGR109C", "YBR088C", "YKL113C", "YAR007C")  # CLN1, CLN2, CLB5, CLB6, POL30, RAD27, RFA1
-G2M.GENES <- c("YGR108W", "YPR119W", "YDL155W", "YMR001C", "YGL116W")                        # CLB1, CLB2, CLB3, CDC5, CDC20
-MG1.GENES <- c("YLR079W", "YDR146C", "YLR131C")                                              # SIC1, SWI5, ACE2
+## 7.6 Cell-state scores: cell cycle, metabolism and the derepression and stress program
+# Scores every cell on the four cell-cycle waves (CELL.CYCLE.CANDIDATES: G1/S, the histone genes of S, G2/M, M/G1; the first 10 markers of each present
+# in the data), on three metabolic modules (glycolysis, oxidative phosphorylation, ribosome biogenesis) and on the derepression and stress program that
+# Section 2.5 conditions on (STATE.MEMBERS), with the depth-aware z of module_z(): the distance of the log2 module count per unit depth from the group
+# median, over the counting SD at the cell's own depth plus the group's biological SD. Groups sequenced to different depths then share one scale. A hybrid
+# cell is scored on its summed allele counts, so both allele views carry the cell's state. Each cell's phase is the wave with the highest z.
+CYCLE.SETS <- lapply(CELL.CYCLE.CANDIDATES, marker_orfs, present = rownames(MIX.SC))
+stopifnot("every cell-cycle wave needs at least 5 marker genes in the data" = all(lengths(CYCLE.SETS) >= 5))
+STATE.MODULE.SETS <- c(CYCLE.SETS, list(Glycolysis = go_gene_set("GO:0006096"),   # glycolytic process
+                                        OXPHOS     = go_gene_set("GO:0006119"),   # oxidative phosphorylation
+                                        RiBi       = go_gene_set("GO:0042254"),   # ribosome biogenesis
+                                        Program    = STATE.MEMBERS))              # glucose derepression and induced stress response (Section 2.5)
+cat("State modules (marker genes):", paste(sprintf("%s %d", names(STATE.MODULE.SETS), lengths(lapply(STATE.MODULE.SETS, intersect, rownames(MIX.SC)))), collapse = ", "), "\n")
+MET.SCORE.NAMES <- paste0(c("Glycolysis", "OXPHOS", "RiBi", "Program"), ".z")
+STATE.PROGRAM.Z <- 2.5   # program z above which a cell counts as in the program (check ST1)
 
 # The four datasets that feed CONTRAST.MATS directly; every step below maps over them by name.
-# Each dataset has its own exposure vector in CONTRAST.EXPOS (a hybrid allele is offset by S_H / 2).
-COV.DS   <- c("MIX.SC", "MIX.SE", "HYB.SC", "HYB.SE")
+COV.DS <- c("MIX.SC", "MIX.SE", "HYB.SC", "HYB.SE")
+STATE.Z7 <- list(MIX.SC = module_z_matrix(MIX.SC, EXPO.MIX.SC[colnames(MIX.SC)], STATE.MODULE.SETS),
+                 MIX.SE = module_z_matrix(MIX.SE, EXPO.MIX.SE[colnames(MIX.SE)], STATE.MODULE.SETS),
+                 HYB.SC = module_z_matrix(HYB.SC + HYB.SE, EXPO.HYB[colnames(HYB.SC)], STATE.MODULE.SETS))
+STATE.Z7$HYB.SE <- STATE.Z7$HYB.SC
+YSC[COV.DS] <- Map(add_state_scores, YSC[COV.DS], STATE.Z7[COV.DS], DS.LABELS[COV.DS], file.path(FIGURE.DIR, sprintf("extra/S_state_scores_%s.pdf", COV.DS)))
 
-YSC[COV.DS] <- Map(score_cell_cycle_by_cluster, YSC[COV.DS], DS.LABELS[COV.DS],
-                   file.path(FIGURE.DIR, sprintf("extra/S_cell_cycle_scoring_%s.pdf", COV.DS)))
+## Clusters named by state: each cluster's phase composition, its share of program cells and its mean module z.
+STATE.CLUSTER.TABLE <- do.call(rbind, Map(state_cluster_table, YSC[COV.DS], COV.DS, MoreArgs = list(thr = STATE.PROGRAM.Z)))
+print(STATE.CLUSTER.TABLE, digits = 3, row.names = FALSE)
+write.csv(STATE.CLUSTER.TABLE, file.path(TABLE.DIR, "cluster_state_table.csv"), row.names = FALSE)
 
-# NonFerm is the glucose-repressed program of non-fermentative carbon use (glyoxylate cycle and fatty-acid beta-oxidation). A few cells far up this
-# program carry the parental trans leak in the estimator checks (docs/validation_checks.md), so the covariate diagnostic and the composition bound
-# below cover it alongside the three modules of fermentative growth.
-METABOLIC.GENE.SETS <- list(
-  Glycolysis = go_gene_set("GO:0006096"),  # glycolytic process
-  OXPHOS     = go_gene_set("GO:0006119"),  # oxidative phosphorylation
-  RiBi       = go_gene_set("GO:0042254"),  # ribosome biogenesis
-  NonFerm    = union(go_gene_set("GO:0006097"), go_gene_set("GO:0006635")))  # glyoxylate cycle, fatty acid beta-oxidation
-stopifnot("every metabolic module needs at least 5 annotated genes" = all(lengths(METABOLIC.GENE.SETS) >= 5))
-MET.SCORE.NAMES <- paste0(names(METABOLIC.GENE.SETS), "1")   # AddModuleScore() appends 1 to each module name
+## Which principal components the states follow: Spearman correlation of each dataset's first five PCs (7.2) with every module z. In the Sc parent the
+## first PC follows the program (check ST1), so its clusters can split the culture along it.
+STATE.PC.COR <- lapply(setNames(COV.DS, COV.DS), function(k) cor(Embeddings(YSC[[k]], "pca")[, 1:5], as.matrix(YSC[[k]][[paste0(names(STATE.MODULE.SETS), ".z")]]), method = "spearman"))
+for (k in COV.DS) { cat(sprintf("%s: Spearman correlation of PCs 1 to 5 with the state scores\n", DS.LABELS[[k]])); print(round(STATE.PC.COR[[k]], 2)) }
 
-YSC[COV.DS] <- Map(score_modules_by_cluster, YSC[COV.DS], label = DS.LABELS[COV.DS],
-                   pdf_path = file.path(FIGURE.DIR, sprintf("extra/S_metabolic_scoring_%s.pdf", COV.DS)),
-                   MoreArgs = list(gene_sets = METABOLIC.GENE.SETS))
+## How often each culture enters the program (z above STATE.PROGRAM.Z), with Fisher tests between groups. The parents share one culture and the hybrid
+## grew in another, so a parent against hybrid difference is a culture-confounded phenotype, not a hybrid effect (Methods Appendix C). Its effect on the
+## contrasts is in STATE.FLAG.SUMMARY (Section 2.5).
+STATE.PROGRAM.FREQ <- local({
+  hi <- c(Pc = sum(STATE.Z7$MIX.SC[, "Program"] > STATE.PROGRAM.Z), Pe = sum(STATE.Z7$MIX.SE[, "Program"] > STATE.PROGRAM.Z), H = sum(STATE.Z7$HYB.SC[, "Program"] > STATE.PROGRAM.Z))
+  n  <- c(Pc = nrow(STATE.Z7$MIX.SC), Pe = nrow(STATE.Z7$MIX.SE), H = nrow(STATE.Z7$HYB.SC))
+  pairs <- list(c("Pc", "Pe"), c("Pc", "H"), c("Pe", "H"))
+  list(freq = data.frame(group = names(n), cells = n, program_cells = hi, pct = 100 * hi / n, row.names = NULL),
+       tests = data.frame(comparison = c("Pc vs Pe (same culture)", "Pc vs H (different cultures)", "Pe vs H (different cultures)"),
+                          fisher_p = vapply(pairs, function(ab) fisher.test(matrix(c(hi[[ab[1]]], n[[ab[1]]] - hi[[ab[1]]], hi[[ab[2]]], n[[ab[2]]] - hi[[ab[2]]]), 2))$p.value, numeric(1)),
+                          row.names = NULL))
+})
+print(STATE.PROGRAM.FREQ$freq, digits = 3, row.names = FALSE); print(STATE.PROGRAM.FREQ$tests, digits = 3, row.names = FALSE)
+cat("Calls that the program carries (Section 2.5):\n"); print(STATE.FLAG.SUMMARY[STATE.FLAG.SUMMARY$flagged > 0, ], digits = 3, row.names = FALSE)
 
 ## 7.7 Covariate-noise diagnostic
 # Tests whether per-cell NB Pearson residual noise, from the already-
 # fit exposure-offset NB model, depends on a cell's cell-cycle position
-# (single continuous axis, first PC of S.Score/G2M.Score) or metabolic
-# state (discrete, joint k-means on the three metabolic module scores).
-# Run on the four datasets that feed CONTRAST.MATS directly.
+# (single continuous axis, first PC of the G1/S and G2/M phase z), its metabolic
+# state (discrete, joint k-means on the glycolysis, OXPHOS, ribosome biogenesis
+# and program z) or its derepression and stress program z, the covariate that
+# Section 2.5 conditions every contrast on. Run on the four datasets that feed
+# CONTRAST.MATS directly.
 CC.AXIS   <- lapply(YSC[COV.DS], cell_cycle_continuum)
 MET.STATE <- lapply(YSC[COV.DS], metabolic_state_cluster, score_names = MET.SCORE.NAMES)
+PROGRAM.Z <- lapply(YSC[COV.DS], function(o) setNames(o$Program.z, Cells(o)))
 
 COV.DIAG <- Map(covariate_noise_diagnostic, CONTRAST.MATS[COV.DS], CONTRAST.EXPOS[COV.DS], CONTRAST.FITS[COV.DS],
-                CC.AXIS, MET.STATE, DS.LABELS[COV.DS])
+                CC.AXIS, MET.STATE, DS.LABELS[COV.DS], PROGRAM.Z)
 
 fig_pdf("extra/S_covariate_noise_diagnostic.pdf", 9, 4.5)
 invisible(Map(plot_covariate_noise_diagnostic, COV.DIAG, DS.LABELS[COV.DS]))
 dev.off()
 
 ## 7.8 Species composition comparison and confound bound
-# Compares Sc and Se on the cell-cycle axis and the three metabolic
-# module scores (Cohen's d with a descriptive rank test: rank-sum for the parents, which are
-# different cells, signed-rank for the hybrid alleles, which are the same cells), and multiplies each
+# Compares Sc and Se parents on the cell-cycle axis and the metabolic and program
+# scores (Cohen's d with a descriptive rank-sum test), and multiplies each
 # composition difference by the matching 7.7 noise-association effect size to bound the
 # expected noise shift, in residual-SD units (bound_sd = |d| x effect size, about rho x d), that a
 # composition difference of that size could produce. The bound, not the p-value, is the informative
 # output: with thousands of cells any test rejects. Each genome is also compared between its parent and its hybrid allele
-# (COMP.BOUND.TRANS), the composition difference that the trans contrast carries.
+# (COMP.BOUND.TRANS), the composition difference that the trans contrast carries. The two hybrid alleles share their cells and so their state scores
+# (7.6 scores the cell), so the hybrid needs no Sc against Se comparison: the cis contrast shares the state by construction. Every group's scores are
+# centered at its own median, so a comparison between groups measures differences in spread and in the tails, such as a rare program state, and not a
+# shift of the typical level, which the species' marker expression would confound.
 MET.SCORE <- lapply(YSC[COV.DS], function(o) as.matrix(o[[MET.SCORE.NAMES]]))
 
 CC.SHARED.PARENT <- cell_cycle_continuum_shared(YSC$MIX.SC, YSC$MIX.SE)
-CC.SHARED.HYBRID <- cell_cycle_continuum_shared(YSC$HYB.SC, YSC$HYB.SE)
 
 COMP.BOUND.PARENT <- species_composition_report(CC.SHARED.PARENT$x1, CC.SHARED.PARENT$x2, MET.SCORE$MIX.SC, MET.SCORE$MIX.SE, COV.DIAG$MIX.SC, COV.DIAG$MIX.SE, "Sc vs Se parent")
-COMP.BOUND.HYBRID <- species_composition_report(CC.SHARED.HYBRID$x1, CC.SHARED.HYBRID$x2, MET.SCORE$HYB.SC, MET.SCORE$HYB.SE, COV.DIAG$HYB.SC, COV.DIAG$HYB.SE, "Hybrid, Sc vs Se allele", paired = TRUE)
 
-# Parent against hybrid, one genome at a time. The trans contrast compares the parental cultures with the hybrid culture, so a difference in cell-state
-# composition between the cultures enters trans directly, while the cis contrast compares two alleles in the same cells and shares their state. Each
-# genome is compared in its parent and in its hybrid allele (different cells, so the rank-sum test). Module scores come from each object's own
-# AddModuleScore() control genes, so a shift between objects is approximate, as in the Sc against Se comparison of the parents.
+# Parent against hybrid, one genome at a time. The parents grew in one culture and the hybrid in another, so these comparisons measure the culture as
+# well as the genotype (Methods Appendix C). The trans contrast compares the two cultures, so a difference in cell-state composition between them enters
+# trans directly, while the cis contrast compares two alleles in the same cells and shares their state. Each genome is compared in its parent and in its
+# hybrid allele (different cells, so the rank-sum test); the hybrid cell's score counts both genomes.
 CC.SHARED.GENOME <- list(SC = cell_cycle_continuum_shared(YSC$MIX.SC, YSC$HYB.SC), SE = cell_cycle_continuum_shared(YSC$MIX.SE, YSC$HYB.SE))
 COMP.BOUND.TRANS <- rbind(
-  species_composition_report(CC.SHARED.GENOME$SC$x1, CC.SHARED.GENOME$SC$x2, MET.SCORE$MIX.SC, MET.SCORE$HYB.SC, COV.DIAG$MIX.SC, COV.DIAG$HYB.SC, "Sc parent vs hybrid Sc allele"),
-  species_composition_report(CC.SHARED.GENOME$SE$x1, CC.SHARED.GENOME$SE$x2, MET.SCORE$MIX.SE, MET.SCORE$HYB.SE, COV.DIAG$MIX.SE, COV.DIAG$HYB.SE, "Se parent vs hybrid Se allele"))
+  species_composition_report(CC.SHARED.GENOME$SC$x1, CC.SHARED.GENOME$SC$x2, MET.SCORE$MIX.SC, MET.SCORE$HYB.SC, COV.DIAG$MIX.SC, COV.DIAG$HYB.SC, "Sc parent vs hybrid Sc allele (different cultures)"),
+  species_composition_report(CC.SHARED.GENOME$SE$x1, CC.SHARED.GENOME$SE$x2, MET.SCORE$MIX.SE, MET.SCORE$HYB.SE, COV.DIAG$MIX.SE, COV.DIAG$HYB.SE, "Se parent vs hybrid Se allele (different cultures)"))
 
-fig_pdf("extra/S_species_composition_bound.pdf", 8, 9)
-par(mfrow = c(2, 2), mar = c(8, 4.5, 3, 1))
+fig_pdf("extra/S_species_composition_bound.pdf", 12, 4.5)
+par(mfrow = c(1, 3), mar = c(8, 4.5, 3, 1))
 barplot(setNames(COMP.BOUND.PARENT$bound_sd, COMP.BOUND.PARENT$axis), las = 2, col = COLOR.GREY[["mid"]], border = NA,
         ylab = "bound on expected noise shift (residual SD units)", main = "Sc vs Se parent")
-barplot(setNames(COMP.BOUND.HYBRID$bound_sd, COMP.BOUND.HYBRID$axis), las = 2, col = COLOR.GREY[["mid"]], border = NA,
-        ylab = "bound on expected noise shift (residual SD units)", main = "Hybrid, Sc vs Se allele")
 for (lb in unique(COMP.BOUND.TRANS$label)) { x <- COMP.BOUND.TRANS[COMP.BOUND.TRANS$label == lb, ]
   barplot(setNames(x$bound_sd, x$axis), las = 2, col = COLOR.GREY[["mid"]], border = NA, ylab = "bound on expected noise shift (residual SD units)", main = lb) }
 dev.off()
 
 # Checkpoint
-save(CC.AXIS, MET.STATE, MET.SCORE, COV.DIAG, CC.SHARED.PARENT, CC.SHARED.HYBRID, CC.SHARED.GENOME, COMP.BOUND.PARENT, COMP.BOUND.HYBRID, COMP.BOUND.TRANS,
+save(CC.AXIS, MET.STATE, MET.SCORE, COV.DIAG, CC.SHARED.PARENT, CC.SHARED.GENOME, COMP.BOUND.PARENT, COMP.BOUND.TRANS,
+     STATE.MODULE.SETS, STATE.Z7, STATE.CLUSTER.TABLE, STATE.PC.COR, STATE.PROGRAM.FREQ, PROGRAM.Z, WB.VS.PROGRAM,
      file = ckpt_path(7))
 
 console_start(8)

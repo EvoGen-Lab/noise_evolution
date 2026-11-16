@@ -59,7 +59,7 @@ COLOR.LIST.3 <- colorRampPalette(c("#70453F","#A2623A","#C8893A","#DDB264","#F7F
 SEQ.ANCHORS <- c("#F6F1E4","#E8C77A","#C98A3A","#8A4A3A","#33384A")
 COLOR.SEQ <- colorRampPalette(SEQ.ANCHORS)(100)
 # Cell-cycle phases
-COLOR.PHASE <- c(G1 = "#A9CBF2", S = "#3F63BF", G2M = "#132057")
+COLOR.PHASE <- c(G1S = "#A9CBF2", S = "#6F97D9", G2M = "#3F63BF", MG1 = "#132057")
 # Power-curve lines follow the same anchors as COLOR.SEQ, minus the cream
 # end that vanishes on white
 POWER.COLOR <- SEQ.ANCHORS[-1]
