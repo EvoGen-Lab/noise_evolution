@@ -12,7 +12,7 @@
 ###           BOOT.CONTRASTS (one row per gene) for replicate k. Task k
 ###           uses DRAWS.REPS[[k]]; replicate 1 is the reported bootstrap
 ###           and the others check seed adequacy. Each row also holds every group's fraction of replicates
-###           at a zero dispersion (zero_<dataset>), from which analysis.R decides which groups are resolved.
+###           at a zero dispersion or failed (zero_<dataset>; a failed refit counts as zero), from which analysis.R decides which groups are resolved.
 ###
 ### Progress is printed by the master after each chunk of genes,
 ### so it lands in the job log even though the workers are forked.

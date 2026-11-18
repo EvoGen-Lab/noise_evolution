@@ -549,7 +549,7 @@ save(PILOT.MATS, PILOT.EXPOS, PILOT.GENES, N.BOOT, SEED.BOOT, file = file.path(I
 load(file.path(OUTPUT.DIR, "gene_pilot_output.rda"))
 ## ---- end cluster round trip ----
 # The kinetic balance and burst size partitions pool gamma over the genes whose groups are resolved on both sides of the contrast, because kappa and log2 zeta
-# are undefined at a zero dispersion: at most RESOLVED.ZERO.MAX of the pilot bootstrap replicates at zero in each of the four datasets.
+# are undefined at a zero dispersion: at most RESOLVED.ZERO.MAX of the pilot bootstrap replicates at zero or failed (a failed refit counts as zero) in each of the four datasets.
 PILOT.RESOLVED <- PILOT.SE$gene[Reduce(`&`, lapply(names(PILOT.MATS), function(k) (PILOT.SE[[paste0("zero_", k)]] <= RESOLVED.ZERO.MAX) %in% TRUE))]
 
 ## Pooled f* for the mean and noise axes. A and B are pooled across
@@ -829,7 +829,7 @@ stopifnot(identical(sort(PERM.RESULTS.INFER$gene), sort(GENES.INFER)), identical
 ## ---- end cluster round trip ----
 
 ## Resolution (Methods: Informative estimates). A group's dispersion is resolved when at most RESOLVED.ZERO.MAX of its bootstrap replicates (replicate 1, the
-## reported one) refit to zero, the tail fraction of a 95% percentile interval, which has a finite log2 endpoint only below this fraction; a fitted zero is never
+## reported one) refit to zero or fail (zero_fail_frac(): a failed refit counts as zero), the tail fraction of a 95% percentile interval, which has a finite log2 endpoint only below this fraction; a fitted zero is never
 ## resolved. GENE.TABLE gains <dataset>.zero_frac and <dataset>.resolved, and resolved_<source>_<mode> for the noise, burst size and kinetic balance sources: every
 ## group of the source resolved. A defined contrast is tested only when that flag holds; otherwise it keeps its estimate and bootstrap interval and gets no p-value.
 ## in_matched_set marks the genes resolved in every dataset of every partition, with informative means in all of them: the single gene set that every main-text
@@ -923,7 +923,7 @@ write.csv(BOUNDS.CALLS,           file.path(TABLE.DIR, "likelihood_bound_calls.c
 ## BURST.CONTRASTS holds, per gene and mode, the bootstrap point estimate, SE and 95% interval (_est, _se, _lo, _hi) of the mean and dispersion (disp, log2 phi)
 ## contrasts in each of the six modes, with the derived quantities per mode: bsize (burst size, mean plus disp in log2 space, both from the burst size partition)
 ## and kbal (kinetic balance, minus mean minus 2 disp, both from the kinetic balance partition). The log2 dispersion-derived quantities carry the share of
-## bootstrap replicates at a zero dispersion (_zero), with percentile intervals and interquantile-range SEs, and zero_<dataset> gives each group's zero fraction. The
+## bootstrap replicates at a zero dispersion (_zero), with percentile intervals and interquantile-range SEs, and zero_<dataset> gives each group's fraction of replicates at zero or failed. The
 ## rdisp_<mode>_est / _se / _nfin columns hold the raw difference of phi for the same modes, from the same bootstrap refits as the log2 columns; a zero-boundary
 ## refit contributes to them (rdisp_*_nfin is the share of draws that did). The mid and par contrasts compare the per-genome hybrid, built from the two corrected
 ## allele fits of all hybrid cells, with the parents. The wdisp_* and wrdisp_* columns repeat both scales with the weighted method of moments

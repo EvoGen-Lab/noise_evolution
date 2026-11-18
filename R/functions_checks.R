@@ -1105,7 +1105,7 @@ mse_contrast_cell <- function(i, grid, expos, hyb_split, R, nbatch, ext_share, s
 ## observed log2 contrasts are total (Pc - Pe), cis (alleles of the cis cells) and trans (total minus the allele ratio of the trans cells). The null is the
 ## pipeline's shifted bootstrap: B resamples of the parents and of the undivided hybrid cells (each copy keeping its cis or trans membership), every group
 ## refitted, and on the log2 scale the null draw is the resampled contrast minus the observed one (a zero refit is -Inf, perm_pval() counts it as extreme).
-## A contrast is tested, as in analysis.R, only when every group it uses has a fitted phi > 0 and at most RESOLVED.ZERO.MAX of its resamples refit to zero.
+## A contrast is tested, as in analysis.R, only when every group it uses has a fitted phi > 0 and at most RESOLVED.ZERO.MAX of its resamples refit to zero or fail.
 ## Returns, per estimator and contrast: the share of datasets tested, the rejection rate at 0.05 and 0.01 among them with binomial SEs, the ratio of the SD of
 ## the observed contrast over the tested datasets to their median null SD (above 1 means the null is too narrow), and the rejection rate among tested datasets
 ## whose rare-cell counts differ between the parents by at least two (rare_split).
@@ -1133,7 +1133,7 @@ mse_rare_cell <- function(i, grid, expos, hyb_split, R, B, ext_share, estimators
     for (m in estimators) {
       fo <- fit6(y, list(Pc = seq_len(n1), Pe = seq_len(n2), c = ic, t = it), m); obs <- contr(fo)
       fb <- vapply(draws, fit6, numeric(6), y = y, m = m); cb <- apply(fb, 2, contr)
-      zero <- rowMeans(fb == 0, na.rm = TRUE)
+      zero <- apply(fb, 1, zero_fail_frac)
       for (j in seq_along(cons)) {
         gr <- used[[cons[j]]]; ok <- isTRUE(all(fo[gr] > 0)) && all(zero[gr] <= RESOLVED.ZERO.MAX)
         nul <- cb[j, ] - obs[j]
@@ -1251,7 +1251,7 @@ rare_cond_cell <- function(i, grid, expos, hyb_split, R, B, ext_share = 0.5, J_m
     all_ix <- list(Pc = seq_len(n1), Pe = seq_len(n2), c = ic, t = it)
     fu <- fit6(y, z, all_ix, FALSE); ou <- contr(fu); oc <- contr(fit6(y, z, all_ix, TRUE))
     bu <- vapply(draws, fit6, numeric(6), y = y, z = z, cond = FALSE); bc <- vapply(draws, fit6, numeric(6), y = y, z = z, cond = TRUE)
-    cu <- apply(bu, 2, contr); cc <- apply(bc, 2, contr); zero <- rowMeans(bu == 0, na.rm = TRUE)
+    cu <- apply(bu, 2, contr); cc <- apply(bc, 2, contr); zero <- apply(bu, 1, zero_fail_frac)
     for (j in seq_along(cons)) {
       gr <- used[[cons[j]]]; ok <- isTRUE(all(fu[gr] > 0)) && all(zero[gr] <= RESOLVED.ZERO.MAX)
       pv <- if (ok) perm_pval(ou[j], cu[j, ] - ou[j]) else NA_real_

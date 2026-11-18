@@ -114,4 +114,7 @@ b2 <- boot_contrasts_one("g1", E, FITS, M, draws, list(chat = chat, lib = libh),
 p2 <- null_contrasts_one("g1", E, FITS, M, perms, draws[1:4], list(chat = chat, lib = libh), share_obs, n_sim = 4, gates = G2)
 stopifnot(is.na(b2$disp_cis_est), is.na(b2$bsize_cis_se), is.na(b2$kbal_trans_est), !is.na(b2$mean_cis_est), !is.na(b2$disp_trans_est),
           is.na(p2$disp_cis_p), is.na(p2$kbal_trans_obs), !is.na(p2$disp_trans_p), !is.na(p2$bsize_trans_p))
+## the resolution statistic counts a failed (non-finite) refit as a zero, over all replicates
+stopifnot(zero_fail_frac(c(0, 0.1, NA, 0.2)) == 0.5, zero_fail_frac(c(0.1, NaN)) == 0.5, zero_fail_frac(c(0.1, 0.2)) == 0, is.na(zero_fail_frac(numeric(0))))
+
 cat("contrast function checks passed\n")

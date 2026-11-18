@@ -334,13 +334,19 @@ neg_binom_fit_offset <- function(y, exposure, share_r = 0, share_sub = 0) {
 
 # Bounds of the dispersion search, the resolution rule and the likelihood bounds (Methods: Informative estimates). The Cox-Reid fit maximizes over log(phi)
 # in -rev(LOG.THETA.RANGE), phi from about 3e-7 to 55; a maximum within 1e-3 of either end is recorded (hit_range). A group's dispersion is resolved when at most
-# RESOLVED.ZERO.MAX of its bootstrap replicates are at zero, the tail fraction of a 95% percentile interval, which keeps that interval finite on the log2 scale.
+# RESOLVED.ZERO.MAX of its bootstrap replicates are at zero or failed (zero_fail_frac(): a failed refit counts as zero), the tail fraction of a 95% percentile
+# interval, which keeps that interval finite on the log2 scale.
 # BOUND.CRIT is the critical value of the likelihood bounds: twice the fall in the adjusted log-likelihood from its maximum, 2.71, the 0.90 quantile of a
 # chi-square with one degree of freedom, which makes each bound one-sided 95%.
 LOG.THETA.RANGE   <- c(-4, 15)
 WEIGHTED.MAXIT    <- 100     # iteration limit and relative tolerance of the Appendix A moment estimator (fit_dispersion(method = "weighted"))
 WEIGHTED.TOL      <- 1e-8
 RESOLVED.ZERO.MAX <- 0.025
+
+# zero_fail_frac: the resolution statistic of one group, the fraction of its resampled refits (bootstrap or null resamples) whose dispersion is zero or that
+# failed (a non-finite estimate: no counts in the resample or a fit that did not converge). A failed refit carries no evidence that phi is above zero, so it
+# counts against the RESOLVED.ZERO.MAX limit like a zero. NA when there are no replicates.
+zero_fail_frac <- function(x) if (length(x)) mean(!is.finite(x) | x == 0) else NA_real_
 BOUND.CRIT        <- qchisq(0.90, 1)
 
 # .cr_loglik: the Cox-Reid adjusted profile log-likelihood of the dispersion for one gene in one group, as a function of phi. The mean is fixed at the ratio
@@ -3860,7 +3866,7 @@ seed_check_rows <- function(m, checks, count_label) {
 ## item first and the loaded inputs as named arguments, so the scripts hold only loading, chunking, progress and saving.
 
 ## pilot_split_se_one: one gene's bootstrap SE of log(mu), log(phi), log kinetic balance and log burst size for the four datasets needed to compute A and B,
-## the bootstrap covariance between the two hybrid alleles, and the fraction of replicates at a zero dispersion in each dataset (zero_<dataset>), from which
+## the bootstrap covariance between the two hybrid alleles, and the fraction of replicates at a zero dispersion or failed in each dataset (zero_<dataset>), from which
 ## analysis.R decides which genes are resolved in every group for the pooled gamma of kinetic balance and burst size. HYB.SC and HYB.SE are refit on the SAME
 ## resampled cell indices in each replicate because the two alleles are measured in the same cells. The RNG is seeded from a hash of the gene's own name, so each gene's draws depend only on its
 ## name and results are identical for any gene chunking or core count. The hash is a rolling polynomial over the character codes
@@ -3890,7 +3896,7 @@ pilot_split_se_one <- function(g, B, expos, mats, seed) {
     if (is.finite(f.me["disp"]) && f.me["disp"] > 0) logsz[b, "MIX.SE"] <- log(f.me["disp"])
     if (is.finite(f.hc["disp"]) && f.hc["disp"] > 0) logsz[b, "HYB.SC"] <- log(f.hc["disp"])
     if (is.finite(f.he["disp"]) && f.he["disp"] > 0) logsz[b, "HYB.SE"] <- log(f.he["disp"])
-    zero[b, ] <- c(f.mc[["disp"]], f.me[["disp"]], f.hc[["disp"]], f.he[["disp"]]) == 0
+    zero[b, ] <- c(f.mc[["disp"]], f.me[["disp"]], f.hc[["disp"]], f.he[["disp"]])   # refitted phi; zero_fail_frac() below counts zeros and failures
   })
   ## log kinetic balance of every refit, log kappa = -log mu - 2 log phi (kappa = 1 / (mu phi^2)); NA when the refit has phi = 0
   logkb <- -logmu - 2 * logsz
@@ -3922,8 +3928,8 @@ pilot_split_se_one <- function(g, B, expos, mats, seed) {
     HYB_logdisp_cov   = allele_cov(logsz),
     HYB_logkbal_cov   = allele_cov(logkb),
     HYB_logbsize_cov  = allele_cov(logbs),
-    zero_MIX.SC = mean(zero[, "MIX.SC"], na.rm = TRUE), zero_MIX.SE = mean(zero[, "MIX.SE"], na.rm = TRUE),
-    zero_HYB.SC = mean(zero[, "HYB.SC"], na.rm = TRUE), zero_HYB.SE = mean(zero[, "HYB.SE"], na.rm = TRUE),
+    zero_MIX.SC = zero_fail_frac(zero[, "MIX.SC"]), zero_MIX.SE = zero_fail_frac(zero[, "MIX.SE"]),
+    zero_HYB.SC = zero_fail_frac(zero[, "HYB.SC"]), zero_HYB.SE = zero_fail_frac(zero[, "HYB.SE"]),
     row.names = NULL, check.names = FALSE)
 }
 
@@ -4055,9 +4061,8 @@ boot_contrasts_one <- function(g, expos, fits, mats, draws, share_cells, share_o
     ow <- .mode_contrasts(fv$mu, fw, cb)
   }
   out <- list(gene = g)
-  ## The fraction of replicates at a zero dispersion in every group (finite refits only), the resolution statistic of the group
-  zfrac <- function(x) { x <- x[is.finite(x)]; if (length(x)) mean(x == 0) else NA_real_ }
-  for (grp in grp_all) { out[[paste0("zero_", grp)]] <- zfrac(Z[, grp]); if (do_w) out[[paste0("wzero_", grp)]] <- zfrac(Zw[, grp]) }
+  ## The fraction of replicates at a zero dispersion or failed in every group (zero_fail_frac()), the resolution statistic of the group
+  for (grp in grp_all) { out[[paste0("zero_", grp)]] <- zero_fail_frac(Z[, grp]); if (do_w) out[[paste0("wzero_", grp)]] <- zero_fail_frac(Zw[, grp]) }
   ## put: one estimate with its bootstrap SE, 95% interval and, for the log2 dispersion-derived quantities (inf = TRUE), the share of draws at zero
   put <- function(q, md, est, x, inf = FALSE, nfin = FALSE) {
     s <- .boot_summary(x, inf)
@@ -4183,9 +4188,8 @@ cond_contrasts_one <- function(g, expos, mats, draws, share_cells, share_obs, st
     obs[[k]] <- list(mc = .mode_contrasts(gm, gp, cb), gm = gm, gp = gp)
   }
   out <- list(gene = g)
-  zfrac <- function(x) { x <- x[is.finite(x)]; if (length(x)) mean(x == 0) else NA_real_ }
   for (grp in grp_all) {
-    out[[paste0("czero_", grp)]] <- zfrac(Zc[, grp])
+    out[[paste0("czero_", grp)]] <- zero_fail_frac(Zc[, grp])
     out[[paste0("cbeta_", grp)]] <- unname(oc[[grp]][["beta1"]]) / log(2)
   }
   ## put: the conditioned estimate with its bootstrap summary, and the paired change (unconditioned minus conditioned) with its interval
@@ -4324,7 +4328,7 @@ simulate_groups <- function(m, phi, s2d) {
 ## The weighted method of moments (methods = c("NB", "weighted")) is refitted on the same resamples and shifted toward the null values of its own fitted
 ## dispersions. A group with a fitted dispersion of zero has no ratio, so a contrast that uses it has no shifted null; such a group is not resolved (analysis.R).
 ## The p-value is two-sided with an add-one correction (perm_pval()); a log2 null draw with a zero dispersion is +-Inf and counts as extreme, and its share is
-## recorded (_infrac), and nzero_<dataset> gives each group's fraction of null resamples refit to zero. gates (genes x contrasts, apply_gate()) NAs the contrasts
+## recorded (_infrac), and nzero_<dataset> gives each group's fraction of null resamples refit to zero or failed. gates (genes x contrasts, apply_gate()) NAs the contrasts
 ## the fits do not define. Quantities without a null in the Methods (the raw burst quantities) carry an observed value and no p-value.
 null_contrasts_one <- function(g, expos, fits, mats, perms, draws, share_cells, share_obs, n_sim, seed = 1, gates = NULL, methods = "NB") {
   stopifnot(all(methods %in% c("NB", "weighted")), "NB" %in% methods, all(c("cbar", "r", "sigma_d") %in% names(share_obs)),
@@ -4456,7 +4460,7 @@ null_contrasts_one <- function(g, expos, fits, mats, perms, draws, share_cells, 
   out$k_trans <- k_hat
   ## nzero_<dataset>: the fraction of the null resamples whose NB refit is zero in each group, the resolution statistic on these resamples (the calibration array
   ## reads it; analysis.R resolves from the bootstrap)
-  for (k in grp_all) { z <- ZN[, k]; z <- z[is.finite(z)]; out[[paste0("nzero_", k)]] <- if (length(z)) mean(z == 0) else NA_real_ }
+  for (k in grp_all) out[[paste0("nzero_", k)]] <- zero_fail_frac(ZN[, k])
   data.frame(apply_gate(out, gate), row.names = NULL, check.names = FALSE)
 }
 

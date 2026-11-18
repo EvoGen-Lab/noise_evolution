@@ -108,7 +108,7 @@ power_line_figure <- function(file, power, grid, outer, inner, x, series, main_f
 ## two independent groups tested as the pipeline tests it (Methods: Null for the log2 dispersion contrasts, Informative estimates). The null is the shifted
 ## bootstrap: NI resamples of each group's cells with replacement, each refitted with .fit_one(); on the log2 scale a null draw is the resampled contrast minus
 ## the observed one, and a refit at phi = 0 stays as -Inf. A dataset is tested only when both groups are resolved (fitted phi > 0 and at most
-## RESOLVED.ZERO.MAX of the resamples refit to zero); an untested dataset has no p-value, is left out of the BH family of the null datasets and counts as
+## RESOLVED.ZERO.MAX of the resamples refit to zero or fail); an untested dataset has no p-value, is left out of the BH family of the null datasets and counts as
 ## not called among the alternatives (bh_power()). The reference group's counts, fit and resampled fits are drawn once per replicate and reused across the
 ## sweep, so the sweep isolates the effect of SIZE.RATIO. Returns the power per SIZE.RATIO (at ratio 1 the false-positive rate at p < ALPHA among the tested
 ## datasets).
@@ -144,7 +144,7 @@ power_grid_row <- function(i, ALPHA, CELL.RATIO, EXPOSURE.CV, GRID, MEAN.READS, 
       Y  <- rnbinom(n = N.SE.X, size = SIZE.2.X, mu = MEAN.READS.X*EXPO.Y)
       fa <- FA.LIST[[j]][["disp"]]; fb <- .fit_one(Y, EXPO.Y)[["disp"]]
       YB <- refit(Y, EXPO.Y, BOOT.Y)
-      resolved <- isTRUE(fa > 0 && fb > 0) && mean(XB.LIST[[j]] == 0, na.rm = TRUE) <= RESOLVED.ZERO.MAX && mean(YB == 0, na.rm = TRUE) <= RESOLVED.ZERO.MAX
+      resolved <- isTRUE(fa > 0 && fb > 0) && zero_fail_frac(XB.LIST[[j]]) <= RESOLVED.ZERO.MAX && zero_fail_frac(YB) <= RESOLVED.ZERO.MAX
       if (!resolved) next
       OBS <- log2(fa) - log2(fb)
       NULL.DIST <- l2(XB.LIST[[j]]) - l2(YB) - OBS
@@ -257,7 +257,7 @@ mde_interp <- function(power, ratios, target = 0.8) {
 ##   disp  the shifted bootstrap null: each of NI draws resamples the parents and the undivided hybrid cells, each copy keeping
 ##         its cis or trans membership (as make_draws() does), refits every group, and on the log2 scale the null draw is the
 ##         resampled contrast minus the observed one. A dataset is tested only when every group of the contrast is resolved
-##         (fitted phi > 0 and at most RESOLVED.ZERO.MAX of the resamples refit to zero); otherwise it has no p-value.
+##         (fitted phi > 0 and at most RESOLVED.ZERO.MAX of the resamples refit to zero or fail); otherwise it has no p-value.
 ## cv2 has no null in the pipeline and is not simulated. Power is bh_power() at ratios above 1, where an untested
 ## alternative counts as not called. At ratio 1 the entry is the false-positive rate at p < ALPHA among the tested datasets
 ## (type I error); power_raw is the share of all datasets with p < ALPHA, and tested the share with a p-value. Returns
@@ -295,7 +295,7 @@ power_modes_row <- function(i, ALPHA, CELL.RATIO, DEPTH.RATIO, DESIGN, EXPOSURE.
 
   l2 <- function(x) ifelse(x == 0, -Inf, log2(x))                    # a zero refit is -Inf on the log2 scale
   refit <- function(y, e, draws) vapply(draws, function(ix) .fit_one(y[ix], e[ix])[["disp"]], numeric(1))
-  resolved <- function(fit_phi, boot_phi) isTRUE(all(fit_phi > 0)) && all(vapply(boot_phi, function(x) mean(x == 0, na.rm = TRUE), numeric(1)) <= RESOLVED.ZERO.MAX)
+  resolved <- function(fit_phi, boot_phi) isTRUE(all(fit_phi > 0)) && all(vapply(boot_phi, zero_fail_frac, numeric(1)) <= RESOLVED.ZERO.MAX)
   set.seed(SEED.BASE + i)
   nq <- length(SIZE.RATIO)
   P   <- array(NA_real_, c(length(modes), NJ, nq, length(axes)), dimnames = list(modes, NULL, NULL, axes))
