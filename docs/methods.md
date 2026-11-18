@@ -1,5 +1,5 @@
 <!-- Exported from the Claude Docs document "Statistical models for allele-specific expression, noise, and ploidy"
-     (https://claude.ai/artifact/79JHPV3XCH2K8VS7RJZQHS), revision 18037, retrieved 2026-11-11. Display equations are LaTeX in $$ blocks.
+     (https://claude.ai/artifact/79JHPV3XCH2K8VS7RJZQHS), revision 18040, retrieved 2026-11-18. Display equations are LaTeX in $$ blocks.
      This file is a snapshot for the repository; the document remains the specification and is edited there. -->
 
 # Statistical models for allele-specific expression, noise, and ploidy
@@ -380,7 +380,7 @@ We used only the log₂ scale for mean contrasts and both scales for dispersion 
 
 On the raw scale, a contrast is the difference of two dispersions. Because the squared coefficient of variation of a count is 1/μ + φ, a raw difference in φ is the difference in cell-to-cell variability beyond Poisson sampling, so it measures how much noise a difference adds. The raw scale suits questions about the size of noise and its likely consequences for phenotype. It needs no logarithm, so its estimates stay defined for genes with a zero estimate, although the boundary gate withholds their p-values.
 
-**Informative estimates.** Whether a dispersion estimate can support a contrast between groups depends on how much of its sampling distribution lies on the zero boundary. A dispersion estimate cannot fall below zero, so a group whose refitted dispersion is zero in many bootstrap replicates has no log₂ value in those replicates, and on the raw scale its null distribution is clipped at zero. For each group we therefore recorded the fraction of bootstrap replicates in which its refitted dispersion is zero. We called a group resolved when this fraction is at most 2.5%, the tail fraction of a 95% percentile interval, which has a finite endpoint on the log₂ scale only below this fraction. A fit that returns zero is a valid boundary value, and we recorded it as an estimate, separate from a failed fit.
+**Informative estimates.** Whether a dispersion estimate can support a contrast between groups depends on how much of its sampling distribution lies on the zero boundary. A dispersion estimate cannot fall below zero, so a group whose refitted dispersion is zero in many bootstrap replicates has no log₂ value in those replicates, and on the raw scale its null distribution is clipped at zero. For each group we therefore recorded the fraction of bootstrap replicates in which its refitted dispersion is zero or the refit failed, a failed refit counting as zero because it gives no evidence that the dispersion is above zero. We called a group resolved when this fraction is at most 2.5%, the tail fraction of a 95% percentile interval, which has a finite endpoint on the log₂ scale only below this fraction. A fit that returns zero is a valid boundary value, and we recorded it as an estimate, separate from a failed fit.
 
 The gate applies to the raw, log₂, burst size and kinetic balance contrasts alike. The log₂ scale needs it because a zero estimate has no logarithm, and the raw scale needs it because the shifted bootstrap null of a group on the boundary is clipped at zero (*Null distributions*). We formed a contrast only when every group it uses is resolved. A contrast with an unresolved group received its estimate and bootstrap interval, and no p-value.
 
@@ -639,7 +639,7 @@ The raw null used the same resampling and shift with the null values moved on th
 | Independent transcriptome share | c\_i is independent of the offset and of every expression factor | Transcriptome share corrections, Appendix B |
 | Binomial transcriptome share sampling | Genome-assigned UMIs are binomial given the hybrid library size and c\_i, and library size is independent of c\_i | Transcriptome share corrections |
 | Transcriptome share correction | The transcriptome share corrections of the hybrid dispersions and variance estimates are estimated from the transcriptome share variance and subtracted | Transcriptome share corrections, Null distributions |
-| Zero estimates | A zero dispersion estimate is a valid boundary value and is kept. Contrasts are tested only when at most 2.5% of the bootstrap replicates are at zero in every group they use | Contrasts |
+| Zero estimates | A zero dispersion estimate is a valid boundary value and is kept. Contrasts are tested only when at most 2.5% of the bootstrap replicates are at zero or failed in every group they use, a failed fit counting as zero | Contrasts |
 | Ploidy effects | Ploidy effects act equally on both alleles, so they cancel in the cis ratio and within each ratio of the trans contrast. A species-specific ploidy effect would remain in the trans divergence, and separating it requires diploid parental strains | Contrasts |
 | Cross-allele covariance | In the cis kinetic contrasts, the covariance between the mean estimate of one allele and the dispersion estimate of the other is negligible | Contrasts, Kinetic balance |
 | Common partition ratio | One ratio γ of parental to hybrid variance, pooled by medians across genes, sets the partition for every gene of a quantity | Statistical power |
@@ -675,7 +675,7 @@ $$
 &\text{Depth offset} && O_i = L_{ri}/D \ \text{for a parent}, \qquad O_i = L_{\mathrm{H}i}/(2D) \ \text{for each hybrid allele} \\
 &\text{Mean rate} && \hat{\mu}_r = \frac{\sum_i y_{ri}}{\sum_i O_i}, \qquad \hat{M}_i = O_i\,\hat{\mu}_r \\
 &\text{Dispersion} && \hat{\varphi}_r = \arg\max_{\varphi > 0} \ell^{\mathrm{CR}}_r(\varphi), \qquad \hat{\varphi}_r = 0 \ \text{if} \ \sum_i (y_{ri} - \hat{M}_i)^2 \le \sum_i \hat{M}_i - \frac{\sum_i \hat{M}_i^2}{\sum_i \hat{M}_i} \\
-&\text{Boundary gate} && \text{fraction of bootstrap replicates with } \hat{\varphi}_r = 0 \ \text{at most } 0.025 \\
+&\text{Boundary gate} && \text{fraction of bootstrap replicates with } \hat{\varphi}_r = 0 \ \text{ or a failed refit, at most } 0.025 \\
 &\text{Transcriptome share} && \hat{c}_i = \frac{L_{\mathrm{Hc}i}}{L_{\mathrm{H}i}}, \qquad \hat{\bar{c}} = \frac{1}{N_{\mathrm{H}}}\sum_i \hat{c}_i, \qquad \hat{\sigma}^2_c = \widehat{\mathrm{Var}}[\hat{c}_i] - \frac{1}{N_{\mathrm{H}}}\sum_i \frac{\hat{c}_i(1-\hat{c}_i)}{L_{\mathrm{H}i} - 1} \\
 &\text{Multiplier moments} && \hat{\eta}_{\mathrm{Hc}} = \frac{\hat{\sigma}^2_c}{\hat{\bar{c}}^2}, \qquad \hat{\eta}_{\mathrm{He}} = \frac{\hat{\sigma}^2_c}{(1-\hat{\bar{c}})^2} \\
 &\text{Allele dispersion} && \hat{\varphi}_{\mathrm{Hc}} = \frac{\hat{\varphi}^*_{\mathrm{Hc}} - \hat{\eta}_{\mathrm{Hc}}}{1 + \hat{\eta}_{\mathrm{Hc}}}, \qquad \hat{\varphi}_{\mathrm{He}} = \frac{\hat{\varphi}^*_{\mathrm{He}} - \hat{\eta}_{\mathrm{He}}}{1 + \hat{\eta}_{\mathrm{He}}} \\
