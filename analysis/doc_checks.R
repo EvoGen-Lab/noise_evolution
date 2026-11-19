@@ -20,7 +20,7 @@ CHECK.SCRIPT   <- "analysis/doc_checks.R"
 CORES          <- if (.Platform$OS.type == "windows") 1 else max(1, detectCores() - 1)   # mclapply forks, so Windows runs on one core
 SEED.DOC       <- 9100
 ## Settings; a value set before sourcing this script is kept, so a run can select parts or sizes.
-if (!exists("DOC.PARTS"))      DOC.PARTS      <- c("sim", "data", "leak", "artefact", "mse", "state_groups", "state_conditioned", "DOM1", "M4", "text")   # text last: it writes REPORT.md
+if (!exists("DOC.PARTS"))      DOC.PARTS      <- c("sim", "data", "leak", "artefact", "mse", "state_groups", "state_conditioned", "sign_boot", "DOM1", "M4", "text")   # text last: it writes REPORT.md
 if (!exists("DOC.CHECK.SIZE")) DOC.CHECK.SIZE <- 1     # replicate scale of checks_sim.R (1 = full size)
 if (!exists("DOM1.G"))         DOM1.G         <- 300   # genes per DOM1 cell
 if (!exists("M4.R"))           M4.R           <- 100   # datasets per M4 cell
@@ -56,6 +56,7 @@ DOC.CHECKS <- data.frame(rbind(
   c("Null distributions", "Size of every null at the study's parameters, near the boundary, with non-gamma factors and with the weighted estimator", "D1, D1_boundary, D2, D3, D4, D7, D10", "sim", "null_calibration array outputs"),
   c("Null distributions", "Bias of the full estimation chain when every true contrast is zero", "H5", "sim", "null_calibration array outputs"),
   c("Null distributions", "Raw-scale projections and reuse of the log2 draws; the midparent mean null", "D5, D6", "sim", "none"),
+  c("Null distributions (proposed)", "The bootstrap sign test of the dispersion-family contrasts: type I error for Poisson and small equal dispersions, power, cost of ties on the null side", "P1, P1_local", "sign_boot", "sign_boot array outputs (P1); Section 1 for the depths"),
   c("Null distributions: p-values", "Genes at the p-value floor and the reach of BH", "D9", "data", "Section 2"),
   c("Appendix A", "Bias of the moment estimator; convergence and agreement on the data", "F1", "sim, data", "Section 2 (data arm)"),
   c("Appendix B", "Asymptotics, the observed N and unequal intrinsic variances", "F2, F3, F4", "sim", "none"),
@@ -82,6 +83,7 @@ DOC.SCRIPTS <- list(
   mse               = list(file = "analysis/checks/estimator_mse.R",     needs = 1,          settings = list(MSE.RUN = c("M1", "M2", "M3"))),
   state_groups      = list(file = "analysis/checks/state_groups.R",      needs = 1,          settings = list()),
   state_conditioned = list(file = "analysis/checks/state_conditioned.R", needs = 1,          settings = list()),
+  sign_boot         = list(file = "analysis/checks/sign_boot_test.R",    needs = integer(0), settings = list(P1.RUN = c("INPUTS", "MERGE"))),
   text              = list(file = "analysis/checks/checks_text.R",       needs = integer(0), settings = list()))
 
 ## Each part runs in its own environment with its settings, so one part's objects never reach another; an error is recorded and the run goes on.

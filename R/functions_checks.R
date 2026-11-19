@@ -1268,3 +1268,101 @@ rare_cond_cell <- function(i, grid, expos, hyb_split, R, B, ext_share = 0.5, J_m
                type1_05_unflagged = mean(rej[t] & x[t, "flag"] == 0), cond_cover0 = mean(x[, "cover"] == 1), flag_rate = mean(x[, "flag"] == 1), row.names = NULL)
   }))
 })
+
+## ============================================================
+## P1: the bootstrap sign test for the dispersion-family contrasts (analysis/checks/sign_boot_test.R, cluster/scripts/sign_boot_grid.R)
+## ============================================================
+
+## SIGN.BOOT.STATS: the 24 statistics one dataset yields, contrast x quantity x scale. The quantities are the dispersion phi, the burst frequency
+## theta = 1 / phi, the burst size zeta = mu phi and the kinetic balance kappa = theta / zeta = 1 / (mu phi^2); the contrasts are total (Pc - Pe), cis
+## (the alleles of the cis cells) and trans (total minus the allele contrast of the trans cells); the scales are log2 and raw.
+SIGN.BOOT.STATS <- as.vector(outer(outer(c("total", "cis", "trans"), c("phi", "theta", "zeta", "kappa"), paste, sep = "."), c("log2", "raw"), paste, sep = "."))
+
+## sign_boot_p: the p-value of the proposed bootstrap sign test from the bootstrap replicates x of one contrast and the sign s of its observed value.
+## ties = "null" (the proposal): n0 counts the replicates on the null side, x s <= 0, with undefined replicates (NaN: 0/0, or +Inf - Inf) on that side
+## too, and p = min(1, 2 (1 + n0) / (1 + B)) with B all replicates. ties = "split" (the comparison for power): undefined replicates are dropped, a tie
+## (x = 0) counts one half, and B is the number of defined replicates. An observed sign of zero or NA gives p = 1.
+sign_boot_p <- function(x, s, ties = c("null", "split")) {
+  ties <- match.arg(ties)
+  if (!is.finite(s) || s == 0) return(1)
+  if (ties == "null") { n0 <- sum(is.nan(x) | is.na(x) | x * s <= 0); return(min(1, 2 * (1 + n0) / (1 + length(x)))) }
+  x <- x[!is.na(x)]
+  if (!length(x)) return(1)
+  n0 <- sum(x * s < 0) + 0.5 * sum(x == 0)
+  min(1, 2 * (1 + n0) / (1 + length(x)))
+}
+
+## sign_boot_stats: the 24 statistics (SIGN.BOOT.STATS) from the fitted (mu, phi) of the six groups (rows Pc, Pe, Hcc, Hec, Hct, Het; columns mu, phi).
+## A zero phi gives log2 phi = -Inf and theta = Inf; +Inf - Inf gives NaN, the undefined value the test counts on the null side.
+sign_boot_stats <- function(f) {
+  q <- cbind(phi = f[, "phi"], theta = 1 / f[, "phi"], zeta = f[, "mu"] * f[, "phi"], kappa = 1 / (f[, "mu"] * f[, "phi"]^2))
+  out <- numeric(0)
+  for (sc in c("log2", "raw")) {
+    v <- if (sc == "log2") suppressWarnings(log2(q)) else q
+    tot <- v["Pc", ] - v["Pe", ]; cis <- v["Hcc", ] - v["Hec", ]; tra <- tot - (v["Hct", ] - v["Het", ])
+    out <- c(out, setNames(c(tot, cis, tra), paste(rep(c("total", "cis", "trans"), each = 4), colnames(q), sc, sep = ".")))
+  }
+  out[SIGN.BOOT.STATS]
+}
+
+## sign_boot_cell: one cell of P1, the type I error and power of the bootstrap sign test. Row i of grid gives the cells per group N (each parent N
+## cells, the hybrid N cells split half cis and half trans by depth, as split_indices_by_depth() does), the mean count per parental cell (mean), the
+## dispersion phi, an effect ratio and its target ("none": every group has phi, every true contrast is zero; "total": Pc has ratio x phi; "cis": the Sc
+## allele has ratio x phi, in the cis and the trans cells) and R, the datasets of the cell. Every group has the same per-genome rate, so with ratio 1 every
+## quantity's true contrast is zero. Offsets are drawn from the pools (the observed depths); the hybrid alleles share an extrinsic factor of variance
+## ext_share x the smaller allele phi and each allele carries the private variance that gives it its phi (phi = 0: Poisson counts). Each dataset fits the
+## six groups with the pipeline's NB estimator, then B bootstrap replicates resample each parent and the undivided hybrid cells (a copy keeps its cis or
+## trans membership) and refit every group, a failed refit counting as phi = 0. Following the proposal: a dataset with a failed observed fit has no
+## contrast; the log2 estimate exists only with every phi > 0; the test reads the observed sign of the log2 contrast (+-Inf allowed), or of the raw one
+## when the log2 value is undefined. Returns per statistic: the share of datasets with a contrast and with a log2 estimate, the rejection rates at 0.05 and
+## 0.01 (p <= alpha) under the proposal and under the tie-splitting variant with binomial SEs, the coverage of the true contrast by the 95% percentile
+## interval (undefined replicates dropped; NA where the truth is undefined, log2 at phi = 0), and the mean shares of tied and undefined replicates.
+sign_boot_cell <- function(i, grid, pools, B, ext_share = 0.5, streams) with_stream(streams[[i]], {
+  g <- grid[i, ]
+  stopifnot(g$N >= 50, g$mean > 0, g$phi >= 0, g$ratio >= 1, g$target %in% c("none", "total", "cis"), g$R >= 10, B >= 20)
+  N <- g$N; mu <- g$mean / median(c(pools$O_Pc, pools$O_Pe))
+  phi <- c(Pc = g$phi, Pe = g$phi, Hc = g$phi, He = g$phi)
+  if (g$target == "total") phi[["Pc"]] <- g$phi * g$ratio
+  if (g$target == "cis")   phi[["Hc"]] <- g$phi * g$ratio
+  s2d <- ext_share * min(phi[["Hc"]], phi[["He"]]); vq <- pmax((1 + phi[c("Hc", "He")]) / (1 + s2d) - 1, 0)
+  ## true statistics: per-genome rate mu in every group (the hybrid allele offset is half the cell's depth, so the allele rate is the per-genome rate)
+  tf <- cbind(mu = mu, phi = c(Pc = phi[["Pc"]], Pe = phi[["Pe"]], Hcc = phi[["Hc"]], Hec = phi[["He"]], Hct = phi[["Hc"]], Het = phi[["He"]]))
+  truth <- sign_boot_stats(tf)
+  fit6 <- function(y, e, ix) { f <- rbind(Pc = fit_dispersion(y$Pc[ix$Pc], e$Pc[ix$Pc])[c("mu", "disp")], Pe = fit_dispersion(y$Pe[ix$Pe], e$Pe[ix$Pe])[c("mu", "disp")],
+                                          Hcc = fit_dispersion(y$Hc[ix$c], e$H[ix$c])[c("mu", "disp")], Hec = fit_dispersion(y$He[ix$c], e$H[ix$c])[c("mu", "disp")],
+                                          Hct = fit_dispersion(y$Hc[ix$t], e$H[ix$t])[c("mu", "disp")], Het = fit_dispersion(y$He[ix$t], e$H[ix$t])[c("mu", "disp")])
+                               colnames(f) <- c("mu", "phi"); f }
+  ns <- length(SIGN.BOOT.STATS)
+  res <- array(NA_real_, c(ns, g$R, 7), dimnames = list(SIGN.BOOT.STATS, NULL, c("tested", "log2_est", "p_null", "p_split", "cover", "ties", "undef")))
+  for (r in seq_len(g$R)) {
+    e <- list(Pc = sample(pools$O_Pc, N, replace = TRUE), Pe = sample(pools$O_Pe, N, replace = TRUE), H = sort(sample(pools$O_H, N, replace = TRUE), decreasing = TRUE))
+    sp <- split_indices_by_depth(N, 0.5)
+    d <- sim_pos_factor(N, "gamma", 1, s2d)
+    y <- list(Pc = rpois(N, mu * e$Pc * sim_pos_factor(N, "gamma", 1, phi[["Pc"]])), Pe = rpois(N, mu * e$Pe * sim_pos_factor(N, "gamma", 1, phi[["Pe"]])),
+              Hc = rpois(N, mu * e$H * d * sim_pos_factor(N, "gamma", 1, vq[["Hc"]])), He = rpois(N, mu * e$H * d * sim_pos_factor(N, "gamma", 1, vq[["He"]])))
+    fo <- fit6(y, e, list(Pc = seq_len(N), Pe = seq_len(N), c = sp$c, t = sp$t))
+    tested <- all(is.finite(fo[, "phi"]))
+    obs <- sign_boot_stats(fo)
+    xb <- vapply(seq_len(B), function(b) { h <- sample.int(N, N, replace = TRUE)
+      f <- fit6(y, e, list(Pc = sample.int(N, N, replace = TRUE), Pe = sample.int(N, N, replace = TRUE), c = h[h %in% sp$c], t = h[h %in% sp$t]))
+      f[!is.finite(f[, "phi"]), "phi"] <- 0; sign_boot_stats(f) }, numeric(ns))
+    for (k in seq_len(ns)) {
+      st <- SIGN.BOOT.STATS[k]; x <- xb[k, ]
+      raw_twin <- sub("\\.log2$", ".raw", st)
+      s <- if (is.nan(obs[[k]]) || is.na(obs[[k]])) sign(obs[[raw_twin]]) else sign(obs[[k]])
+      ci <- if (any(!is.na(x))) quantile(x, c(0.025, 0.975), type = 1, na.rm = TRUE, names = FALSE) else c(NA_real_, NA_real_)
+      res[k, r, ] <- c(tested, tested && is.finite(obs[[k]]),
+                       if (tested) sign_boot_p(x, s, "null") else NA_real_, if (tested) sign_boot_p(x, s, "split") else NA_real_,
+                       if (tested && is.finite(truth[[k]]) && all(!is.na(ci))) as.numeric(ci[1] <= truth[[k]] && truth[[k]] <= ci[2]) else NA_real_,
+                       mean(x == 0, na.rm = TRUE), mean(is.na(x)))
+    }
+  }
+  do.call(rbind, lapply(SIGN.BOOT.STATS, function(st) {
+    x <- res[st, , ]; t <- x[, "tested"] == 1; nt <- sum(t); parts <- strsplit(st, ".", fixed = TRUE)[[1]]
+    rj <- function(col, a) if (nt) mean(x[t, col] <= a) else NA_real_
+    data.frame(g, contrast = parts[1], quantity = parts[2], scale = parts[3], truth = truth[[st]], tested = mean(t), log2_estimate = mean(x[, "log2_est"] == 1),
+               reject_05 = rj("p_null", 0.05), reject_05_se = binom_se(rj("p_null", 0.05), nt), reject_01 = rj("p_null", 0.01), reject_01_se = binom_se(rj("p_null", 0.01), nt),
+               reject_05_split = rj("p_split", 0.05), reject_01_split = rj("p_split", 0.01), coverage = mean(x[, "cover"], na.rm = TRUE),
+               tie_share = mean(x[, "ties"], na.rm = TRUE), undefined_share = mean(x[, "undef"], na.rm = TRUE), row.names = NULL)
+  }))
+})
