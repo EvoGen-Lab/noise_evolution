@@ -966,6 +966,9 @@ state_assign <- function(z, thr, cycle_levels) {
 ## Midparent design shift (analysis/checks/mid_shift_check.R)
 ## ============================================================
 
+## median_se: the large-sample standard error of the median of x, 1.2533 MAD / sqrt(n) (exact for normal data, the MAD being scaled to the SD).
+median_se <- function(x) 1.2533 * mad(x) / sqrt(length(x))
+
 ## mid_shift_gene: one gene's log2 midparent contrasts d (the per-genome hybrid against the mean of the two parents; .mode_contrasts(), mode "mid") of the
 ## mean and of the dispersion in every cell-bootstrap replicate. draws holds the pre-drawn index sets (Pc, Pe, H: parental cells and undivided hybrid cells),
 ## drawn once for all genes so the median over genes can be taken replicate by replicate. Each replicate refits the share terms on its resampled hybrid cells
