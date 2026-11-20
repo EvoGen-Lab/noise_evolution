@@ -25,6 +25,10 @@ stopifnot(abs(.contrast_value("mid", ph, "DISP") - (0.5 * log2(0.1 * 0.3) - 0.5 
           abs(.contrast_value("par_se", ph, "DISP") - (0.5 * log2(0.1 * 0.3) - log2(0.4))) < 1e-12)
 stopifnot(.contrast_value("total", list(MIX.SC = 0, MIX.SE = 1), "DISP", zero_inf = TRUE) == -Inf,
           is.na(.disp_contrasts("total", list(MIX.SC = 0, MIX.SE = 0), zero_inf = TRUE)[["log"]]))
+## the mean midpoints are geometric on the log2 scale too: mid and par compare the mean log2 allele rate with the mean log2 parental rate or one parent
+mu5 <- list(MIX.SC = 2, MIX.SE = 8, HYB.SC = 1, HYB.SE = 9)
+stopifnot(abs(.contrast_value("mid", mu5, "MU") - (0.5 * log2(1 * 9) - 0.5 * log2(2 * 8))) < 1e-12,
+          abs(.contrast_value("par_se", mu5, "MU") - (0.5 * log2(1 * 9) - log2(8))) < 1e-12)
 ## the per-genome hybrid dispersion is the geometric mean of the allele dispersions on the log2 scale, the arithmetic mean on the raw scale
 mc <- .mode_contrasts(gmu[c("MIX.SC", "MIX.SE", "HYB.SC", "HYB.SE")], ph, cb, modes = "par_sc")
 stopifnot(colnames(mc) == c("mean", "disp", "raw"), abs(mc["par_sc", "disp"] - (0.5 * log2(0.1 * 0.3) - log2(0.2))) < 1e-12,

@@ -635,9 +635,9 @@ make_draws <- function(ncells, B, seed = 1, splits) {
 }
 
 ## Contrast definitions (Methods: Contrasts between groups). Every contrast is a weighted sum over the groups it uses, with weights lambda_r of +-1 or +-1/2
-## (.MODE.WEIGHTS): on the log2 scale of the dispersions (geometric means for the per-genome hybrid and the midparent), on the raw scale of the dispersions
-## (arithmetic means), and on the log2 scale of the corrected allele means for total, cis and trans. The mid and par mean contrasts compare arithmetic means:
-## the per-genome hybrid mean mu_H = (mu_Hc + mu_He) / 2 against the midparent mu_MP = (mu_Pc + mu_Pe) / 2 or one parent.
+## (.MODE.WEIGHTS). Each midpoint is taken on the scale of its contrast: on the log2 scale (means and dispersions) the per-genome hybrid and the midparent are
+## geometric means, log2 mu_H = (log2 mu_Hc + log2 mu_He) / 2 and log2 mu_MP = (log2 mu_Pc + log2 mu_Pe) / 2, and on the raw scale (phi, theta, zeta, kappa)
+## arithmetic means.
 ##   total    Pc +1, Pe -1                  the two parents
 ##   cis      Hc +1, He -1                  the two hybrid alleles, measured in the same cells
 ##   trans    Pc +1, Pe -1, Hc -1, He +1    the parental ratio minus the hybrid allele ratio
@@ -649,8 +649,8 @@ make_draws <- function(ncells, B, seed = 1, splits) {
 ## a hybrid cell share half the cell's hybrid depth, S_H / 2. A fitted allele mean mu*_r therefore keeps its genome's share of the hybrid library and converges to
 ## 2 c-bar mu_Hc or 2 (1 - c-bar) mu_He (the abundance factors), so each allele mean is divided by its abundance factor before any contrast (.correct_means()):
 ## mu_Hc = mu*_Hc / (2 c-bar), mu_He = mu*_He / (2 (1 - c-bar)). The allele dispersions arrive already corrected for the transcriptome share (.fit_one(share_r)).
-## The per-genome hybrid is built from the two corrected alleles of all hybrid cells (HYB.SC, HYB.SE): mean mu_H = (mu_Hc + mu_He) / 2, log2 phi_H the mean of
-## the two log2 allele dispersions (their geometric mean) and the raw-scale phi_H their arithmetic mean. No fit of the summed counts enters a contrast; HYB.COMB is fitted for reporting only (analysis.R Section 2.6).
+## The per-genome hybrid is built from the two corrected alleles of all hybrid cells (HYB.SC, HYB.SE): log2 mu_H and log2 phi_H the means of the two log2 allele
+## values (their geometric means), and the raw-scale phi_H their arithmetic mean. No fit of the summed counts enters a contrast; HYB.COMB is fitted for reporting only (analysis.R Section 2.6).
 ##
 ## cis_n, trans_n, cis_k, trans_k, cis_z and trans_z are internal only, not reported directly. They are cis and trans computed from the partitions chosen to
 ## balance the power of each quantity (Methods: Separate partitions for each quantity): dispersion (HYC.N / HYT.N, f_disp, read through .DISP_SOURCE), kinetic
@@ -722,17 +722,12 @@ make_draws <- function(ncells, B, seed = 1, splits) {
 }
 
 ## .contrast_value: the log2 contrast of one mode from a named list gv of per-group values. q is "MU" (corrected mean rates, .correct_means()), "DISP" (corrected
-## dispersions phi). DISP contrasts, and the MU contrasts of total, cis and trans, are the weighted sums of the log2 group values
-## (.MODE.WEIGHTS). The MU contrasts of mid and par compare the arithmetic per-genome hybrid mean (mu_Hc + mu_He) / 2 with the arithmetic midparent or one parent.
+## dispersions phi). Every contrast is the weighted sum of the log2 group values (.MODE.WEIGHTS), so the per-genome hybrid and the midparent of the mid and par
+## contrasts are geometric means on this scale, for the mean as for the dispersion.
 ## With zero_inf a value of zero maps to log2 = -Inf, which a bootstrap draw keeps; the result is NaN when +Inf and -Inf meet.
 .contrast_value <- function(mode, gv, q, zero_inf = FALSE) {
   l2 <- if (zero_inf) function(x) if (is.finite(x) && x == 0) -Inf else log2(x) else log2
   g <- .MODES[[mode]]; w <- .MODE.WEIGHTS[[mode]]
-  if (q == "MU" && mode %in% c("mid", "par_sc", "par_se")) {
-    hyb <- 0.5 * (gv[["HYB.SC"]] + gv[["HYB.SE"]])
-    ref <- if (mode == "mid") 0.5 * (gv[["MIX.SC"]] + gv[["MIX.SE"]]) else gv[[g[[3]]]]
-    return(l2(hyb) - l2(ref))
-  }
   sum(w * vapply(g, function(k) l2(gv[[k]]), numeric(1)))
 }
 
