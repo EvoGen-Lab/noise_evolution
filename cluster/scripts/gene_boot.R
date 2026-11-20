@@ -7,12 +7,12 @@
 ### Inputs  : gene_boot_inputs.rda (CONTRAST.MATS, CONTRAST.EXPOS, CONTRAST.FITS, GENES, N.BOOT,
 ###           DRAWS.REPS: one set of pre-drawn resamples per bootstrap replicate; SHARE.CELLS: each hybrid cell's observed Sc share and library size, from
 ###           which every replicate refits the transcriptome share terms; SHARE.OBS: the observed share quantities (mean share, share corrections of the
-###           datasets, per-gene summed-hybrid share term and ploidy shifts); GATES: the contrasts each gene's fits define)
+###           datasets); GATES: the contrasts each gene's observed fits define)
 ### Output  : gene_boot_output_<k>of<K>.rda for array task k of K, holding
 ###           BOOT.CONTRASTS (one row per gene) for replicate k. Task k
 ###           uses DRAWS.REPS[[k]]; replicate 1 is the reported bootstrap
-###           and the others check seed adequacy. Each row also holds every group's fraction of replicates
-###           at a zero dispersion or failed (zero_<dataset>; a failed refit counts as zero), from which analysis.R decides which groups are resolved.
+###           and the others check seed adequacy. Each row holds every contrast's estimate, bootstrap SE and percentile interval and,
+###           for the NB estimator, its bootstrap sign-test p-value (sign_boot_p(); a failed refit counts as a zero dispersion).
 ###
 ### Progress is printed by the master after each chunk of genes,
 ### so it lands in the job log even though the workers are forked.
