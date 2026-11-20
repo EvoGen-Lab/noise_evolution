@@ -164,6 +164,7 @@
 ###     diet_for_markers() - strips a Seurat object to the counts and data layers FindMarkers needs, keeping the cluster job's input small.
 ###   13c. FUNCTIONS THE CLUSTER SCRIPTS RUN
 ###     pilot_split_se_one() - one gene's bootstrap SE of log(mu), log(phi), log kinetic balance and log burst size for the four datasets needed to compute A and B, the hybrid-allele covariances and the zero fractions.
+###     dom_shift_curve() / dom_adjust_contrast() - The hybrid's shared rise in log2 dispersion, one robust loess of the mid contrast on log2 mu_H over calibrator genes, and the mid and par contrasts net of it, refitted in every bootstrap replicate.
 ###     boot_contrasts_one() - one gene's bootstrap contrasts and sign-test p-values across all modes (the unit of work a cluster worker does): log2 and raw contrasts of phi, raw theta, burst size and kinetic balance from the same refits.
 ###     coexpr_bootstrap_one() - one bootstrap draw of the co-expression decomposition.
 ###     coexpr_part_table() - estimate, bootstrap SE (from the running sums), z and two-sided normal p for decomposition nm, one row per gene pair.
@@ -1359,8 +1360,9 @@ reg_class_vec <- function(BURST.CONTRASTS, PR, quantity = c("mean", "disp", "bsi
 }
 
 ## dom_class_vec: classify_dom() for one quantity, aligned to BURST.CONTRASTS rows, from the par q-values (_q) and estimates. The par contrasts compare the
-## per-genome hybrid (built from the two allele fits) with each parent, so no ploidy adjustment enters. A missing column stops with a message.
-dom_class_vec <- function(BURST.CONTRASTS, PR, quantity = c("mean", "disp", "bsize", "kbal"), sig = 0.05) {
+## per-genome hybrid (built from the two allele fits) with each parent, so no ploidy adjustment enters. "adisp" reads the log2 dispersion contrasts adjusted
+## for the hybrid's shared rise (dom_adjust_contrast()). A missing column stops with a message.
+dom_class_vec <- function(BURST.CONTRASTS, PR, quantity = c("mean", "disp", "bsize", "kbal", "adisp"), sig = 0.05) {
   quantity <- match.arg(quantity)
   i   <- match(BURST.CONTRASTS$gene, PR$gene)
   cs <- paste0(quantity, "_par_sc_q"); ce <- paste0(quantity, "_par_se_q")
@@ -3818,7 +3820,10 @@ sign_boot_p <- function(x, s, ties = c("null", "split")) {
 ## "weighted" refits every resample with the moment estimator on the same cells and adds the w* columns, estimates and intervals only, which are not tested.
 ## The mean axis stays with NB. gates is the genes x contrasts logical matrix of the contrasts the observed fits define (apply_gate()): a failed observed fit
 ## leaves no estimate, interval or p-value on any scale, and a zero observed estimate none on log2 and none for raw theta or kappa.
-boot_contrasts_one <- function(g, expos, fits, mats, draws, share_cells, share_obs, gates = NULL, methods = "NB") {
+## keep names log2 contrasts ("mean_<mode>" or "disp_<mode>", reporting modes) whose replicate values are returned as the attribute "draws", a B x
+## length(keep) matrix (NA throughout for a contrast the gates leave undefined), for adjustments that need every gene's replicates at once (the
+## dominance dispersion adjustment, dom_adjust_contrast()).
+boot_contrasts_one <- function(g, expos, fits, mats, draws, share_cells, share_obs, gates = NULL, methods = "NB", keep = NULL) {
   stopifnot(all(methods %in% c("NB", "weighted")), "NB" %in% methods, is.list(share_cells), all(c("chat", "lib") %in% names(share_cells)),
             all(c("cbar", "r") %in% names(share_obs)), all(.CONTRAST.GROUPS %in% names(share_obs$r)))
   do_w <- "weighted" %in% methods
@@ -3899,7 +3904,55 @@ boot_contrasts_one <- function(g, expos, fits, mats, draws, share_cells, share_o
   }
   out$cor_par_mean <- cor_fin(Dm[, "par_sc"], Dm[, "par_se"])
   out$cor_par_disp <- cor_fin(Ds[, "par_sc"], Ds[, "par_se"])
-  data.frame(apply_gate(out, if (is.null(gates)) NULL else gates[g, ]), row.names = NULL, check.names = FALSE)
+  res <- data.frame(apply_gate(out, if (is.null(gates)) NULL else gates[g, ]), row.names = NULL, check.names = FALSE)
+  if (length(keep)) {
+    stopifnot(all(grepl("^(mean|disp)_", keep)), all(sub("^(mean|disp)_", "", keep) %in% .OUT_MODES))
+    kd <- vapply(keep, function(k) { md <- sub("^(mean|disp)_", "", k)
+      x <- if (startsWith(k, "mean_")) Dm[, md] else Ds[, .DISP_SOURCE[[md]]]
+      if (is.na(res[[paste0(k, "_est")]])) rep(NA_real_, B) else x }, numeric(B))
+    attr(res, "draws") <- matrix(kd, B, length(keep), dimnames = list(NULL, keep))
+  }
+  res
+}
+
+## ============================================================
+## DOMINANCE DISPERSION ADJUSTED FOR THE HYBRID'S SHARED RISE
+## ============================================================
+## Both hybrid alleles are noisier than the parents by an amount that falls with expression (checks MID1 to MID5), and that shared rise dominates the
+## dominance contrasts of log2 phi. One curve describes it: the two alleles share one noise level, so par_sc - par_se = log2 phi_Pe - log2 phi_Pc, minus the
+## total contrast, a parental difference that is not part of the shift. The curve is a robust loess of the mid contrast d on log2 mu_H (the per-genome hybrid
+## mean on the log2 scale) over calibrator genes, whose trans and total dispersion contrasts are not significant, so their d should sit near zero but for the
+## shared rise. The same curve is subtracted from mid, par_sc and par_se, so the parental difference stays in the parental contrasts. It is refitted in every
+## bootstrap replicate from the replicate values of the calibrators, so the intervals and the sign test carry its uncertainty.
+
+## .DOM.ADJ.MODES: the dominance modes whose log2 dispersion contrast is adjusted; .DOM.ADJ.BASE the mode whose calibrator values define the curve.
+.DOM.ADJ.MODES <- c("mid", "par_sc", "par_se")
+.DOM.ADJ.BASE  <- "mid"
+
+## dom_shift_curve: the shared rise at every gene's log2 mu_H (x), from a robust loess (family "symmetric", span) of d on x over the calibrator genes
+## (cal) with finite d and x. Genes outside the calibrators' range of x take the value at the nearest end. Returns one value per gene (NA where x is NA).
+## Applied to the observed mid contrasts and to each bootstrap replicate of them.
+dom_shift_curve <- function(d, x, cal, span = 0.3) {
+  ok <- cal & is.finite(d) & is.finite(x)
+  stopifnot("too few calibrator genes with finite values for the loess" = sum(ok) >= 20)
+  xo <- x[ok]; dfit <- data.frame(xo = xo, yo = d[ok])
+  fit <- loess(yo ~ xo, data = dfit, span = span, family = "symmetric", degree = 2)
+  xc <- pmin(pmax(x, min(xo)), max(xo))
+  unname(predict(fit, newdata = data.frame(xo = xc)))
+}
+
+## dom_adjust_contrast: one dominance mode's log2 dispersion contrast net of the shared rise, for every gene. est is the observed contrast, draws the genes x B
+## matrix of its bootstrap replicates (boot_contrasts_one(keep = )), f0 the observed curve and fb the genes x B matrix of the replicate curves (dom_shift_curve()
+## on each replicate of the mid contrast). A replicate at +-Inf stays there. Returns the adjusted estimate with its bootstrap SE and 95% percentile interval and
+## the sign-test p-value (sign_boot_p()), as columns adisp_<mode>_est, _se, _lo, _hi, _p.
+dom_adjust_contrast <- function(md, est, draws, f0, fb) {
+  stopifnot(length(est) == nrow(draws), length(f0) == length(est), identical(dim(fb), dim(draws)))
+  adj <- draws - fb; a0 <- est - f0
+  s <- t(vapply(seq_along(est), function(i) .boot_summary(adj[i, ], inf = TRUE), numeric(3)))
+  p <- vapply(seq_along(est), function(i) if (is.finite(a0[i])) sign_boot_p(adj[i, ], sign(a0[i])) else NA_real_, numeric(1))
+  out <- data.frame(ifelse(is.finite(a0), a0, NA_real_), s[, "se"], s[, "lo"], s[, "hi"], p)
+  names(out) <- paste0("adisp_", md, c("_est", "_se", "_lo", "_hi", "_p"))
+  out
 }
 
 ## ============================================================

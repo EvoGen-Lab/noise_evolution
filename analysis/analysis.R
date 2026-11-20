@@ -811,6 +811,7 @@ JOB.INPUTS <- list2env(list(CONTRAST.MATS = CONTRAST.MATS.INFER, CONTRAST.EXPOS 
                             DRAWS.REPS = DRAWS.REPS, N.BOOT = N.BOOT, SHARE.OBS = SHARE.OBS, SHARE.CELLS = SHARE.CELLS, GATES = GATES))
 save(list = c("CONTRAST.MATS", "CONTRAST.EXPOS", "CONTRAST.FITS", "GENES", "DRAWS.REPS", "N.BOOT", "SHARE.OBS", "SHARE.CELLS", "GATES"), envir = JOB.INPUTS, file = file.path(INPUT.DIR, "gene_boot_inputs.rda"))
 BOOT.CONTRASTS.REPS.INFER <- load_replicates("gene_boot", "BOOT.CONTRASTS", N.BOOT.REP, expected = length(GENES.INFER))
+BOOT.DOM.DRAWS <- load_replicates("gene_boot", "BOOT.DOM.DRAWS", 1, expected = length(GENES.INFER), size = function(x) nrow(x[[1]]))[[1]]   # replicate 1 holds them
 BOOT.CONTRASTS.INFER <- BOOT.CONTRASTS.REPS.INFER[[1]]
 stopifnot(identical(sort(BOOT.CONTRASTS.INFER$gene), sort(GENES.INFER)))
 ## ---- end cluster round trip ----
@@ -866,6 +867,54 @@ PR.INFER <- local({
   for (nm in setdiff(names(df), "gene")) df[[sub("_p$", "_q", nm)]] <- p.adjust(df[[nm]], method = "BH")
   df
 })
+
+## Dominance dispersion adjusted for the hybrid's shared rise (checks MID1 to MID5). Both hybrid alleles are noisier than the parents by an amount that falls
+## with expression, and that shared rise dominates the log2 dispersion contrasts mid, par_sc and par_se. One curve describes it: the two alleles share one noise
+## level, so the two parental contrasts differ by the total contrast, a parental difference that stays in them. Calibrator genes (DOM.ADJ.CAL), whose trans and
+## total log2 dispersion contrasts both have q >= DOM.ADJ.SIG, carry no detectable trans divergence and have Pc close to Pe, so their mid contrast should sit
+## near zero but for the shared rise. A robust loess of their mid contrast on log2 mu_H (span DOM.ADJ.SPAN) gives the rise at every expression level
+## (dom_shift), and the same curve is subtracted from mid, par_sc and par_se: adisp_<mode>_est, _se, _lo, _hi and the sign-test _p. The curve is refitted in
+## every bootstrap replicate from the calibrators' replicate values of the mid contrast (gene_boot.R replicate 1), and subtracted from the same replicate of
+## each contrast. The BH q-values form one family per adjusted contrast. log2 mu_H is the mean of the two corrected allele means on the log2 scale (geometric
+## midpoint). The unadjusted disp_* contrasts stay in the tables beside the adjusted ones.
+DOM.ADJ.SIG  <- 0.05      # q threshold of the calibrator genes (trans and total log2 dispersion contrasts both at or above it)
+DOM.ADJ.SPAN <- 0.3       # loess span of the shared rise on log2 mu_H
+DOM.ADJ.X <- local({
+  mu <- .correct_means(list(HYB.SC = CONTRAST.FITS.INFER$HYB.SC$MU, HYB.SE = CONTRAST.FITS.INFER$HYB.SE$MU), C.BAR)
+  l <- 0.5 * (log2(mu$HYB.SC) + log2(mu$HYB.SE)); l[!is.finite(l)] <- NA
+  setNames(l, rownames(CONTRAST.FITS.INFER$HYB.SC))[BURST.CONTRASTS.INFER$gene]
+})
+DOM.ADJ.CAL <- (PR.INFER$disp_trans_q[match(BURST.CONTRASTS.INFER$gene, PR.INFER$gene)] >= DOM.ADJ.SIG) %in% TRUE &
+               (PR.INFER$disp_total_q[match(BURST.CONTRASTS.INFER$gene, PR.INFER$gene)] >= DOM.ADJ.SIG) %in% TRUE & is.finite(DOM.ADJ.X)
+stopifnot(all(vapply(BOOT.DOM.DRAWS, function(m) identical(rownames(m), BURST.CONTRASTS.INFER$gene), logical(1))))
+## The observed curve and one curve per replicate, from the mid contrast of the calibrators
+DOM.ADJ.BASE.KEY <- paste0("disp_", .DOM.ADJ.BASE)
+DOM.ADJ.F0 <- dom_shift_curve(BURST.CONTRASTS.INFER[[paste0(DOM.ADJ.BASE.KEY, "_est")]], DOM.ADJ.X, DOM.ADJ.CAL, DOM.ADJ.SPAN)
+DOM.ADJ.FB <- vapply(seq_len(ncol(BOOT.DOM.DRAWS[[DOM.ADJ.BASE.KEY]])), function(b) dom_shift_curve(BOOT.DOM.DRAWS[[DOM.ADJ.BASE.KEY]][, b], DOM.ADJ.X, DOM.ADJ.CAL, DOM.ADJ.SPAN),
+                     numeric(nrow(BURST.CONTRASTS.INFER)))
+DOM.ADJ <- do.call(cbind, c(list(data.frame(dom_shift = DOM.ADJ.F0)), lapply(.DOM.ADJ.MODES, function(md)
+  dom_adjust_contrast(md, BURST.CONTRASTS.INFER[[paste0("disp_", md, "_est")]], BOOT.DOM.DRAWS[[paste0("disp_", md)]], DOM.ADJ.F0, DOM.ADJ.FB))))
+BURST.CONTRASTS.INFER <- cbind(BURST.CONTRASTS.INFER, log2_mu_H = unname(DOM.ADJ.X), dom_calibrator = DOM.ADJ.CAL, DOM.ADJ[, !grepl("_p$", names(DOM.ADJ))])
+PR.INFER <- local({
+  df <- PR.INFER; i <- match(df$gene, BURST.CONTRASTS.INFER$gene)
+  for (md in .DOM.ADJ.MODES) { pc <- paste0("adisp_", md, "_p"); df[[pc]] <- DOM.ADJ[[pc]][i]; df[[paste0("adisp_", md, "_q")]] <- p.adjust(df[[pc]], method = "BH") }
+  df
+})
+## The curve at a grid of expression levels, the calibrator count, and the median d before and after the adjustment, per mode
+DOM.ADJ.SUMMARY <- do.call(rbind, lapply(.DOM.ADJ.MODES, function(md) {
+  x <- DOM.ADJ.X; f <- DOM.ADJ$dom_shift; d <- BURST.CONTRASTS.INFER[[paste0("disp_", md, "_est")]]; a <- DOM.ADJ[[paste0("adisp_", md, "_est")]]
+  qs <- quantile(x[DOM.ADJ.CAL], c(0.05, 0.25, 0.5, 0.75, 0.95), na.rm = TRUE)
+  data.frame(mode = md, calibrators = sum(DOM.ADJ.CAL & is.finite(d)), genes = sum(is.finite(d)),
+             curve_q05 = approx(x, f, qs[1], ties = mean)$y, curve_q25 = approx(x, f, qs[2], ties = mean)$y, curve_q50 = approx(x, f, qs[3], ties = mean)$y,
+             curve_q75 = approx(x, f, qs[4], ties = mean)$y, curve_q95 = approx(x, f, qs[5], ties = mean)$y,
+             median_d = median(d, na.rm = TRUE), median_adjusted_d = median(a, na.rm = TRUE), median_adjusted_d_calibrators = median(a[DOM.ADJ.CAL], na.rm = TRUE),
+             significant_unadjusted = sum(PR.INFER[[paste0("disp_", md, "_q")]] < 0.05, na.rm = TRUE),
+             significant_adjusted = sum(PR.INFER[[paste0("adisp_", md, "_q")]] < 0.05, na.rm = TRUE), row.names = NULL)
+}))
+cat("Dominance dispersion adjusted for the shared rise (curve at the 5, 25, 50, 75 and 95% points of the calibrators' log2 mu_H):\n")
+print(DOM.ADJ.SUMMARY, digits = 3, row.names = FALSE)
+write.csv(DOM.ADJ.SUMMARY, file.path(TABLE.DIR, "dominance_dispersion_adjustment.csv"), row.names = FALSE)
+
 ## Status of every gene for every quantity and mode, in one long table, so each analysis reports the genes it could use and how far each got:
 ## eligible (defined from the fits), run (went through the jobs), est_ok, ci_ok (a bootstrap interval exists), test_ok (a sign-test p-value exists) and sig
 ## (BH q < 0.05); the moment-estimator quantities (w*) are never tested. ANALYSIS.COUNTS tallies them per quantity and mode. Nothing here removes a gene; an analysis selects on the flags it needs.
@@ -1140,7 +1189,7 @@ save(GENES, GENES.INFER, GENE.TABLE, SPLIT.FITS.W, CONTRAST.FITS.INFER, PLOIDY.S
      N.COEXPR, SEED.COEXPR,
      SPLIT.IDX.MEAN, SPLIT.IDX.DISP, SPLIT.IDX.KBAL, SPLIT.IDX.BSIZE, SPLIT.FRAC, PILOT.RESOLVED, PARTITION.REPORT, PILOT.LOGPHI.SE, APPENDIX.B, ROUTE.CHECK, PHI.MU.COR,
      STATE.PROGRAM, STATE.MEMBERS, STATE.COND, STATE.SCORE.SUMMARY, COND.CONTRASTS, STATE.FLAG.SUMMARY, STATE.FLAGGED, STATE.FLAG.SIG,
-     PILOT.PRECISION, DROPOUT.AIC,
+     PILOT.PRECISION, DROPOUT.AIC, DOM.ADJ.SUMMARY, DOM.ADJ.SIG, DOM.ADJ.SPAN,
      file = ckpt_path(2))
 
 console_start(3)
@@ -1196,6 +1245,7 @@ dev.off()
 # dispersions (Route A), each a single-genome dispersion, so the fall in dispersion from summing the alleles (the ploidy shift,
 # reported in APPENDIX.B) does not enter the par estimates.
 DOM.VEC <- lapply(setNames(QUANTITIES, QUANTITIES), function(q) dom_class_vec(BURST.CONTRASTS, PR, q))
+DOM.VEC$adisp <- dom_class_vec(BURST.CONTRASTS, PR, "adisp")   # dispersion dominance net of the hybrid's shared rise
 # Genes classified for each quantity. A class is NA when the contrasts it needs have no p-value, so the counts below show how many genes each
 # classification covers; they differ by quantity because eligibility does (the log2 and kappa quantities need phi > 0 where the mean does not).
 CLASSIFIED.COUNTS <- data.frame(quantity = QUANTITIES,

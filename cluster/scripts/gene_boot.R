@@ -13,6 +13,8 @@
 ###           uses DRAWS.REPS[[k]]; replicate 1 is the reported bootstrap
 ###           and the others check seed adequacy. Each row holds every contrast's estimate, bootstrap SE and percentile interval and,
 ###           for the NB estimator, its bootstrap sign-test p-value (sign_boot_p(); a failed refit counts as a zero dispersion).
+###           Replicate 1 also holds BOOT.DOM.DRAWS: for each log2 dominance dispersion contrast (disp_mid, disp_par_sc, disp_par_se) a genes x B
+###           matrix of its replicate values, from which analysis.R refits the hybrid's shared rise in every replicate (dom_adjust_contrast()).
 ###
 ### Progress is printed by the master after each chunk of genes,
 ### so it lands in the job log even though the workers are forked.
@@ -24,6 +26,7 @@ library('MASS')          # glm.nb ships with base R; set lib= if your cluster ne
 source("functions.R")
 write_pkg_versions("gene_boot")   # R and package versions of this job, compared with renv.lock by check_pkg_versions()
 
+DOM.KEEP.MODES <- c("mid", "par_sc", "par_se")   # dominance modes whose log2 dispersion replicates are kept (.DOM.ADJ.MODES in functions.R)
 load("gene_boot_inputs.rda")     # GENES is the inference set (every gene for which at least one contrast is defined), not only the matched set. CONTRAST.MATS, CONTRAST.EXPOS, CONTRAST.FITS, GENES, DRAWS.REPS, N.BOOT, SHARE.CELLS, SHARE.OBS, GATES
 
 ## Job-array position: task k bootstraps replicate k. A finished task leaves its
@@ -57,7 +60,8 @@ for (k in seq_along(chunks)) {
   ## mean and dispersion contrasts per replicate, and returns the point estimate, bootstrap SE,
   ## boundary fraction and mean-disp draw correlation for the six reportable modes. Replicates where
   ## any needed fit is non-finite give NA for that contrast and are left out of its SD.
-  results[[k]] <- parLapply(cl, chunks[[k]], boot_contrasts_one, expos = CONTRAST.EXPOS, fits = CONTRAST.FITS, mats = CONTRAST.MATS, draws = DRAWS, share_cells = SHARE.CELLS, share_obs = SHARE.OBS, gates = GATES, methods = c("NB", "weighted"))
+  results[[k]] <- parLapply(cl, chunks[[k]], boot_contrasts_one, expos = CONTRAST.EXPOS, fits = CONTRAST.FITS, mats = CONTRAST.MATS, draws = DRAWS, share_cells = SHARE.CELLS, share_obs = SHARE.OBS, gates = GATES, methods = c("NB", "weighted"),
+                            keep = if (ARRAY.ID == 1) paste0("disp_", DOM.KEEP.MODES) else NULL)
   done <- done + length(chunks[[k]])
   el   <- as.numeric(difftime(Sys.time(), t0, units = "mins"))
   eta  <- if (el > 0) (length(GENES) - done) * (el / done) else NA_real_
@@ -67,8 +71,13 @@ for (k in seq_along(chunks)) {
   flush.console()
 }
 
-BOOT.CONTRASTS <- do.call(rbind, unlist(results, recursive = FALSE))
-save(BOOT.CONTRASTS, file = OUT.FILE)
+## The replicate values the dominance adjustment needs (replicate 1 only), one genes x B matrix per contrast, taken from each row's attribute before the
+## rows are bound
+rows <- unlist(results, recursive = FALSE)
+BOOT.DOM.DRAWS <- if (ARRAY.ID == 1) lapply(setNames(paste0("disp_", DOM.KEEP.MODES), paste0("disp_", DOM.KEEP.MODES)), function(k)
+  matrix(t(vapply(rows, function(r) attr(r, "draws")[, k], numeric(N.BOOT))), length(rows), N.BOOT, dimnames = list(vapply(rows, `[[`, "", "gene"), NULL))) else NULL
+BOOT.CONTRASTS <- do.call(rbind, rows)
+save(BOOT.CONTRASTS, BOOT.DOM.DRAWS, file = OUT.FILE)
 
 cat(sprintf("bootstrap done: %d genes in %.1f min [replicate %d]\n",
             nrow(BOOT.CONTRASTS),

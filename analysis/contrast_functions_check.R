@@ -98,6 +98,25 @@ bt <- vapply(draws, function(d) { a <- .fit_one(M$MIX.SC["g1", d$MIX.SC], E$MIX.
   f0 <- function(v) if (is.finite(v)) v else 0
   .disp_contrasts("total", list(MIX.SC = f0(a[["disp"]]), MIX.SE = f0(b[["disp"]])), zero_inf = TRUE)[["log"]] }, numeric(1))
 stopifnot(abs(bo$disp_total_p[1] - sign_boot_p(bt, sign(bo$disp_total_est[1]))) < 1e-12)
+## kept replicate values (boot_contrasts_one(keep = )): one column per kept contrast, the replicates the sign test reads
+bk <- boot_contrasts_one("g1", E, FITS, M, draws, list(chat = chat, lib = libh), share_obs, gates = GATES, keep = c("disp_mid", "disp_par_sc"))
+kd <- attr(bk, "draws")
+stopifnot(identical(dim(kd), c(length(draws), 2L)), abs(sign_boot_p(kd[, "disp_mid"], sign(bk$disp_mid_est)) - bk$disp_mid_p) < 1e-12,
+          abs(sign_boot_p(kd[, "disp_par_sc"], sign(bk$disp_par_sc_est)) - bk$disp_par_sc_p) < 1e-12)
+
+## the shared-rise curve: a planted rise 2 - 0.25 x on calibrators is recovered, extrapolated flat beyond their range, and one curve subtracted from mid and
+## both parental contrasts leaves their difference (minus the total contrast) unchanged in the estimate and in every replicate
+set.seed(3); ng <- 600; xs <- runif(ng, -1, 8); calg <- runif(ng) < 0.5 & xs < 7
+dmid <- 2 - 0.25 * xs + rnorm(ng, 0, 0.3); f0 <- dom_shift_curve(dmid, xs, calg, 0.3)
+stopifnot(max(abs((f0 - (2 - 0.25 * pmin(xs, max(xs[calg]))))[calg])) < 0.25, abs(median(dmid[calg] - f0[calg])) < 0.05,
+          isTRUE(all.equal(f0[xs > max(xs[calg])], rep(f0[which.max(replace(xs, !calg, -Inf))], sum(xs > max(xs[calg]))))))
+tot <- rnorm(ng, 0, 0.5); dsc <- dmid - tot / 2; dse <- dmid + tot / 2
+rep_ <- function(v) v + matrix(rnorm(ng * 30, 0, 0.2), ng, 30)
+Dm_ <- rep_(dmid); Dsc_ <- Dm_ - tot / 2; Dse_ <- Dm_ + tot / 2
+fb <- vapply(1:30, function(b) dom_shift_curve(Dm_[, b], xs, calg, 0.3), numeric(ng))
+a_sc <- dom_adjust_contrast("par_sc", dsc, Dsc_, f0, fb); a_se <- dom_adjust_contrast("par_se", dse, Dse_, f0, fb)
+stopifnot(max(abs((a_sc$adisp_par_sc_est - a_se$adisp_par_se_est) - (dsc - dse))) < 1e-12, all(c("adisp_par_sc_p", "adisp_par_sc_lo") %in% names(a_sc)))
+
 ## the gate NAs a contrast's estimates, intervals and p-values
 G2 <- GATES; G2["g1", "log_cis"] <- FALSE; G2["g1", "kbal_trans"] <- FALSE; G2["g1", "bsize_cis"] <- FALSE
 b2 <- boot_contrasts_one("g1", E, FITS, M, draws, list(chat = chat, lib = libh), share_obs, gates = G2)
