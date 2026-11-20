@@ -1,15 +1,16 @@
 ###############################################################
 ### estimator_mse.R
 ### Bias, variance and mean squared error of the two dispersion estimators on the experiment's own sequencing depths: the pipeline's Cox-Reid adjusted
-### NB likelihood (fit_dispersion(method = "NB")) and the Appendix A weighted method of moments (method = "weighted"), both truncated at zero as in the
+### NB likelihood (fit_dispersion(method = "NB")) and the Appendix C weighted method of moments (method = "weighted"), both truncated at zero as in the
 ### pipeline. The comparison bears on the choice of the primary estimator (Notes for revision: Cox-Reid adjustment): Cox-Reid is the more precise when the
 ### counts are NB, and the moment estimator the less biased when the expression factor is not gamma.
 ### Needs only the Section 1 checkpoint. The depths are the Section 2 offsets of the observed cells: a parent's library over the median parental library
-### (Pc, Pe) and half the hybrid depth for a hybrid allele (H); every simulated dataset uses all the observed cells of its group. The mu and phi values span
+### (Pc, Pe) and the library of the Sc genome for a hybrid allele (H, both simulated alleles of a cell sharing it); every simulated dataset uses all the
+### observed cells of its group. The mu and phi values span
 ### the data: mu (the expected count of a cell at the reference depth) runs over MSE.N.MU log-spaced values between the MSE.MU.Q quantiles of the genes'
-### fitted rates, and phi takes the MSE.PHI.Q quantiles of the positive Cox-Reid fits of MSE.FIT.GENES genes per group (share corrected in the hybrid).
+### fitted rates, and phi takes the MSE.PHI.Q quantiles of the positive Cox-Reid fits of MSE.FIT.GENES genes per group (split corrected in the hybrid).
 ### Each cell of the grid (group x factor family x mu x phi) simulates MSE.R datasets (mse_cell()); the bias, variance and MSE are averaged over
-### MSE.NBATCH batches of the replicates with their SE. The simulated hybrid alleles carry no transcriptome share variation (eta about 7e-5 in the data).
+### MSE.NBATCH batches of the replicates with their SE. The simulated hybrid alleles carry no library split error (eta about 7e-5 in the data).
 ### Results: results/checks/M1.rds and M1_estimator_mse.csv (raw and relative scales), a row in summary.csv, and one PDF per measure in
 ### figures/extra/check_M1_<measure>.pdf: x = mu (log scale), one colored line per phi, the mean as a solid line and mean +- 1 SE as light lines, panels by
 ### group (rows) and estimator (columns), one page per factor family. MSE.PLOT.SCALE "relative" plots bias / phi, variance / phi^2 and MSE / phi^2 so the
@@ -43,22 +44,24 @@ if (!exists("MSE.RUN")) MSE.RUN <- c("M1", "M2", "M3")   # which parts to run; M
 set.seed(SEED.SECTION + 25)
 
 stopifnot("estimator_mse.R needs the Section 1 checkpoint" = file.exists(ckpt_path(1)))
-load(ckpt_path(1))      # MIX.SC, MIX.SE, HYB.SC, HYB.SE (cells after QC), C.BAR, R.C, R.E
+load(ckpt_path(1))      # MIX.SC, MIX.SE, HYB.SC, HYB.SE (cells after QC), SPLIT.ETA
 
-## Offsets of Section 2: D is the median parental library; a hybrid allele is offset by half the cell's hybrid depth.
+## Offsets of Section 2: D is the median parental library; a hybrid allele is offset by the library of its own genome over D. The simulations give both alleles
+## of a hybrid cell the Sc allele's offset (H), an allele depth; the fits of the data below use each allele's own offset.
 DEPTH.REF.M <- median(c(colSums(MIX.SC), colSums(MIX.SE)))
-MSE.EXPOS <- list(Pc = colSums(MIX.SC) / DEPTH.REF.M, Pe = colSums(MIX.SE) / DEPTH.REF.M, H = (colSums(HYB.SC) + colSums(HYB.SE)) / DEPTH.REF.M / 2)
+MSE.EXPOS <- list(Pc = colSums(MIX.SC) / DEPTH.REF.M, Pe = colSums(MIX.SE) / DEPTH.REF.M, H = colSums(HYB.SC) / DEPTH.REF.M)
 cat(sprintf("Cells: Pc %d, Pe %d, hybrid %d; offset CV %.2f, %.2f, %.2f\n", length(MSE.EXPOS$Pc), length(MSE.EXPOS$Pe), length(MSE.EXPOS$H),
             sd(MSE.EXPOS$Pc) / mean(MSE.EXPOS$Pc), sd(MSE.EXPOS$Pe) / mean(MSE.EXPOS$Pe), sd(MSE.EXPOS$H) / mean(MSE.EXPOS$H)))
 
 ## The ranges in the data. Each group's genes with MSE.MIN.MEAN counts per cell and MSE.MIN.CELLS cells with a count give the fitted rates
-## sum(y) / sum(O) (the two hybrid alleles pooled, each with its share correction for phi); a random MSE.FIT.GENES of them per group are fitted
+## sum(y) / sum(O) (the two hybrid alleles pooled, each on its own offset with its split correction for phi); a random MSE.FIT.GENES of them per group are fitted
 ## with the Cox-Reid estimator for the dispersion quantiles.
 MSE.DATA <- list(Pc = list(MIX.SC), Pe = list(MIX.SE), H = list(HYB.SC, HYB.SE))
-MSE.ETA  <- list(Pc = 0, Pe = 0, H = c(R.C, R.E))
+MSE.DATA.EXPOS <- list(Pc = list(MSE.EXPOS$Pc), Pe = list(MSE.EXPOS$Pe), H = list(colSums(HYB.SC) / DEPTH.REF.M, colSums(HYB.SE) / DEPTH.REF.M))
+MSE.ETA  <- list(Pc = list(0), Pe = list(0), H = list(SPLIT.ETA$Hc, SPLIT.ETA$He))
 MU.OBS <- list(); PHI.OBS <- list()
 for (k in MSE.GROUPS) for (a in seq_along(MSE.DATA[[k]])) {
-  m <- MSE.DATA[[k]][[a]]; e <- MSE.EXPOS[[k]]
+  m <- MSE.DATA[[k]][[a]]; e <- MSE.DATA.EXPOS[[k]][[a]]
   ok <- rowMeans(m) >= MSE.MIN.MEAN & rowSums(m > 0) >= MSE.MIN.CELLS
   MU.OBS[[paste(k, a)]] <- rowSums(m[ok, , drop = FALSE]) / sum(e)
   gs <- with_local_seed(SEED.MSE + a, sample(which(ok), min(MSE.FIT.GENES, sum(ok))))
@@ -74,7 +77,7 @@ print(round(t(vapply(PHI.OBS, quantile, numeric(length(MSE.PHI.Q)), probs = MSE.
 
 ## Line colors and labels of the figures: one color per phi value in a single-hue ramp (light = small phi, dark = large phi).
 MSE.COLS <- colorRampPalette(c("#6BAED6", "#08306B"))(length(MSE.PHI))
-MSE.EST.LABEL <- c(NB = "Cox-Reid NB", weighted = "Weighted moments (Appendix A)")
+MSE.EST.LABEL <- c(NB = "Cox-Reid NB", weighted = "Weighted moments (Appendix C)")
 MSE.GROUP.LABEL <- c(Pc = "Sc parent", Pe = "Se parent", H = "Hybrid allele")
 
 ##############################################################################

@@ -531,7 +531,8 @@ fit_counts_offset <- function(mat, exposure, cl = NULL, eta = 0) {
     f <- todo[1]; todo <- todo[-1]
     if (f %in% needed) next
     needed <- c(needed, f)
-    todo   <- c(todo, intersect(codetools::findGlobals(get(f, envir = globalenv()), merge = TRUE), ls(globalenv(), all.names = TRUE)))
+    obj <- get(f, envir = globalenv())
+    if (is.function(obj)) todo <- c(todo, intersect(codetools::findGlobals(obj, merge = TRUE), ls(globalenv(), all.names = TRUE)))   # data objects (.NB.INFO) are exported as they are
   }
   chunk_id   <- cut(seq_len(nrow(mat)), length(cl), labels = FALSE)
   mat_chunks <- split.data.frame(mat, chunk_id)
@@ -4426,10 +4427,10 @@ sim_pos_factor <- function(n, family, m, v) {
     stop("sim_pos_factor(): unknown family '", family, "'"))
 }
 
-## sim_draw_share: n latent transcriptome shares c_i with mean cbar and variance var_c (beta).
-sim_draw_share <- function(n, cbar, var_c) {
-  if (var_c <= 0) return(rep(cbar, n))
-  k <- cbar * (1 - cbar) / var_c - 1
-  if (k <= 0) stop("sim_draw_share(): var_c must be below cbar * (1 - cbar)")
-  rbeta(n, cbar * k, (1 - cbar) * k)
+## sim_draw_share: n latent transcriptome shares s_i with mean sbar and variance var_s (beta).
+sim_draw_share <- function(n, sbar, var_s) {
+  if (var_s <= 0) return(rep(sbar, n))
+  k <- sbar * (1 - sbar) / var_s - 1
+  if (k <= 0) stop("sim_draw_share(): var_s must be below sbar * (1 - sbar)")
+  rbeta(n, sbar * k, (1 - sbar) * k)
 }

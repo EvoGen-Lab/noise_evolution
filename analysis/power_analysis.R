@@ -256,15 +256,13 @@ console_stop()
 # correlation across genes that sets the phi grid.
 MODES.REAL <- local({
   hyb_sc <- SEC2$HYB.SC; hyb_se <- SEC2$HYB.SE; genes <- SEC2$GENES; fits <- SEC2$CONTRAST.FITS
-  ## Per-allele depth ratio: the hybrid allele's share of the hybrid library times the hybrid-to-parent
-  ## library ratio, averaged over the two species
-  share_sc <- sum(hyb_sc) / (sum(hyb_sc) + sum(hyb_se))
-  depth <- mean(c(share_sc * mean(SEC2$EXPO.HYB) / mean(SEC2$EXPO.MIX.SC),
-                  (1 - share_sc) * mean(SEC2$EXPO.HYB) / mean(SEC2$EXPO.MIX.SE)))
+  ## Per-allele depth ratio: each hybrid allele's offset (its own genome's library over the reference) over its parent's offset,
+  ## averaged over the two species
+  depth <- mean(c(mean(SEC2$EXPO.HYB.SC) / mean(SEC2$EXPO.MIX.SC), mean(SEC2$EXPO.HYB.SE) / mean(SEC2$EXPO.MIX.SE)))
   ## Allele-pair residual correlation per gene, disattenuated by the alleles' reliabilities as in Section 5.1
   ## (the latent correlation phi of the generator is the quantity this estimates)
-  r_sc <- nb_residuals(hyb_sc[genes, ], SEC2$EXPO.HYB, fits$HYB.SC[genes, ])
-  r_se <- nb_residuals(hyb_se[genes, ], SEC2$EXPO.HYB, fits$HYB.SE[genes, ])
+  r_sc <- nb_residuals(hyb_sc[genes, ], SEC2$EXPO.HYB.SC, fits$HYB.SC[genes, ])
+  r_se <- nb_residuals(hyb_se[genes, ], SEC2$EXPO.HYB.SE, fits$HYB.SE[genes, ])
   attn <- sqrt(gene_reliability(fits["HYB.SC"], genes) * gene_reliability(fits["HYB.SE"], genes))
   rho_true <- row_cor(r_sc, r_se) / attn
   rho_true <- rho_true[is.finite(rho_true) & attn > 0.2]

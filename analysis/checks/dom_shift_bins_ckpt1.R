@@ -2,13 +2,13 @@
 ### dom_shift_bins_ckpt1.R
 ### MID5: is one median per expression decile enough to describe the hybrid's genome-wide rise in dispersion? The dominance contrasts of log2 phi,
 ### Delta_dom = mid ((log2 phi_Hc + log2 phi_He) / 2 - (log2 phi_Pc + log2 phi_Pe) / 2) and par ((log2 phi_Hc + log2 phi_He) / 2 - log2 phi_P), are
-### plotted against log2 mu_H, the per-genome hybrid mean on the log2 scale ((log2 mu_Hc + log2 mu_He) / 2, allele means divided by their abundance
-### factors), with the median of each equal-count decile of log2 mu_H overlaid and a loess fit for comparison. Equal counts keep every median stable;
+### plotted against log2 mu_H, the per-genome hybrid mean on the log2 scale ((log2 mu_Hc + log2 mu_He) / 2, allele means on their own library offsets),
+### with the median of each equal-count decile of log2 mu_H overlaid and a loess fit for comparison. Equal counts keep every median stable;
 ### the end deciles then span wide ranges of expression, so each decile is also split at its median log2 mu_H, and the medians of its two halves are
 ### compared: a difference beyond 2 SE (SE of a median about 1.2533 MAD / sqrt(n)) marks a decile whose shift slopes, which one median would under- or
 ### over-correct at its edges (split it, or use a smooth fit). With 30 deciles tested at 2 SE, about 1 to 2 flags arise by chance; a slope that matters is
 ### large against its SE and agrees with the loess fit in the figure.
-### Fits: the pipeline's Cox-Reid NB on all cells of each group, offsets of Section 2, share corrections R.C and R.E. Genes need phi > 0 and a mean count
+### Fits: the pipeline's Cox-Reid NB on all cells of each group, offsets of Section 2, the library split correction (SPLIT.ETA). Genes need phi > 0 and a mean count
 ### of at least MID5.MIN.COUNT per cell in all four groups. Section 1 checkpoint only. Point estimates.
 ### Writes results/checks/MID5_dom_bins.csv, MID5.rds, a row in summary.csv and figures/extra/check_MID5_dom_shift.pdf.
 ###############################################################
@@ -21,20 +21,18 @@ if (!exists("MID5.MIN.COUNT")) MID5.MIN.COUNT <- 0.1
 if (!exists("MID5.BINS"))      MID5.BINS      <- 10    # equal-count bins of log2 mu_H
 
 stopifnot("dom_shift_bins_ckpt1.R needs the Section 1 checkpoint" = file.exists(ckpt_path(1)))
-load(ckpt_path(1))      # MIX.SC, MIX.SE, HYB.SC, HYB.SE, C.BAR, R.C, R.E
+load(ckpt_path(1))      # MIX.SC, MIX.SE, HYB.SC, HYB.SE, SPLIT.ETA
 stopifnot(identical(rownames(MIX.SC), rownames(HYB.SC)), identical(rownames(MIX.SE), rownames(MIX.SC)), identical(rownames(HYB.SE), rownames(HYB.SC)))
 
-## Fits of the four groups (as MID1): per-genome mean rate and share-corrected phi
+## Fits of the four groups (as MID1): per-genome mean rate and split-corrected phi
 DEPTH.REF <- median(c(colSums(MIX.SC), colSums(MIX.SE)))
 M5.MATS  <- list(Pc = MIX.SC, Pe = MIX.SE, Hc = HYB.SC, He = HYB.SE)
-M5.EXPOS <- list(Pc = colSums(MIX.SC) / DEPTH.REF, Pe = colSums(MIX.SE) / DEPTH.REF,
-                 Hc = (colSums(HYB.SC) + colSums(HYB.SE)) / DEPTH.REF / 2, He = (colSums(HYB.SC) + colSums(HYB.SE)) / DEPTH.REF / 2)
-M5.ETA   <- c(Pc = 0, Pe = 0, Hc = R.C, He = R.E)
-M5.ABUND <- c(Pc = 1, Pe = 1, Hc = 2 * C.BAR, He = 2 * (1 - C.BAR))
+M5.EXPOS <- list(Pc = colSums(MIX.SC) / DEPTH.REF, Pe = colSums(MIX.SE) / DEPTH.REF, Hc = colSums(HYB.SC) / DEPTH.REF, He = colSums(HYB.SE) / DEPTH.REF)
+M5.ETA   <- list(Pc = 0, Pe = 0, Hc = SPLIT.ETA$Hc, He = SPLIT.ETA$He)
 M5.GENE.IDS <- rownames(MIX.SC)[Reduce(`&`, lapply(M5.MATS, function(m) rowMeans(m) >= MID5.MIN.COUNT))]
 M5.FIT <- lapply(setNames(names(M5.MATS), names(M5.MATS)), function(k) {
   f <- do.call(rbind, mclapply(M5.GENE.IDS, function(g) fit_dispersion(as.numeric(M5.MATS[[k]][g, ]), M5.EXPOS[[k]], M5.ETA[[k]], "NB")[c("mu", "disp")], mc.cores = CORES))
-  cbind(mu = f[, "mu"] / M5.ABUND[[k]], phi = f[, "disp"])
+  cbind(mu = f[, "mu"], phi = f[, "disp"])
 })
 
 ## Per gene: log2 mu_H and the three dominance contrasts of log2 phi, on the genes with phi > 0 in every group

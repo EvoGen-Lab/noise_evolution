@@ -55,11 +55,12 @@ stopifnot("artefact_tests.R needs the Section 1 checkpoint" = file.exists(ckpt_p
 load(ckpt_path(1))
 dir.create(CHECK.DIR, recursive = TRUE, showWarnings = FALSE); dir.create(CHECK.FIG.DIR, recursive = TRUE, showWarnings = FALSE)
 
-## Groups, offsets and share corrections as in analysis.R Section 2 and estimator_leak.R; genes with data in all four groups.
+## Groups, offsets and split variances as in analysis.R Section 2 and estimator_leak.R; genes with data in all four groups. LIB holds each group's libraries
+## (the whole hybrid library L_H for both alleles, against which the cells are ranked); each hybrid allele is offset by the library of its own genome.
 D.REF    <- median(c(colSums(MIX.SC), colSums(MIX.SE)))
 LIB      <- list(Pc = colSums(MIX.SC), Pe = colSums(MIX.SE), Hc = colSums(HYB.SC) + colSums(HYB.SE), He = colSums(HYB.SC) + colSums(HYB.SE))
-ART.EXPOS <- list(Pc = LIB$Pc / D.REF, Pe = LIB$Pe / D.REF, Hc = LIB$Hc / D.REF / 2, He = LIB$He / D.REF / 2)
-ART.ETA   <- c(Pc = 0, Pe = 0, Hc = R.C, He = R.E)
+ART.EXPOS <- list(Pc = LIB$Pc / D.REF, Pe = LIB$Pe / D.REF, Hc = colSums(HYB.SC) / D.REF, He = colSums(HYB.SE) / D.REF)
+ART.ETA   <- list(Pc = 0, Pe = 0, Hc = SPLIT.ETA$Hc, He = SPLIT.ETA$He)
 FULL      <- list(Pc = MIX.SC, Pe = MIX.SE, Hc = HYB.SC, He = HYB.SE)
 ART.GENES <- rownames(MIX.SC)[Reduce(`&`, lapply(FULL, function(m) rowMeans(m) >= LEAK.MIN.MEAN & rowSums(m > 0) >= LEAK.MIN.CELLS))]
 ART.MATS  <- lapply(FULL, function(m) m[ART.GENES, , drop = FALSE])
@@ -88,24 +89,26 @@ writeLines(c("# T0 audit: definitions and the earlier NB baseline", "",
 
 ##############################################################################
 ## Observed statistics of every gene and group (T0, T3, T7a observed arms) and the per-gene fits for the data signature (T8, T9, T12)
-# T7a thins the whole matrices, so the libraries and the reference depth are recomputed from the thinned counts.
+# T7a thins the whole matrices, so the libraries, the reference depth and the split variances are recomputed from the thinned counts.
 THIN <- with_local_seed(SEED.ART + 2, lapply(FULL, function(m) matrix(rbinom(length(m), m, ART.THIN), nrow(m), dimnames = dimnames(m))))
 D.THIN <- median(c(colSums(THIN$Pc), colSums(THIN$Pe))); LIB.THIN.H <- colSums(THIN$Hc) + colSums(THIN$He)
-EXPO.THIN <- list(Pc = colSums(THIN$Pc) / D.THIN, Pe = colSums(THIN$Pe) / D.THIN, Hc = LIB.THIN.H / D.THIN / 2, He = LIB.THIN.H / D.THIN / 2)
+EXPO.THIN <- list(Pc = colSums(THIN$Pc) / D.THIN, Pe = colSums(THIN$Pe) / D.THIN, Hc = colSums(THIN$Hc) / D.THIN, He = colSums(THIN$He) / D.THIN)
+ETA.THIN <- local({ lc <- pmin(pmax(colSums(THIN$Hc), 1), LIB.THIN.H - 1); et <- split_eta(lc / LIB.THIN.H, LIB.THIN.H); list(Pc = 0, Pe = 0, Hc = et$Hc, He = et$He) })
 OBS <- list(); OBS.TRIM <- list()
 for (k in ART.GROUPS) {
-  st <- mclapply(ART.GENES, function(g) art_gene_stats(as.numeric(ART.MATS[[k]][g, ]), ART.EXPOS[[k]], ART.ETA[[k]], ART.FRAC, ART.TERC[[k]], as.numeric(THIN[[k]][g, ]), EXPO.THIN[[k]]), mc.cores = CORES)
+  st <- mclapply(ART.GENES, function(g) art_gene_stats(as.numeric(ART.MATS[[k]][g, ]), ART.EXPOS[[k]], ART.ETA[[k]], ART.FRAC, ART.TERC[[k]], as.numeric(THIN[[k]][g, ]), EXPO.THIN[[k]],
+                                                       ETA.THIN[[k]]), mc.cores = CORES)
   OBS[[k]] <- data.frame(gene = ART.GENES, group = k, do.call(rbind, st), row.names = NULL); OBS.TRIM[[k]] <- lapply(st, attr, "trim")
 }
 OBS.ALL <- do.call(rbind, OBS)
 ART.CORE <- do.call(rbind, mclapply(ART.GENES, art_gene_core, mats = ART.MATS, expos = ART.EXPOS, eta = ART.ETA, halves = ART.HALVES, frac = ART.FRAC, mc.cores = CORES))
 rownames(ART.CORE) <- ART.GENES
-DATA.SIG <- art_signature(ART.CORE, C.BAR, MBAR.BREAKS, seed = SEED.ART + 3)
+DATA.SIG <- art_signature(ART.CORE, MBAR.BREAKS, seed = SEED.ART + 3)
 ART.FITS <- ART.CORE[, paste0(rep(ART.GROUPS, each = 2), c(".mu", ".phi"))]
 
 ##############################################################################
 ## Inputs of the simulation array (T0, T8, T12), and its results
-ART.CFG <- list(frac = ART.FRAC, R = ART.R, R4 = ART.R4, R11 = ART.R11, thin_p = ART.THIN, cbar = C.BAR, mbar_breaks = MBAR.BREAKS)
+ART.CFG <- list(frac = ART.FRAC, R = ART.R, R4 = ART.R4, R11 = ART.R11, thin_p = ART.THIN, mbar_breaks = MBAR.BREAKS)
 ART.CHUNKS <- split(ART.GENES, (seq_along(ART.GENES) - 1) %% min(ART.N.CHUNKS, length(ART.GENES)))     # genes dealt round-robin into chunks
 ART.SCEN.GRID <- rbind(data.frame(scenario = "A", par1 = NA, par2 = NA, rep = seq_len(ART.SCEN.REPS)), data.frame(scenario = "B", par1 = NA, par2 = NA, rep = seq_len(ART.SCEN.REPS)),
                        data.frame(scenario = "S1", par1 = c(0.05, 0.1, 0.2), par2 = NA, rep = 1), data.frame(scenario = "S2", par1 = c(0.8, 0.9, 1.1), par2 = NA, rep = 1),
@@ -130,7 +133,7 @@ if (length(ART.FILES)) {
   T0.PARTS <- mclapply(split(LOCAL.GENES, (seq_along(LOCAL.GENES) - 1) %% CORES), art_null_chunk, mats = ART.MATS, expos = ART.EXPOS, eta = ART.ETA, frac = ART.FRAC,
                        terc = ART.TERC, R = ART.LOCAL.R, R4 = 3, R11 = 2, thin_p = ART.THIN, streams = ART.STREAMS.GENE, mc.cores = CORES, mc.preschedule = FALSE)
   SCEN.RES <- lapply(seq_len(nrow(ART.SCEN.GRID)), art_scenario_task, grid = ART.SCEN.GRID, fits = ART.FITS, expos = ART.EXPOS, eta = ART.ETA, halves = ART.HALVES,
-                     genes = LOCAL.GENES, frac = ART.FRAC, cbar = C.BAR, mbar_breaks = MBAR.BREAKS, streams = ART.STREAMS.SCEN, cores = CORES)
+                     genes = LOCAL.GENES, frac = ART.FRAC, mbar_breaks = MBAR.BREAKS, streams = ART.STREAMS.SCEN, cores = CORES)
 } else {
   T0.PARTS <- NULL; SCEN.RES <- NULL
   cat("No artefact_output files in OUTPUT.DIR: submit cluster/submit/artefact_null.sub with artefact_inputs.rda, or set ART.LOCAL = TRUE.\n")
@@ -196,7 +199,7 @@ if (is.null(T0.PARTS)) check_save("T1", NULL, "not run", headline = NOT.RUN, scr
     covs <- data.frame(library = LIB[[k]], detected = colSums(m > 0),
                        mito_share = if (exists("MITO.QC")) MITO.QC[[if (k %in% c("Hc", "He")) "HYB" else c(Pc = "MIX.SC", Pe = "MIX.SE")[[k]]]]$frac[cells] else NA_real_,
                        ribo_share = if (length(RP.GENES)) colSums(m[RP.GENES, , drop = FALSE]) / colSums(m) else NA_real_,
-                       chat = if (k %in% c("Hc", "He") && length(C.HAT) == ncol(m)) C.HAT else NA_real_,
+                       shat = if (k %in% c("Hc", "He") && length(S.HAT) == ncol(m)) S.HAT else NA_real_,
                        doublet_score = if (exists("MULTIPLET.SCORE")) MULTIPLET.SCORE[[if (k %in% c("Hc", "He")) "HYB" else c(Pc = "MIX.SC", Pe = "MIX.SE")[[k]]]]$score[cells] else NA_real_,
                        scdbl_score = if (DBL == "available") tryCatch(scDblFinder::scDblFinder(SingleCellExperiment::SingleCellExperiment(list(counts = m)))$scDblFinder.score, error = function(err) NA_real_) else NA_real_,
                        cc_axis = if (!is.null(CK7) && !is.null(CK7$CC.AXIS[[DS7[[k]]]])) CK7$CC.AXIS[[DS7[[k]]]][cells] else NA_real_,
@@ -241,14 +244,16 @@ if (is.null(T1.CELLS)) check_save("T2", NULL, "not run", headline = NOT.RUN, scr
   RM$Hc <- RM$He <- sort(union(RM$Hc, RM$He))
   KEEP.MATS <- lapply(setNames(ART.GROUPS, ART.GROUPS), function(k) if (length(RM[[k]])) ART.MATS[[k]][, -RM[[k]], drop = FALSE] else ART.MATS[[k]])
   KEEP.EXPOS <- lapply(setNames(ART.GROUPS, ART.GROUPS), function(k) if (length(RM[[k]])) ART.EXPOS[[k]][-RM[[k]]] else ART.EXPOS[[k]])
+  KEEP.ETA <- lapply(setNames(ART.GROUPS, ART.GROUPS), function(k) if (length(RM[[k]])) .eta_at(ART.ETA[[k]], -RM[[k]]) else ART.ETA[[k]])
   KEEP.HALVES <- with_local_seed(SEED.ART + 8, local({ h <- sample.int(ncol(KEEP.MATS$Hc), floor(ncol(KEEP.MATS$Hc) / 2))
     list(Pc = sample.int(ncol(KEEP.MATS$Pc), floor(ncol(KEEP.MATS$Pc) / 2)), Pe = sample.int(ncol(KEEP.MATS$Pe), floor(ncol(KEEP.MATS$Pe) / 2)), Hc = h, He = h) }))
   T2 <- list()
   for (arm in c("all cells", "retained cells")) {
     mats <- if (arm == "all cells") ART.MATS else KEEP.MATS; expos <- if (arm == "all cells") ART.EXPOS else KEEP.EXPOS; halves <- if (arm == "all cells") ART.HALVES else KEEP.HALVES
-    names(mats) <- names(expos) <- names(halves) <- ART.GROUPS
-    fits <- do.call(rbind, mclapply(ART.GENES, estimator_pair_gene, mats = mats, expos = expos, eta = ART.ETA, halves = halves, mc.cores = CORES)); rownames(fits) <- ART.GENES
-    trimf <- do.call(rbind, mclapply(ART.GENES, estimator_pair_gene, mats = mats, expos = expos, eta = ART.ETA, halves = halves, trim = ART.FRAC, mc.cores = CORES)); rownames(trimf) <- ART.GENES
+    etas <- if (arm == "all cells") ART.ETA else KEEP.ETA
+    names(mats) <- names(expos) <- names(halves) <- names(etas) <- ART.GROUPS
+    fits <- do.call(rbind, mclapply(ART.GENES, estimator_pair_gene, mats = mats, expos = expos, eta = etas, halves = halves, mc.cores = CORES)); rownames(fits) <- ART.GENES
+    trimf <- do.call(rbind, mclapply(ART.GENES, estimator_pair_gene, mats = mats, expos = expos, eta = etas, halves = halves, trim = ART.FRAC, mc.cores = CORES)); rownames(trimf) <- ART.GENES
     for (k in ART.GROUPS) {
       cr <- fits[, paste0("same.", k, ".phi_cr")]; mo <- fits[, paste0("same.", k, ".phi_mom")]; bp <- cut(cr, PHI.BREAKS, right = FALSE); ok <- cr > 0 & mo > 0
       tr <- log2(trimf[, paste0("same.", k, ".phi_cr")] / cr)
@@ -259,7 +264,7 @@ if (is.null(T1.CELLS)) check_save("T2", NULL, "not run", headline = NOT.RUN, scr
                                              median_log2_cr_over_mom = median(log2(cr / mo)[i], na.rm = TRUE), median_log2_trim_cr = median(tr[i][is.finite(tr[i])]),
                                              median_a = median(le[i, "a"], na.rm = TRUE), share_a_above_2se = mean(le[i, "a"] / le[i, "a_se"] > 2, na.rm = TRUE), row.names = NULL) }
     }
-    for (a2 in c("same", "disjoint")) { d <- leak_contrasts(fits, a2, C.BAR)
+    for (a2 in c("same", "disjoint")) { d <- leak_contrasts(fits, a2)
       for (md in c("cis", "trans")) { dd <- d[d$contrast == md, ]
         T2[[paste(arm, a2, md)]] <- data.frame(cells = arm, group = paste(a2, md), phi_cr = "slopes", genes = sum(is.finite(dd$dlog2mu) & is.finite(dd$diff)), removed = NA,
                                                leak_regression(dd$dlog2mu, dd$diff, dd$dphi_cr, dd$dphi_mom, 500, SEED.ART + 9)[c("slope", "boot_lo", "boot_hi", "slope_cr", "slope_mom")], row.names = NULL) } }
@@ -335,13 +340,14 @@ check_save("T5", NULL, "blocked", headline = "blocked, raw matrix missing: the p
 ##############################################################################
 ## T6. Size factor alternatives (sensitivity only): (i) library over its median, (ii) scran deconvolution, (iii) library without the 50 most expressed genes
 TOP50.G <- lapply(FULL, function(m) order(rowSums(m), decreasing = TRUE)[1:50]); TOP50.G$Hc <- TOP50.G$He <- order(rowSums(HYB.SC) + rowSums(HYB.SE), decreasing = TRUE)[1:50]
-LIB.X <- list(Pc = colSums(MIX.SC[-TOP50.G$Pc, ]), Pe = colSums(MIX.SE[-TOP50.G$Pe, ]), Hc = colSums(HYB.SC[-TOP50.G$Hc, ]) + colSums(HYB.SE[-TOP50.G$Hc, ]))
+LIB.X <- list(Pc = colSums(MIX.SC[-TOP50.G$Pc, ]), Pe = colSums(MIX.SE[-TOP50.G$Pe, ]), Hc = colSums(HYB.SC[-TOP50.G$Hc, ]), He = colSums(HYB.SE[-TOP50.G$Hc, ]))
 D.X <- median(c(LIB.X$Pc, LIB.X$Pe))
-SF <- list(library = ART.EXPOS, no_top50 = list(Pc = LIB.X$Pc / D.X, Pe = LIB.X$Pe / D.X, Hc = LIB.X$Hc / D.X / 2, He = LIB.X$Hc / D.X / 2))
+SF <- list(library = ART.EXPOS, no_top50 = list(Pc = LIB.X$Pc / D.X, Pe = LIB.X$Pe / D.X, Hc = LIB.X$Hc / D.X, He = LIB.X$He / D.X))
 if (requireNamespace("scran", quietly = TRUE)) {
   sfp <- with_local_seed(SEED.ART + 10, scran::calculateSumFactors(cbind(MIX.SC, MIX.SE)))
   sfh <- with_local_seed(SEED.ART + 11, scran::calculateSumFactors(HYB.SC + HYB.SE))
-  SF$scran <- list(Pc = sfp[seq_len(ncol(MIX.SC))], Pe = sfp[ncol(MIX.SC) + seq_len(ncol(MIX.SE))], Hc = sfh / 2 * median(LIB$Hc) / D.REF / median(sfh), He = sfh / 2 * median(LIB$Hc) / D.REF / median(sfh))
+  sfh <- sfh * median(LIB$Hc) / D.REF / median(sfh)                   # the hybrid depth factor on the reference scale, split by each cell's observed share
+  SF$scran <- list(Pc = sfp[seq_len(ncol(MIX.SC))], Pe = sfp[ncol(MIX.SC) + seq_len(ncol(MIX.SE))], Hc = sfh * S.HAT, He = sfh * (1 - S.HAT))
 }
 T6 <- list(); T6.COR <- list()
 for (sf in names(SF)) for (k in ART.GROUPS) {
@@ -386,7 +392,7 @@ LIB.TH <- list(Pc = with_local_seed(SEED.ART + 14, colSums(matrix(rbinom(length(
 D.TH <- median(c(LIB.TH$Pc, LIB.TH$Pe))
 TH.EXPOS <- ART.EXPOS; TH.EXPOS$Pc <- LIB.TH$Pc / D.TH; TH.EXPOS$Pe <- LIB.TH$Pe / D.TH
 TH.CORE <- do.call(rbind, mclapply(ART.GENES, art_gene_core, mats = TH.MATS, expos = TH.EXPOS, eta = ART.ETA, halves = ART.HALVES, frac = ART.FRAC, mc.cores = CORES)); rownames(TH.CORE) <- ART.GENES
-TH.SIG <- art_signature(TH.CORE, C.BAR, MBAR.BREAKS, seed = SEED.ART + 16)
+TH.SIG <- art_signature(TH.CORE, MBAR.BREAKS, seed = SEED.ART + 16)
 T7B <- rbind(cbind(data = "observed depth", DATA.SIG$slopes), cbind(data = "parents thinned to hybrid depth", TH.SIG$slopes))
 check_save("T7b", T7B, "run",
            headline = c(sprintf("UMI keep fractions: Pc %.3f, Pe %.3f (UMIs; reads are not in the project)", F.PC, F.PE),
@@ -421,8 +427,8 @@ if (is.null(SCEN.RES)) { check_save("T8", NULL, "not run", headline = NOT.RUN, s
 MB.GENE <- rowMeans(ART.CORE[, paste0(ART.GROUPS, ".mbar")]); TERC.G <- cut(rank(MB.GENE, ties.method = "first"), 3, labels = c("low", "mid", "high"))
 HI <- Reduce(`&`, lapply(ART.GROUPS, function(k) ART.CORE[, paste0(k, ".mbar")] >= 3 & ART.CORE[, paste0(k, ".bound_pos")] %in% 1))
 T9 <- rbind(cbind(genes_in = "all", DATA.SIG$slopes),
-            do.call(rbind, lapply(levels(TERC.G), function(t) cbind(genes_in = paste("mean-count tercile", t), art_signature(ART.CORE[TERC.G == t, ], C.BAR, MBAR.BREAKS, seed = SEED.ART + 17)$slopes))),
-            cbind(genes_in = "lower bound above zero, mean count >= 3 in every group", art_signature(ART.CORE[HI, , drop = FALSE], C.BAR, MBAR.BREAKS, seed = SEED.ART + 18)$slopes),
+            do.call(rbind, lapply(levels(TERC.G), function(t) cbind(genes_in = paste("mean-count tercile", t), art_signature(ART.CORE[TERC.G == t, ], MBAR.BREAKS, seed = SEED.ART + 17)$slopes))),
+            cbind(genes_in = "lower bound above zero, mean count >= 3 in every group", art_signature(ART.CORE[HI, , drop = FALSE], MBAR.BREAKS, seed = SEED.ART + 18)$slopes),
             cbind(genes_in = "parents thinned to hybrid depth (T7b)", TH.SIG$slopes))
 T9$frequency_share_rough <- pmin(pmax(-T9$slope, 0), 1)
 check_save("T9", T9, "run", headline = sprintf("%s, %s %s: own slope %.3f (%.3f to %.3f), %d genes; rough frequency-driven share %.2f", T9$genes_in, T9$arm, T9$contrast, T9$slope, T9$lo, T9$hi, T9$genes,

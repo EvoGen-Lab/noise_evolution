@@ -261,6 +261,12 @@ The Statistical Methods document (claude.ai artifact 76UUgMeP9KaXjjcBGwMQa7, Met
 - **Pilot.** `PILOT.RESOLVED` keeps the genes with no zero or failed pilot replicate in any of the four datasets (Methods: Estimating partition fractions), and the dispersion partition now pools gamma over them too, as the Methods say for the dispersion, burst size and kinetic balance.
 - **Matched set.** The Methods define no matched set. `in_matched_set` is now an informative mean and phi > 0 in every contrast dataset (every contrast defined); it was "resolved in every dataset".
 
+## Library split correction replaces the share correction (Nov 20)
+The transcriptome share correction (share_terms(), r_c, r_e, share_sub) and the abundance factors are gone: each hybrid allele is offset by its own library and
+each allele dispersion carries the per-cell split bias (Methods: Library split correction). B2 (simulation arm, the share-variance estimator) and B5 (the
+per-genome mean from summed rescaled counts) are retired. B3 is now the closed loop of the split correction and F2 the large-N limits of ploidy_components() under
+binomial splits. Every other check uses the allele offsets and the per-cell eta, subset with its cells. No numbers below were recomputed with the new correction.
+
 ## Rerun note
 
 Commit 1ffbccb changes `fit_dispersion(method = "weighted")` (Appendix A). It needs a rerun of Section 2.3 (`SPLIT.FITS.W` and the weighted columns of `GENE.TABLE`) and of the weighted columns of `BOOT.CONTRASTS` and `PR` with every table read from them, and resubmission of `gene_boot` and `gene_perm`. `SPLIT.FITS.W` can be refitted locally; the bootstrap and null columns need the cluster. The NB results are unchanged. The other check commits change no code in `R/functions.R`, `analysis/analysis.R` or the pipeline's cluster scripts, so no section or pipeline cluster job needs a rerun. The checks run as follows:

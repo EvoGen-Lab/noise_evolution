@@ -1,8 +1,10 @@
 ###############################################################
 ### checks_data.R
 ### Data checks of the methods document (docs/methods.md), one block per check ID of the validation handoff: A3, A5, A7 (data arm), A8, B1, B2 (data
-### arm), B5, B6, C1, C2, C3, C6, D9, E4, F1(b, c), F5 and G1, and a local bootstrap of a gene subsample for A4, A6, C7 and D8. E2 and E3 (data arm), which
-### read the resolution rule and the likelihood bounds, were retired with them.
+### arm), B6, C1, C2, C3, C6, D9, E4, F1(b, c), F5 and G1, and a local bootstrap of a gene subsample for A4, A6, C7 and D8. E2 and E3 (data arm), which
+### read the resolution rule and the likelihood bounds, were retired with them; B5 (the per-genome hybrid mean from the summed rescaled counts) was retired
+### with the abundance factors, since the allele offsets make each allele mean a per-genome rate; D8 now compares the split correction recomputed on each
+### replicate's resampled cells with the correction left out.
 ### Reads the Section 1 and Section 2 checkpoints (results/checkpoints/section1_checkpoint.rda, section2_checkpoint.rda); a check whose inputs are
 ### missing is recorded as "not run" with the reason. The checks that read the bootstrap outputs (C3, D9) use the
 ### cluster results already merged into the Section 2 checkpoint (BOOT.CONTRASTS, PR); the local bootstrap needs no cluster output.
@@ -22,7 +24,7 @@ have1 <- file.exists(ckpt_path(1)); have2 <- file.exists(ckpt_path(2))
 if (have1) { E1.ENV <- new.env(); load(ckpt_path(1), envir = E1.ENV) }
 if (have2) load(ckpt_path(2))
 if (!have2) {
-  for (id in c("A3", "A5", "A7_data", "A8", "B1", "B2_data", "B5", "B6", "C1", "C2", "C3", "C6", "D9", "E2", "E3_data", "E4", "F1_data", "F5", "G1", "A4_data", "A6", "C7_data", "D8"))
+  for (id in c("A3", "A5", "A7_data", "A8", "B1", "B2_data", "B6", "C1", "C2", "C3", "C6", "D9", "E2", "E3_data", "E4", "F1_data", "F5", "G1", "A4_data", "A6", "C7_data", "D8"))
     check_save(id, NULL, "not run", headline = "the Section 2 checkpoint is missing; run analysis.R Sections 1 and 2 first", script = CHECK.SCRIPT)
   stop("checks_data.R needs the Section 2 checkpoint")
 }
@@ -69,7 +71,7 @@ for (k in names(A7.GROUPS)) {
   stopifnot(ncol(m) == length(e))
   terc <- cut(rank(e, ties.method = "first"), 3, labels = FALSE)
   ph <- t(vapply(SUB.GENES, tercile_phi_gene, numeric(6), mat = m, expo = e, terc = terc))
-  lib <- if (k %in% c("HYB.SC", "HYB.SE")) SHARE.CELLS$lib else colSums(m)
+  lib <- if (k %in% c("HYB.SC", "HYB.SE")) colSums(HYB.SC) + colSums(HYB.SE) else colSums(m)
   share <- apply(sweep(as.matrix(m[SUB.GENES, , drop = FALSE]), 2, lib, "/"), 1, max)
   A7[[k]] <- data.frame(dataset = k, tercile = 1:3, median_phi_offset = apply(ph[, 1:3], 2, median, na.rm = TRUE), median_phi_constant = apply(ph[, 4:6], 2, median, na.rm = TRUE),
                         median_max_share = median(share), max_max_share = max(share), row.names = NULL)
@@ -113,7 +115,7 @@ if (have1) {
 # estimator's finite-sample bias into the null; the share of genes with p < 0.05 is read against 0.05, and the observed k3 / (2 phi^2) against its
 # null mean. One gene's test has little power (simulated lognormal factors with phi 0.5 and 2000 cells: p < 0.05 in about 13% of genes), so the group
 # statistic is the mean over the tested genes of z = (excess - null mean) / null SD, with SE 1 / sqrt(genes), which is near 0 for gamma factors and
-# positive (more skewed than gamma) or negative (less skewed) otherwise. The hybrid alleles' factor includes the transcriptome share multiplier.
+# positive (more skewed than gamma) or negative (less skewed) otherwise. The hybrid alleles' factor includes the error of the library split.
 A11.GROUPS <- c("MIX.SC", "MIX.SE", "HYB.SC", "HYB.SE"); A11.SIM <- 200
 A11 <- list(table = list(), tests = list(), summary = list())
 for (k in A11.GROUPS) {
@@ -139,59 +141,51 @@ if (is.null(A11$summary)) check_save("A11", NULL, "not run", headline = "count m
              mc_error = sprintf("%d null draws per gene; binomial SE of a 5%% share %.3f", A11.SIM, A11$summary$share_p05_se[1]), script = CHECK.SCRIPT)
 
 ##############################################################################
-## B1. Binomial sampling and independence of the observed share (Methods: Transcriptome share estimate)
-# Within a library bin Var(c-hat) = sigma2_c + E[c (1 - c) / L], so regressing the bin variance on 1 / L-bar gives slope c-bar (1 - c-bar) and intercept sigma2_c.
+## B1. Binomial sampling and independence of the observed share (Methods: Library split correction)
+# Within a library bin Var(s-hat) = sigma2_s + E[s (1 - s) / L], so regressing the bin variance on 1 / L-bar gives slope s-bar (1 - s-bar) and intercept sigma2_s.
+# The split correction rests on this binomial split. HYB.SC, HYB.SE and S.HAT are in the depth order of Section 2.
+HYB.LIB.CK <- colSums(HYB.SC) + colSums(HYB.SE)
+stopifnot(isTRUE(all.equal(S.HAT, colSums(HYB.SC) / HYB.LIB.CK)))
+VAR.S.CK <- max(var(S.HAT) - mean(S.HAT * (1 - S.HAT) / (HYB.LIB.CK - 1)), 0)      # law of total variance, binomial term with L - 1
 B1 <- local({
-  L <- SHARE.CELLS$lib; bin <- cut(rank(L, ties.method = "first"), 10, labels = FALSE)
-  tab <- data.frame(bin = 1:10, inv_L = tapply(1 / L, bin, mean), var_chat = tapply(C.HAT, bin, var), n = as.vector(table(bin)))
-  fit <- lm(var_chat ~ inv_L, data = tab)
+  L <- HYB.LIB.CK; bin <- cut(rank(L, ties.method = "first"), 10, labels = FALSE)
+  tab <- data.frame(bin = 1:10, inv_L = tapply(1 / L, bin, mean), var_shat = tapply(S.HAT, bin, var), n = as.vector(table(bin)))
+  fit <- lm(var_shat ~ inv_L, data = tab)
   cc <- if (file.exists(ckpt_path(7))) { e7 <- new.env(); load(ckpt_path(7), envir = e7); if (exists("CC.AXIS", envir = e7)) get("CC.AXIS", e7) else NULL } else NULL
-  list(table = tab, coef = summary(fit)$coefficients, cbar = C.BAR, expected_slope = C.BAR * (1 - C.BAR), var_c = VAR.C,
-       spearman_chat_L = cor.test(C.HAT, L, method = "spearman", exact = FALSE)[c("estimate", "p.value")], cell_cycle = cc)
+  list(table = tab, coef = summary(fit)$coefficients, sbar = mean(S.HAT), expected_slope = mean(S.HAT) * (1 - mean(S.HAT)), var_s = VAR.S.CK,
+       spearman_shat_L = cor.test(S.HAT, L, method = "spearman", exact = FALSE)[c("estimate", "p.value")], cell_cycle = cc)
 })
 check_save("B1", B1, "run",
-           headline = c(sprintf("slope %.4f (SE %.4f) against c-bar(1 - c-bar) = %.4f; intercept %.3g (SE %.2g) against sigma2_c-hat %.3g", B1$coef[2, 1], B1$coef[2, 2], B1$expected_slope,
-                                B1$coef[1, 1], B1$coef[1, 2], B1$var_c),
-                        sprintf("Spearman(c-hat, L) %.3f (p %.2g)", B1$spearman_chat_L$estimate, B1$spearman_chat_L$p.value),
+           headline = c(sprintf("slope %.4f (SE %.4f) against s-bar(1 - s-bar) = %.4f; intercept %.3g (SE %.2g) against sigma2_s-hat %.3g", B1$coef[2, 1], B1$coef[2, 2], B1$expected_slope,
+                                B1$coef[1, 1], B1$coef[1, 2], B1$var_s),
+                        sprintf("Spearman(s-hat, L) %.3f (p %.2g)", B1$spearman_shat_L$estimate, B1$spearman_shat_L$p.value),
                         if (is.null(B1$cell_cycle)) "cell-cycle correlation not run: CC.AXIS (Section 7 checkpoint) is missing" else "cell-cycle axis loaded; see rds"),
            mc_error = "regression SEs", script = CHECK.SCRIPT)
 
 ##############################################################################
-## B2 (data arm). Interval of eta-hat and the split-half estimate of sigma2_c
-# Splitting each cell's UMIs at random into two halves gives two shares that, given c_i, are independent binomial estimates of it, so their covariance
-# across cells estimates sigma2_c without the binomial correction.
+## B2 (data arm). The binomial split against a split-half estimate of sigma2_s
+# Splitting each cell's UMIs at random into two halves gives two shares that, given s_i, are independent binomial estimates of it, so their covariance
+# across cells estimates sigma2_s without the binomial correction. Agreement with the law of total variance estimate (B1) supports the binomial split, whose
+# per-cell variances eta (split_eta()) the split correction uses. The bootstrap interval of the law of total variance estimate is given beside it.
 B2D <- with_local_seed(SEED.CHECKS + 2, local({
-  L <- SHARE.CELLS$lib; Lc <- round(SHARE.CELLS$chat * L); n <- length(L)          # the hybrid libraries and their Sc UMIs, as Section 1.2 measured them
-  bs <- t(vapply(seq_len(2000), function(b) { ix <- sample.int(n, n, TRUE); st <- share_terms(C.HAT[ix], L[ix]); c(eta_c = st$var_obs - st$var_binom, cbar = st$cbar) }, numeric(2)))
-  eta_c <- bs[, 1] / bs[, 2]^2; eta_e <- bs[, 1] / (1 - bs[, 2])^2
+  L <- HYB.LIB.CK; Lc <- round(S.HAT * L); n <- length(L)
+  bs <- vapply(seq_len(2000), function(b) { ix <- sample.int(n, n, TRUE); var(S.HAT[ix]) - mean(S.HAT[ix] * (1 - S.HAT[ix]) / (L[ix] - 1)) }, numeric(1))
   half <- numeric(200)
   for (b in seq_along(half)) {
     c1 <- rbinom(n, Lc, 0.5); e1 <- rbinom(n, L - Lc, 0.5); ok <- c1 + e1 > 0 & (L - c1 - e1) > 0
     half[b] <- cov((c1 / (c1 + e1))[ok], ((Lc - c1) / (L - c1 - e1))[ok])
   }
-  list(eta_Hc = R.C, eta_He = R.E, eta_Hc_ci = quantile(eta_c, c(0.025, 0.975)), eta_He_ci = quantile(eta_e, c(0.025, 0.975)), var_c_ltv = VAR.C,
-       var_c_split_half = mean(half), var_c_split_half_mc_se = sd(half) / sqrt(length(half)), var_c_split_half_sd_one_split = sd(half))
+  list(var_s_ltv = VAR.S.CK, var_s_ltv_ci = quantile(bs, c(0.025, 0.975)), median_eta_Hc = median(SPLIT.ETA$Hc), median_eta_He = median(SPLIT.ETA$He),
+       var_s_split_half = mean(half), var_s_split_half_mc_se = sd(half) / sqrt(length(half)), var_s_split_half_sd_one_split = sd(half))
 }))
 check_save("B2_data", B2D, "run",
-           headline = c(sprintf("eta_Hc %.3g (95%% bootstrap interval %.3g to %.3g), eta_He %.3g (%.3g to %.3g)", B2D$eta_Hc, B2D$eta_Hc_ci[1], B2D$eta_Hc_ci[2], B2D$eta_He, B2D$eta_He_ci[1], B2D$eta_He_ci[2]),
-                        sprintf("sigma2_c: law of total variance %.3g, split-half covariance %.3g (SD of one split %.2g)", B2D$var_c_ltv, B2D$var_c_split_half, B2D$var_c_split_half_sd_one_split)),
-           mc_error = sprintf("2000 bootstrap replicates; split-half mean of 200 splits, MC SE %.2g", B2D$var_c_split_half_mc_se), script = CHECK.SCRIPT)
+           headline = c(sprintf("sigma2_s: law of total variance %.3g (95%% bootstrap interval %.3g to %.3g), split-half covariance %.3g (SD of one split %.2g)", B2D$var_s_ltv,
+                                B2D$var_s_ltv_ci[1], B2D$var_s_ltv_ci[2], B2D$var_s_split_half, B2D$var_s_split_half_sd_one_split),
+                        sprintf("median split variance eta_Hc %.3g, eta_He %.3g", B2D$median_eta_Hc, B2D$median_eta_He)),
+           mc_error = sprintf("2000 bootstrap replicates; split-half mean of 200 splits, MC SE %.2g", B2D$var_s_split_half_mc_se), script = CHECK.SCRIPT)
 
 ##############################################################################
-## B5. Per-genome hybrid mean from the summed rescaled counts against the average of the corrected allele rates (Methods: Per-genome hybrid estimates)
-B5 <- local({
-  z <- HYB.SC[GENES, , drop = FALSE] / (2 * C.BAR) + HYB.SE[GENES, , drop = FALSE] / (2 * (1 - C.BAR))
-  summed <- rowSums(z) / sum(EXPO.HYB)
-  avg <- 0.5 * (SPLIT.FITS$HYB.SC[GENES, "MU"] / (2 * C.BAR) + SPLIT.FITS$HYB.SE[GENES, "MU"] / (2 * (1 - C.BAR)))
-  d <- log2(summed) - log2(avg)
-  data.frame(gene = GENES, log2_summed = log2(summed), log2_allele_average = log2(avg), diff = d)
-})
-check_save("B5", B5, "run", headline = sprintf("%d genes: max |log2 difference| %.2g, mean difference %.2g (Bland-Altman limits %.2g to %.2g)", nrow(B5), max(abs(B5$diff), na.rm = TRUE),
-                                               mean(B5$diff, na.rm = TRUE), mean(B5$diff, na.rm = TRUE) - 1.96 * sd(B5$diff, na.rm = TRUE), mean(B5$diff, na.rm = TRUE) + 1.96 * sd(B5$diff, na.rm = TRUE)),
-           mc_error = "exact", script = CHECK.SCRIPT)
-
-##############################################################################
-## B6. Genes whose fit the share correction truncates at zero
+## B6. Genes whose fit the split correction truncates at zero
 B6 <- list()
 for (k in FIT.GROUPS) {
   f <- SPLIT.FITS[[k]]
@@ -212,7 +206,8 @@ check_save("C1", list(report = PARTITION.REPORT, frac = SPLIT.FRAC), "run",
 C2 <- with_local_seed(SEED.CHECKS + 12, local({
   n <- ncol(HYB.SC); fr <- c(0.25, 0.5, 0.75, 1)
   subs <- lapply(fr, function(f) sort(sample.int(n, round(f * n)))); boot <- lapply(subs, function(s) lapply(seq_len(100), function(b) sample.int(length(s), length(s), TRUE)))
-  V <- mclapply(SUB.GENES[seq_len(min(100, length(SUB.GENES)))], subsample_cis_var_gene, yc = HYB.SC, ye = HYB.SE, expo = EXPO.HYB.SC, eta = SHARE.R, subs = subs, boot = boot, mc.cores = CORES)
+  V <- mclapply(SUB.GENES[seq_len(min(100, length(SUB.GENES)))], subsample_cis_var_gene, yc = HYB.SC, ye = HYB.SE, expos = list(HYB.SC = EXPO.HYB.SC, HYB.SE = EXPO.HYB.SE),
+                eta = list(HYB.SC = SPLIT.ETA$Hc, HYB.SE = SPLIT.ETA$He), subs = subs, boot = boot, mc.cores = CORES)
   slopes <- matrix(NA_real_, length(V), 2, dimnames = list(NULL, c("mean", "disp")))
   for (j in seq_along(V)) for (q in c("mean", "disp")) {
     v <- V[[j]][, paste0("var_", q)]
@@ -243,8 +238,8 @@ C6 <- local({
                    ks_p = vapply(list(SPLIT.IDX.MEAN, SPLIT.IDX.DISP, SPLIT.IDX.KBAL, SPLIT.IDX.BSIZE), function(s) suppressWarnings(ks.test(EXPO.HYB[s$c], EXPO.HYB[s$t])$p.value), numeric(1)))
   g <- intersect(GENES, BOOT.CONTRASTS$gene); bc <- BOOT.CONTRASTS[match(g, BOOT.CONTRASTS$gene), ]
   S <- check_streams(50, SEED.CHECKS + 16)
-  calls <- mclapply(seq_len(50), split_mean_calls, genes = g, yc = HYB.SC, ye = HYB.SE, expo = EXPO.HYB.SC, depth = EXPO.HYB, f = SPLIT.FRAC$f_mean,
-                    mu_pc = SPLIT.FITS$MIX.SC[g, "MU"], mu_pe = SPLIT.FITS$MIX.SE[g, "MU"], cbar = C.BAR, se_cis = bc$mean_cis_se, se_trans = bc$mean_trans_se, streams = S, mc.cores = CORES)
+  calls <- mclapply(seq_len(50), split_mean_calls, genes = g, yc = HYB.SC, ye = HYB.SE, expo_c = EXPO.HYB.SC, expo_e = EXPO.HYB.SE, depth = EXPO.HYB, f = SPLIT.FRAC$f_mean,
+                    mu_pc = SPLIT.FITS$MIX.SC[g, "MU"], mu_pe = SPLIT.FITS$MIX.SE[g, "MU"], se_cis = bc$mean_cis_se, se_trans = bc$mean_trans_se, streams = S, mc.cores = CORES)
   mc <- sapply(calls, function(x) x[, "cis"]); mt <- sapply(calls, function(x) x[, "trans"])
   list(ks = ks, changed_cis = mean(rowSums(mc) > 0 & rowSums(mc) < ncol(mc)), changed_trans = mean(rowSums(mt) > 0 & rowSums(mt) < ncol(mt)), genes = length(g))
 })
@@ -276,7 +271,7 @@ check_save("E4", list(excluded = EXCLUDED.COUNTS, sizes = GENE.SET.SIZES), "code
                                                                                                      sum(GENE.TABLE$in_matched_set)), script = CHECK.SCRIPT)
 
 ##############################################################################
-## F1 (b, c). The Appendix A estimator on the data: convergence, boundary share, and agreement with the Cox-Reid estimate
+## F1 (b, c). The Appendix C estimator on the data: convergence, boundary share, and agreement with the Cox-Reid estimate
 F1D <- list()
 for (k in FIT.GROUPS) {
   w <- SPLIT.FITS.W[[k]]; f <- SPLIT.FITS[[k]]; ok <- w$DISP > 0 & f$DISP > 0 & is.finite(w$DISP) & is.finite(f$DISP); d <- log2(w$DISP[ok]) - log2(f$DISP[ok])
@@ -284,58 +279,59 @@ for (k in FIT.GROUPS) {
                          loa_low = mean(d) - 1.96 * sd(d), loa_high = mean(d) + 1.96 * sd(d), row.names = NULL)
 }
 F1D <- do.call(rbind, F1D)
-# The weighted estimator of the code is not the Appendix A estimator as documented (mismatches.md); F1_sim reports both.
+# The weighted estimator of the code is not the Appendix C estimator as documented (mismatches.md); F1_sim reports both.
 check_save("F1_data", F1D, "run", headline = sprintf("%s: converged %.4f, boundary %.3f; log2(weighted / Cox-Reid) mean %.3f (limits %.2f to %.2f)", F1D$dataset, F1D$converged, F1D$boundary,
                                                      F1D$mean_log2_diff, F1D$loa_low, F1D$loa_high),
            mc_error = "exact", script = CHECK.SCRIPT)
 
 ##############################################################################
-## F5. Predicted shift delta-hat against the observed log2(phi_H / phi_Sigma) (Appendix B)
+## F5. Predicted ploidy shift Lambda-hat against the observed log2(phi_H / phi_sum) (Appendix D)
+# phi_H is the geometric mean of the two split-corrected allele dispersions and phi_sum the dispersion of the summed counts (fitted for reporting only, without a
+# split correction, since the summed counts need no split).
 F5 <- local({
-  phiH <- sqrt(SPLIT.FITS$HYB.SC[GENES, "DISP"] * SPLIT.FITS$HYB.SE[GENES, "DISP"]); obs <- log2(phiH / SPLIT.FITS$HYB.COMB[GENES, "DISP"]); pred <- PLOIDY.COMP[GENES, "delta"]
+  phiH <- sqrt(SPLIT.FITS$HYB.SC[GENES, "DISP"] * SPLIT.FITS$HYB.SE[GENES, "DISP"]); obs <- log2(phiH / SPLIT.FITS$HYB.COMB[GENES, "DISP"]); pred <- PLOIDY.COMP[GENES, "Lambda"]
   ok <- is.finite(obs) & is.finite(pred); fit <- lm(obs[ok] ~ pred[ok])
-  list(coef = summary(fit)$coefficients, genes = sum(ok), spearman = cor(obs[ok], pred[ok], method = "spearman"), route_check = ROUTE.CHECK)
+  list(coef = summary(fit)$coefficients, genes = sum(ok), spearman = cor(obs[ok], pred[ok], method = "spearman"), route_check = if (exists("ROUTE.CHECK")) ROUTE.CHECK else NULL)
 })
 check_save("F5", F5, "run", headline = sprintf("observed on predicted: slope %.3f (SE %.3f), intercept %.3f (SE %.3f), Spearman %.3f, %d genes", F5$coef[2, 1], F5$coef[2, 2], F5$coef[1, 1], F5$coef[1, 2], F5$spearman, F5$genes),
            mc_error = "regression SEs", script = CHECK.SCRIPT)
 
 ##############################################################################
 ## G1. Every number the text quotes, regenerated from the pipeline
+# text is the value the Methods quote, NA where they quote none (the split quantities are reported here for the text to cite).
 G1 <- local({
   med_c <- median(GENE.TABLE$HYB.SC.disp[(GENE.TABLE$HYB.SC.info_ok & GENE.TABLE$HYB.SC.disp > 0) %in% TRUE])
   med_e <- median(GENE.TABLE$HYB.SE.disp[(GENE.TABLE$HYB.SE.info_ok & GENE.TABLE$HYB.SE.disp > 0) %in% TRUE])
   med_c_all <- median(SPLIT.FITS$HYB.SC$DISP, na.rm = TRUE); med_e_all <- median(SPLIT.FITS$HYB.SE$DISP, na.rm = TRUE)
+  bias_c <- median(SPLIT.FITS$HYB.SC$DISP_APP - SPLIT.FITS$HYB.SC$DISP, na.rm = TRUE); bias_e <- median(SPLIT.FITS$HYB.SE$DISP_APP - SPLIT.FITS$HYB.SE$DISP, na.rm = TRUE)
   nmin <- min(c(vapply(CONTRAST.EXPOS[c("MIX.SC", "MIX.SE", "HYB.SC")], length, integer(1)), PARTITION.REPORT$n_cis, PARTITION.REPORT$n_trans))
-  data.frame(quantity = c("c-bar-hat", "eta_Hc", "eta_He", "median phi Hc (phi > 0)", "median phi He (phi > 0)", "median phi Hc (all fits)", "median phi He (all fits)",
-                          "correction term Hc (1 + phi) eta", "correction term He (1 + phi) eta", "phi below which (1 + phi) eta / phi > 1% (Hc)", "smallest group or partition (cells)"),
-             text = c(0.5024, 7.4e-5, 7.5e-5, 0.150, 0.152, 0.150, 0.152, 8.5e-5, 8.6e-5, 0.0075, 800),
-             pipeline = c(C.BAR, R.C, R.E, med_c, med_e, med_c_all, med_e_all, (1 + med_c) * R.C, (1 + med_e) * R.E, R.C / (0.01 - R.C), nmin), row.names = NULL)
+  data.frame(quantity = c("s-bar-hat", "median eta_Hc", "median eta_He", "median phi Hc (phi > 0)", "median phi He (phi > 0)", "median phi Hc (all fits)", "median phi He (all fits)",
+                          "median phi* - phi Hc (split correction and truncation)", "median phi* - phi He (split correction and truncation)", "smallest group or partition (cells)"),
+             text = c(NA, NA, NA, NA, NA, NA, NA, NA, NA, 800),
+             pipeline = c(mean(S.HAT), median(SPLIT.ETA$Hc), median(SPLIT.ETA$He), med_c, med_e, med_c_all, med_e_all, bias_c, bias_e, nmin), row.names = NULL)
 })
-G1$relative_difference <- G1$pipeline / G1$text - 1
-write.csv(G1, file.path(CHECK.DIR, "G1_numbers.csv"), row.names = FALSE)
-check_save("G1", G1, "run", headline = sprintf("%s: text %g, pipeline %.4g", G1$quantity, G1$text, G1$pipeline), mc_error = "exact", script = CHECK.SCRIPT)
-
 ##############################################################################
 ## Local bootstrap of a gene subsample: A4 (data), A6, C7 (data) and D8
 # The indices are drawn first for every replicate (make_draws(), as in gene_boot: the undivided hybrid cells resampled once, each copy keeping its partition
 # memberships), so the hybrid partitions share their resampled cells.
-# D8 refits each replicate twice from the same draws: with the share terms re-estimated on the resampled cells (the pipeline) and with the observed ones.
+# D8 refits each replicate twice from the same draws: with the split correction recomputed on the resampled cells (the pipeline) and without it (eta 0).
+# The summed counts HYB.COMB are refitted without a split correction, as the pipeline fits them.
 NCELLS.CK <- vapply(CONTRAST.EXPOS[names(.DRAW.KEY)], length, integer(1))
 DRAWS.CK <- make_draws(NCELLS.CK, N.CHECK.BOOT, SEED.CHECKS + 30, splits = list(HYC = SPLIT.IDX.MEAN$c, HYC.N = SPLIT.IDX.DISP$c, HYC.K = SPLIT.IDX.KBAL$c, HYC.Z = SPLIT.IDX.BSIZE$c))
 CK.GROUPS <- c(.CONTRAST.GROUPS, "HYB.COMB")
 MATS.CK <- lapply(setNames(CK.GROUPS, CK.GROUPS), function(k) as.matrix(CONTRAST.MATS[[k]][SUB.GENES, , drop = FALSE]))
-BOOT.CK <- mclapply(SUB.GENES, data_boot_gene, mats = MATS.CK, expos = CONTRAST.EXPOS, eta = SHARE.R, draws = DRAWS.CK, refit_share = TRUE, share_cells = SHARE.CELLS,
-                    groups = CK.GROUPS, share_sub = setNames(PLOIDY.COMP$share_sub, rownames(PLOIDY.COMP)), mc.cores = CORES)
-BOOT.CK.FIXED <- mclapply(SUB.GENES, data_boot_gene, mats = MATS.CK, expos = CONTRAST.EXPOS, eta = SHARE.R, draws = DRAWS.CK, refit_share = FALSE, mc.cores = CORES)
-STATS.CK <- do.call(rbind, mclapply(BOOT.CK, boot_gene_stats, cbar = C.BAR, mc.cores = CORES)); rownames(STATS.CK) <- SUB.GENES
-STATS.CK.FIXED <- do.call(rbind, mclapply(BOOT.CK.FIXED, boot_gene_stats, cbar = C.BAR, mc.cores = CORES)); rownames(STATS.CK.FIXED) <- SUB.GENES
+ETAS.CK <- SPLIT.FIT.ETAS[CK.GROUPS]
+BOOT.CK <- mclapply(SUB.GENES, data_boot_gene, mats = MATS.CK, expos = CONTRAST.EXPOS, etas = ETAS.CK, draws = DRAWS.CK, groups = CK.GROUPS, mc.cores = CORES)
+BOOT.CK.FIXED <- mclapply(SUB.GENES, data_boot_gene, mats = MATS.CK, expos = CONTRAST.EXPOS, etas = lapply(ETAS.CK, function(e) 0), draws = DRAWS.CK, groups = CK.GROUPS, mc.cores = CORES)
+STATS.CK <- do.call(rbind, mclapply(BOOT.CK, boot_gene_stats, mc.cores = CORES)); rownames(STATS.CK) <- SUB.GENES
+STATS.CK.FIXED <- do.call(rbind, mclapply(BOOT.CK.FIXED, boot_gene_stats, mc.cores = CORES)); rownames(STATS.CK.FIXED) <- SUB.GENES
 A4D <- list(within = col_quartiles(STATS.CK, grep("^cor_mu_phi_(raw|log2)\\.", colnames(STATS.CK))), contrasts = col_quartiles(STATS.CK, grep("^cor_dmu_dphi_", colnames(STATS.CK))))
 check_save("A4_data", A4D, "run",
            headline = c(sprintf("within-group cor(mu, phi) raw: median over datasets of gene medians %.3f (range %.3f to %.3f)", median(A4D$within[grepl("raw", rownames(A4D$within)), 2]),
                                 min(A4D$within[grepl("raw", rownames(A4D$within)), 2]), max(A4D$within[grepl("raw", rownames(A4D$within)), 2])),
                         sprintf("%s: median %.3f (IQR %.3f to %.3f)", sub("^cor_dmu_dphi_", "", rownames(A4D$contrasts)), A4D$contrasts[, 2], A4D$contrasts[, 1], A4D$contrasts[, 3])),
            mc_error = sprintf("%d genes, %d replicates; SE of one gene's correlation about %.3f", length(SUB.GENES), N.CHECK.BOOT, 1 / sqrt(N.CHECK.BOOT - 3)), script = CHECK.SCRIPT)
-A6 <- col_quartiles(STATS.CK, grep("^(cor_zeta_theta|cor_kappa_mu|se_ratio_kappa_theta|se_ratio_logphi_logmu)\\.(MIX|HYB)\\.", colnames(STATS.CK)))
+A6 <- col_quartiles(STATS.CK, grep("^(cor_beta_theta|cor_kappa_mu|se_ratio_kappa_theta|se_ratio_logphi_logmu)\\.(MIX|HYB)\\.", colnames(STATS.CK)))
 check_save("A6", A6, "run", headline = sprintf("%s: median %.3f (IQR %.3f to %.3f)", rownames(A6), A6[, 2], A6[, 1], A6[, 3]),
            mc_error = sprintf("%d genes, %d replicates", length(SUB.GENES), N.CHECK.BOOT), script = CHECK.SCRIPT)
 C7D <- col_quartiles(STATS.CK, c("cor_mu_Hc_phi_He_kbal", "cor_mu_He_phi_Hc_kbal", "cor_mu_Hc_phi_He_bsize", "cor_mu_He_phi_Hc_bsize"))
@@ -348,19 +344,20 @@ D8 <- local({
   data.frame(stratum = rep(levels(strat), each = ncol(r)), mode = sub("^se_disp\\.", "", colnames(r)),
              median_se_ratio = as.vector(vapply(levels(strat), function(s) apply(r[strat %in% s, , drop = FALSE], 2, median, na.rm = TRUE), numeric(ncol(r)))))
 })
-check_save("D8", D8, "run", headline = sprintf("%s mean count %s: SE ratio (refit / fixed share) %.4f", D8$mode, D8$stratum, D8$median_se_ratio),
+check_save("D8", D8, "run", headline = sprintf("%s mean count %s: SE ratio (split correction / none) %.4f", D8$mode, D8$stratum, D8$median_se_ratio),
            mc_error = sprintf("same draws in both arms; %d genes, %d replicates", length(SUB.GENES), N.CHECK.BOOT), script = CHECK.SCRIPT)
 
 ##############################################################################
 ## F5 and B5, the two routes to the per-genome hybrid dispersion on the local bootstrap (Cox-Reid fits)
-# Route A, used by every dominance contrast: log2 of the geometric mean of the two corrected allele dispersions. The summed route: log2 of the corrected
-# summed-count dispersion plus the reported shift delta, which is fixed per gene, so its bootstrap SD is that of log2 phi_Sigma. Both come from the same
+# Route A, used by every dominance contrast: log2 of the geometric mean of the two corrected allele dispersions. The summed route: log2 of the
+# summed-count dispersion plus the reported shift Lambda, which is fixed per gene, so its bootstrap SD is that of log2 phi_sum. Both come from the same
 # resampled hybrid cells. Reported: the median over genes of SD(summed route) / SD(route A), and the Spearman correlation of the two point estimates
 # (ROUTE.CHECK, all genes of the matched set). The earlier moment-based comparison (compare_phiG_routes.R) gave 0.965 and 0.97.
 ROUTE.SD <- t(vapply(BOOT.CK, function(D) c(allele = sd(0.5 * (log2(D[, "phi.HYB.SC"]) + log2(D[, "phi.HYB.SE"]))[is.finite(log2(D[, "phi.HYB.SC"]) + log2(D[, "phi.HYB.SE"]))]),
                                              summed = sd(log2(D[, "phi.HYB.COMB"])[is.finite(log2(D[, "phi.HYB.COMB"]))])), numeric(2)))
-check_save("F5_routes", list(sd = ROUTE.SD, route_check = ROUTE.CHECK), "run",
+RC.CK <- if (exists("ROUTE.CHECK")) ROUTE.CHECK else list(spearman = NA_real_, n_genes = NA_integer_)
+check_save("F5_routes", list(sd = ROUTE.SD, route_check = RC.CK), "run",
            headline = sprintf("bootstrap SD of log2 phi_H, summed route over allele route: median %.3f (IQR %.3f to %.3f), %d genes; Spearman of the point estimates %.3f (%d genes)",
                               median(ROUTE.SD[, "summed"] / ROUTE.SD[, "allele"], na.rm = TRUE), quantile(ROUTE.SD[, "summed"] / ROUTE.SD[, "allele"], 0.25, na.rm = TRUE),
-                              quantile(ROUTE.SD[, "summed"] / ROUTE.SD[, "allele"], 0.75, na.rm = TRUE), sum(is.finite(ROUTE.SD[, "summed"] / ROUTE.SD[, "allele"])), ROUTE.CHECK$spearman, ROUTE.CHECK$n_genes),
+                              quantile(ROUTE.SD[, "summed"] / ROUTE.SD[, "allele"], 0.75, na.rm = TRUE), sum(is.finite(ROUTE.SD[, "summed"] / ROUTE.SD[, "allele"])), RC.CK$spearman, RC.CK$n_genes),
            mc_error = sprintf("%d bootstrap replicates per gene", N.CHECK.BOOT), script = CHECK.SCRIPT)

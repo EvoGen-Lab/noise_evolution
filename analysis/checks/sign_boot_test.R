@@ -1,6 +1,6 @@
 ###############################################################
 ### sign_boot_test.R
-### P1: the proposed bootstrap sign test for every dispersion-family contrast (phi, theta, zeta, kappa, on the log2 and raw scales), tested before it
+### P1: the proposed bootstrap sign test for every dispersion-family contrast (phi, theta, beta, kappa, on the log2 and raw scales), tested before it
 ### replaces the gate, the projection, the shifted null and the likelihood-bound comparison. The procedure under test (sign_boot_cell(), sign_boot_p()):
 ###   1. Observed fits: a failed fit gives no contrast; a zero phi gives no log2 estimate, while the raw estimate and both tests stand.
 ###   2. Bootstrap: resample cells (each parent; the undivided hybrid cells, a copy keeping its cis or trans membership), refit every group, compute the
@@ -18,8 +18,8 @@
 ###   replicates.
 ### Blocks (P1.RUN): INPUTS writes sign_boot_inputs.rda for the cluster array (cluster/scripts/sign_boot_grid.R, cluster/submit/sign_boot.sub); LOCAL runs
 ### a reduced grid here (P1_local, status "reduced"); MERGE reads the array outputs and writes P1, results/checks/P1_sign_boot.csv and
-### figures/extra/check_P1_sign_boot.pdf. The hybrid has no transcriptome-share variation here (c = 0.5 for every cell), so the share corrections are not
-### part of this test.
+### figures/extra/check_P1_sign_boot.pdf. Both hybrid alleles of a cell share one allele offset and carry no library split error, so the split correction is
+### not part of this test. Burst size was named zeta in outputs written before the rename to beta; MERGE reads either name.
 ###############################################################
 library(here); source(here("R", "setup.R")); source(here("R", "functions_checks.R"))
 library(parallel)
@@ -38,8 +38,8 @@ set.seed(SEED.SECTION + 28)
 P1.POOLS <- if (file.exists(ckpt_path(1))) local({
   e <- new.env(); load(ckpt_path(1), envir = e)
   ref <- median(c(colSums(e$MIX.SC), colSums(e$MIX.SE)))
-  list(O_Pc = unname(colSums(e$MIX.SC)) / ref, O_Pe = unname(colSums(e$MIX.SE)) / ref, O_H = unname(colSums(e$HYB.SC) + colSums(e$HYB.SE)) / ref / 2, source = "observed")
-}) else local({ p <- check_design_pools(env = new.env()); list(O_Pc = p$O_Pc, O_Pe = p$O_Pe, O_H = p$S / 2, source = "stand-in") })
+  list(O_Pc = unname(colSums(e$MIX.SC)) / ref, O_Pe = unname(colSums(e$MIX.SE)) / ref, O_H = unname(colSums(e$HYB.SC)) / ref, source = "observed")   # O_H: Sc allele offset
+}) else local({ p <- check_design_pools(env = new.env()); list(O_Pc = p$O_Pc, O_Pe = p$O_Pe, O_H = p$S * p$sbar, source = "stand-in") })
 cat(sprintf("P1 depths: %s (Pc %d, Pe %d, hybrid %d cells in the pools)\n", P1.POOLS$source, length(P1.POOLS$O_Pc), length(P1.POOLS$O_Pe), length(P1.POOLS$O_H)))
 
 ## ---- The grid: null cells (every true contrast zero) and power cells ----
@@ -78,6 +78,7 @@ if ("MERGE" %in% P1.RUN) {
   } else {
     P1 <- list(); for (f in P1.FILES) { e <- new.env(); load(f, envir = e); P1[[f]] <- e$P1.PART }
     P1 <- do.call(rbind, P1); rownames(P1) <- NULL
+    P1$quantity[P1$quantity == "zeta"] <- "beta"                                       # outputs written before the rename of burst size
     stopifnot("sign_boot outputs do not cover every cell of the inputs" = setequal(unique(P1$task), P1.GRID$task))
     write.csv(P1, file.path(CHECK.DIR, "P1_sign_boot.csv"), row.names = FALSE)
     NUL <- P1[P1$target == "none", ]
@@ -96,7 +97,7 @@ if ("MERGE" %in% P1.RUN) {
     ## Figure (figures/extra/check_P1_sign_boot.pdf). Page 1: type I error at 0.05 against the common phi (0 = Poisson), one panel per contrast (rows) and
     ## quantity-scale (columns), a line per mean count (single-hue ramp), solid at 2000 cells and dashed at 1000, the nominal 0.05 dashed grey. Page 2:
     ## power at 0.05 against the effect ratio at phi 0.1 and 2000 cells, solid under the proposal and dashed with ties split.
-    QS <- c("phi.log2", "phi.raw", "zeta.log2", "zeta.raw", "kappa.log2", "kappa.raw")
+    QS <- c("phi.log2", "phi.raw", "beta.log2", "beta.raw", "kappa.log2", "kappa.raw")
     MC <- setNames(colorRampPalette(c("#9ECAE1", "#08306B"))(3), c(0.2, 1, 5))
     fig_pdf("extra/check_P1_sign_boot.pdf", 2.6 * length(QS), 2.6 * 3 + 0.6)
     par(mfrow = c(3, length(QS)), mar = c(3.6, 3.8, 2.2, 0.6), mgp = c(2.1, 0.6, 0), cex.axis = 0.8)

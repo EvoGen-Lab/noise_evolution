@@ -42,7 +42,7 @@ for (i in MY.TASKS) {
              R11 = ART.CFG$R11, thin_p = ART.CFG$thin_p, streams = ART.STREAMS.GENE, mc.cores = NUM.CORES, mc.preschedule = FALSE)
   } else {
     art_scenario_task(tk$index, grid = ART.SCEN.GRID, fits = ART.FITS, expos = ART.EXPOS, eta = ART.ETA, halves = ART.HALVES, genes = ART.GENES, frac = ART.CFG$frac,
-                      cbar = ART.CFG$cbar, mbar_breaks = ART.CFG$mbar_breaks, streams = ART.STREAMS.SCEN, cores = NUM.CORES)
+                      mbar_breaks = ART.CFG$mbar_breaks, streams = ART.STREAMS.SCEN, cores = NUM.CORES)
   }
   cat(sprintf("[%s] task %d (%s %d) done, %.1f min elapsed\n", format(Sys.time(), "%H:%M:%S"), i, tk$kind, tk$index, as.numeric(difftime(Sys.time(), t0, units = "mins"))))
   flush.console()

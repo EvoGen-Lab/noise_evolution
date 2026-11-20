@@ -11,8 +11,8 @@
 ###      phi_lin > 0, against the Cox-Reid d (MID1's) on the same genes, overall and by decile of mean count. If d_lin falls to near zero and is flat, the
 ###      linear term explains the shift; if d_lin stays near the Cox-Reid d, phi itself is higher in the hybrid.
 ###   3. the raw-scale version, phi_lin midpoints as arithmetic means (no positivity needed), and the share of genes with a negative phi_lin per group.
-### Offsets as in Section 2 (parents: library over the median parental library; hybrid alleles: half the cell's hybrid depth); the allele phi_lin carry the
-### transcriptome share correction (phi - eta) / (1 + eta) with eta = R.C, R.E. Genes need a mean count of at least MID2.MIN.COUNT per cell in every group.
+### Offsets as in Section 2 (parents: library over the median parental library; hybrid alleles: the library of their own genome over the same reference); the
+### allele dispersions carry the library split correction (split variances SPLIT.ETA), and phi_lin has the split bias delta of the gene's Cox-Reid fit subtracted. Genes need a mean count of at least MID2.MIN.COUNT per cell in every group.
 ### Writes results/checks/MID2_excess.csv (per group and per decile summaries), MID2_genes.csv, MID2.rds and a row in summary.csv.
 ###############################################################
 library(here); source(here("R", "setup.R")); source(here("R", "functions_checks.R"))
@@ -23,22 +23,21 @@ CORES <- if (.Platform$OS.type == "windows") 1 else max(1, detectCores() - 1)   
 if (!exists("MID2.MIN.COUNT")) MID2.MIN.COUNT <- 0.1      # minimum mean count per cell in every group, as MID1
 
 stopifnot("mid_excess_ckpt1.R needs the Section 1 checkpoint" = file.exists(ckpt_path(1)))
-load(ckpt_path(1))      # MIX.SC, MIX.SE, HYB.SC, HYB.SE, C.BAR, R.C, R.E
+load(ckpt_path(1))      # MIX.SC, MIX.SE, HYB.SC, HYB.SE, SPLIT.ETA
 stopifnot(identical(rownames(MIX.SC), rownames(HYB.SC)), identical(rownames(MIX.SE), rownames(MIX.SC)), identical(rownames(HYB.SE), rownames(HYB.SC)))
 
 DEPTH.REF <- median(c(colSums(MIX.SC), colSums(MIX.SE)))
 M2.MATS  <- list(Pc = MIX.SC, Pe = MIX.SE, Hc = HYB.SC, He = HYB.SE)
-M2.EXPOS <- list(Pc = colSums(MIX.SC) / DEPTH.REF, Pe = colSums(MIX.SE) / DEPTH.REF,
-                 Hc = (colSums(HYB.SC) + colSums(HYB.SE)) / DEPTH.REF / 2, He = (colSums(HYB.SC) + colSums(HYB.SE)) / DEPTH.REF / 2)
-M2.ETA   <- c(Pc = 0, Pe = 0, Hc = R.C, He = R.E)
+M2.EXPOS <- list(Pc = colSums(MIX.SC) / DEPTH.REF, Pe = colSums(MIX.SE) / DEPTH.REF, Hc = colSums(HYB.SC) / DEPTH.REF, He = colSums(HYB.SE) / DEPTH.REF)
+M2.ETA   <- list(Pc = 0, Pe = 0, Hc = SPLIT.ETA$Hc, He = SPLIT.ETA$He)
 M2.GENE.IDS <- rownames(MIX.SC)[Reduce(`&`, lapply(M2.MATS, function(m) rowMeans(m) >= MID2.MIN.COUNT))]
 cat(sprintf("%d genes with a mean count of at least %g per cell in every group\n", length(M2.GENE.IDS), MID2.MIN.COUNT))
 
-## Per gene and group: the linear coefficient a with its SE, phi_lin (share corrected), the Cox-Reid phi (share corrected) and the mean count per cell
+## Per gene and group: the linear coefficient a with its SE, phi_lin and the Cox-Reid phi (both split corrected) and the mean count per cell
 M2.FIT <- lapply(setNames(names(M2.MATS), names(M2.MATS)), function(k) {
   le <- do.call(rbind, mclapply(M2.GENE.IDS, linear_excess_gene, mat = M2.MATS[[k]], expo = M2.EXPOS[[k]], mc.cores = CORES))
-  cr <- vapply(M2.GENE.IDS, function(g) fit_dispersion(M2.MATS[[k]][g, ], M2.EXPOS[[k]], M2.ETA[[k]], "NB")[["disp"]], numeric(1))
-  data.frame(a = le[, "a"], a_se = le[, "a_se"], phi_lin = (le[, "phi_lin"] - M2.ETA[[k]]) / (1 + M2.ETA[[k]]), phi_cr = cr, mbar = le[, "mbar"],
+  cr <- t(vapply(M2.GENE.IDS, function(g) fit_dispersion(M2.MATS[[k]][g, ], M2.EXPOS[[k]], M2.ETA[[k]], "NB")[c("disp", "split_bias")], numeric(2)))
+  data.frame(a = le[, "a"], a_se = le[, "a_se"], phi_lin = le[, "phi_lin"] - ifelse(is.finite(cr[, "split_bias"]), cr[, "split_bias"], 0), phi_cr = cr[, "disp"], mbar = le[, "mbar"],
              row.names = M2.GENE.IDS)
 })
 

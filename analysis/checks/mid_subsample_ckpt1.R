@@ -6,8 +6,8 @@
 ###   parents   every UMI kept with probability p (p_c = median Sc allele library / median Pc library, p_e likewise for Se), as in MID3;
 ###   hybrid    a random subsample of the hybrid cells, of the Pc cell count for Hc and of the Pe cell count for He, without replacement; the hybrid
 ###             counts are not thinned, so each allele keeps its own depth.
-### Offsets: parents their thinned library over the unthinned median parental library; hybrid alleles half the cell's hybrid depth. Fits: the pipeline's
-### Cox-Reid NB, with R.C and R.E on the allele dispersions. Per draw and pair (Pc with Hc, Pe with He): the cell numbers, the median count per cell, the
+### Offsets: parents their thinned library over the unthinned median parental library; hybrid alleles the library of their own genome over the same
+### reference. Fits: the pipeline's Cox-Reid NB, with the library split correction of the allele dispersions (SPLIT.ETA of the subsampled cells). Per draw and pair (Pc with Hc, Pe with He): the cell numbers, the median count per cell, the
 ### share of genes at phi = 0, the median log2 phi of the positive fits, and the same on the genes positive in both groups of the pair; and the log2 and
 ### raw d with thinned parents and subsampled hybrid alleles, overall and by decile of the full parental mean count. Also the hybrid at full cell number
 ### with the same thinned parents, so the effect of the subsampling alone shows. Genes as MID1 to MID3 (mean count >= MID4.MIN.COUNT per cell in every
@@ -23,7 +23,7 @@ if (!exists("MID4.REPS"))      MID4.REPS      <- 3     # draws, each with its ow
 if (!exists("MID4.MIN.COUNT")) MID4.MIN.COUNT <- 0.1
 
 stopifnot("mid_subsample_ckpt1.R needs the Section 1 checkpoint" = file.exists(ckpt_path(1)))
-load(ckpt_path(1))      # MIX.SC, MIX.SE, HYB.SC, HYB.SE, C.BAR, R.C, R.E
+load(ckpt_path(1))      # MIX.SC, MIX.SE, HYB.SC, HYB.SE, SPLIT.ETA
 stopifnot(identical(rownames(MIX.SC), rownames(HYB.SC)), identical(rownames(MIX.SE), rownames(MIX.SC)), identical(rownames(HYB.SE), rownames(HYB.SC)))
 
 M4.GENE.IDS <- rownames(MIX.SC)[Reduce(`&`, lapply(list(MIX.SC, MIX.SE, HYB.SC, HYB.SE), function(m) rowMeans(m) >= MID4.MIN.COUNT))]
@@ -33,12 +33,13 @@ stopifnot(all(M4.P > 0 & M4.P < 1), "the hybrid must have at least as many cells
 cat(sprintf("%d genes; cells Pc %d, Pe %d, hybrid %d; thinning Pc %.3f, Pe %.3f\n", length(M4.GENE.IDS), M4.N[["Pc"]], M4.N[["Pe"]], M4.N[["H"]], M4.P[["Pc"]], M4.P[["Pe"]]))
 
 DEPTH.REF <- median(c(colSums(MIX.SC), colSums(MIX.SE)))
-M4.HYB.EXPO <- (colSums(HYB.SC) + colSums(HYB.SE)) / DEPTH.REF / 2
+M4.HYB.EXPO <- list(Hc = colSums(HYB.SC) / DEPTH.REF, He = colSums(HYB.SE) / DEPTH.REF)      # allele offsets
+M4.HYB.ETA  <- list(Hc = SPLIT.ETA$Hc, He = SPLIT.ETA$He)
 M4.MEAN.COUNT <- 0.5 * (rowMeans(MIX.SC[M4.GENE.IDS, , drop = FALSE]) + rowMeans(MIX.SE[M4.GENE.IDS, , drop = FALSE]))
 
 ## Hybrid allele fits on all cells (the comparison without subsampling)
-M4.HYB.FULL <- sapply(c(Hc = "Hc", He = "He"), function(k) { m <- if (k == "Hc") HYB.SC else HYB.SE; eta <- if (k == "Hc") R.C else R.E
-  unlist(mclapply(M4.GENE.IDS, function(g) fit_dispersion(as.numeric(m[g, ]), M4.HYB.EXPO, eta, "NB")[["disp"]], mc.cores = CORES)) })
+M4.HYB.FULL <- sapply(c(Hc = "Hc", He = "He"), function(k) { m <- if (k == "Hc") HYB.SC else HYB.SE
+  unlist(mclapply(M4.GENE.IDS, function(g) fit_dispersion(as.numeric(m[g, ]), M4.HYB.EXPO[[k]], M4.HYB.ETA[[k]], "NB")[["disp"]], mc.cores = CORES)) })
 rownames(M4.HYB.FULL) <- M4.GENE.IDS
 
 ## Each draw: thinned parents and hybrid alleles subsampled to each parent's cell count, every index and thinning drawn on the draw's own stream
@@ -51,8 +52,8 @@ M4.DRAWS <- lapply(seq_len(MID4.REPS), function(r) with_local_seed(SEED.MID4 + r
     unlist(mclapply(M4.GENE.IDS, function(g) fit_dispersion(as.numeric(m[g, ]), e, 0, "NB")[["disp"]], mc.cores = CORES))
   })
   sub <- list(Hc = sort(sample.int(M4.N[["H"]], M4.N[["Pc"]])), He = sort(sample.int(M4.N[["H"]], M4.N[["Pe"]])))
-  hyb <- sapply(c(Hc = "Hc", He = "He"), function(k) { m <- if (k == "Hc") HYB.SC else HYB.SE; eta <- if (k == "Hc") R.C else R.E; ix <- sub[[k]]
-    unlist(mclapply(M4.GENE.IDS, function(g) fit_dispersion(as.numeric(m[g, ix]), M4.HYB.EXPO[ix], eta, "NB")[["disp"]], mc.cores = CORES)) })
+  hyb <- sapply(c(Hc = "Hc", He = "He"), function(k) { m <- if (k == "Hc") HYB.SC else HYB.SE; ix <- sub[[k]]
+    unlist(mclapply(M4.GENE.IDS, function(g) fit_dispersion(as.numeric(m[g, ix]), M4.HYB.EXPO[[k]][ix], M4.HYB.ETA[[k]][ix], "NB")[["disp"]], mc.cores = CORES)) })
   rownames(par) <- rownames(hyb) <- M4.GENE.IDS
   list(par = par, hyb = hyb, sub = sub)
 }))

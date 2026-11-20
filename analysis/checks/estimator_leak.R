@@ -1,13 +1,13 @@
 ###############################################################
 ### estimator_leak.R
-### Two checks of the Cox-Reid NB dispersion estimator against the Appendix A moment estimator on the data, run locally from the
+### Two checks of the Cox-Reid NB dispersion estimator against the Appendix C moment estimator on the data, run locally from the
 ### Section 1 checkpoint alone (no Section 2 rerun and no cluster output):
 ###   L1  estimator comparison: log2(phi Cox-Reid / phi moment) per gene and group, summarized in bins of the mean count per cell and of phi;
 ###   L2  leak test: across genes, Delta log2 phi (Cox-Reid) - Delta log2 phi (moment) regressed on Delta log2 mu for the cis and trans
 ###       contrasts. A slope near zero means the shape assumption of the NB fit does not carry mean differences into the dispersion.
-### The offsets and share corrections are those of analysis.R Section 2: a parent's offset is its library over the median parental library,
-### each hybrid allele's is half the cell's hybrid depth, the allele dispersions carry the share corrections R.C and R.E, and the allele means
-### are divided by their abundance factors 2 c-bar and 2 (1 - c-bar). The contrasts use all hybrid cells: cis compares the two alleles and
+### The offsets and split corrections are those of analysis.R Section 2: a parent's offset is its library over the median parental library,
+### each hybrid allele's is the library of its own genome over the same reference (so its mean is a per-genome rate), and the allele dispersions
+### carry the library split correction with the split variances SPLIT.ETA of their cells. The contrasts use all hybrid cells: cis compares the two alleles and
 ### trans is the parental log2 ratio minus the allele log2 ratio.
 ### Mean and dispersion fitted on the same cells have correlated errors unless the counts follow the NB (docs/validation_checks.md, check A10),
 ### and the two estimators carry that covariance to different degrees, which alone can give the leak regression a slope. The test is therefore
@@ -38,20 +38,20 @@ PHI.BREAKS      <- c(0, 0.05, 0.2, 0.5, 1, Inf)
 set.seed(SEED.SECTION + 23)
 
 stopifnot("estimator_leak.R needs the Section 1 checkpoint" = file.exists(ckpt_path(1)))
-load(ckpt_path(1))      # MIX.SC, MIX.SE, HYB.SC, HYB.SE (cells after QC, genes after the union filter), C.BAR, R.C, R.E
+load(ckpt_path(1))      # MIX.SC, MIX.SE, HYB.SC, HYB.SE (cells after QC, genes after the union filter), S.HAT, SPLIT.ETA
 
-## Offsets and share corrections of Section 2. The hybrid cells keep their Section 1 order; nothing here depends on the depth order Section 2 uses.
+## Offsets and split variances of Section 2. The hybrid cells keep their Section 1 order; nothing here depends on the depth order Section 2 uses.
 DEPTH.REF.L <- median(c(colSums(MIX.SC), colSums(MIX.SE)))
 LEAK.MATS  <- list(Pc = MIX.SC, Pe = MIX.SE, Hc = HYB.SC, He = HYB.SE)
 LEAK.EXPOS <- list(Pc = colSums(MIX.SC) / DEPTH.REF.L, Pe = colSums(MIX.SE) / DEPTH.REF.L,
-                   Hc = (colSums(HYB.SC) + colSums(HYB.SE)) / DEPTH.REF.L / 2, He = (colSums(HYB.SC) + colSums(HYB.SE)) / DEPTH.REF.L / 2)
-LEAK.ETA   <- c(Pc = 0, Pe = 0, Hc = R.C, He = R.E)
+                   Hc = colSums(HYB.SC) / DEPTH.REF.L, He = colSums(HYB.SE) / DEPTH.REF.L)
+LEAK.ETA   <- list(Pc = 0, Pe = 0, Hc = SPLIT.ETA$Hc, He = SPLIT.ETA$He)
 
 ## Genes with data in all four groups: a mean count of LEAK.MIN.MEAN per cell and LEAK.MIN.CELLS cells with a count in every group.
 LEAK.GENES <- rownames(MIX.SC)[Reduce(`&`, lapply(LEAK.MATS, function(m) rowMeans(m) >= LEAK.MIN.MEAN & rowSums(m > 0) >= LEAK.MIN.CELLS))]
 if (is.finite(LEAK.MAX.GENES) && length(LEAK.GENES) > LEAK.MAX.GENES) LEAK.GENES <- with_local_seed(SEED.LEAK, sample(LEAK.GENES, LEAK.MAX.GENES))
-cat(sprintf("Estimator comparison: %d genes; cells Pc %d, Pe %d, hybrid %d; c-bar %.4f, eta_Hc %.3g, eta_He %.3g\n", length(LEAK.GENES),
-            ncol(MIX.SC), ncol(MIX.SE), ncol(HYB.SC), C.BAR, R.C, R.E))
+cat(sprintf("Estimator comparison: %d genes; cells Pc %d, Pe %d, hybrid %d; s-bar %.4f, median eta_Hc %.3g, eta_He %.3g\n", length(LEAK.GENES),
+            ncol(MIX.SC), ncol(MIX.SE), ncol(HYB.SC), mean(S.HAT), median(SPLIT.ETA$Hc), median(SPLIT.ETA$He)))
 
 ## Random halves of each group's cells for the disjoint arm, drawn once; the two hybrid alleles share their halves because they share cells.
 LEAK.HALVES <- with_local_seed(SEED.LEAK + 1, local({
@@ -93,9 +93,9 @@ check_save("L1", list(bins = L1, zero_shares = L1.PHI0, fits = LEAK.FITS), "run"
 
 ##############################################################################
 ## L2. Leak test: [Delta log2 phi (Cox-Reid) - Delta log2 phi (moment)] on Delta log2 mu across genes, for cis and trans, in both arms
-# cis: Hc against He, means divided by their abundance factors. trans: the parental log2 ratio minus the allele log2 ratio. A gene enters a contrast
+# cis: Hc against He, per-genome rates on their own library offsets. trans: the parental log2 ratio minus the allele log2 ratio. A gene enters a contrast
 # when all of its groups have both dispersion estimates positive. The fit is repeated within terciles of the genes' mean count per cell.
-L2.DATA <- rbind(leak_contrasts(LEAK.FITS, "same", C.BAR), leak_contrasts(LEAK.FITS, "disjoint", C.BAR))
+L2.DATA <- rbind(leak_contrasts(LEAK.FITS, "same"), leak_contrasts(LEAK.FITS, "disjoint"))
 L2 <- list()
 for (arm in c("same", "disjoint")) for (md in c("cis", "trans")) {
   d <- L2.DATA[L2.DATA$arm == arm & L2.DATA$contrast == md, ]
@@ -144,7 +144,7 @@ for (k in names(LEAK.MATS)) {
   }
 }
 L3.GAP <- do.call(rbind, L3.GAP)
-L3.DATA <- leak_contrasts(LEAK.FITS.TRIM, "disjoint", C.BAR)
+L3.DATA <- leak_contrasts(LEAK.FITS.TRIM, "disjoint")
 L3.SLOPES <- list()
 for (md in c("cis", "trans")) {
   d <- L3.DATA[L3.DATA$contrast == md, ]
@@ -185,7 +185,7 @@ check_save("L4", L4, "run", headline = sprintf("%s mean count %s: mean z %.2f (S
 ##############################################################################
 ## L5. Leak test on the raw scale: the difference of the two estimators' raw dispersion contrasts (Delta phi) on Delta log2 mu, both arms
 # A slope on the log2 scale that vanishes on the raw scale comes from small phi, where a log2 contrast magnifies small differences.
-L5.DATA <- rbind(leak_contrasts(LEAK.FITS, "same", C.BAR, "raw"), leak_contrasts(LEAK.FITS, "disjoint", C.BAR, "raw"))
+L5.DATA <- rbind(leak_contrasts(LEAK.FITS, "same", "raw"), leak_contrasts(LEAK.FITS, "disjoint", "raw"))
 L5 <- list()
 for (arm in c("same", "disjoint")) for (md in c("cis", "trans")) {
   d <- L5.DATA[L5.DATA$arm == arm & L5.DATA$contrast == md, ]
@@ -253,18 +253,19 @@ for (k in names(LEAK.MATS)) {
 }
 ## The hybrid alleles share their cells, so a cell flagged in either allele leaves both.
 L7.OUT$Hc <- L7.OUT$He <- sort(union(L7.OUT$Hc, L7.OUT$He))
-## The allele share of the flagged hybrid cells, as a z-score against all hybrid cells (C.HAT is in the cell order of the Section 1 matrices).
-if (length(C.HAT) == ncol(HYB.SC) && length(L7.OUT$Hc)) L7.SUMMARY$Hc$outlier_chat_z <- L7.SUMMARY$He$outlier_chat_z <- median((C.HAT[L7.OUT$Hc] - mean(C.HAT)) / sd(C.HAT))
+## The allele share of the flagged hybrid cells, as a z-score against all hybrid cells (S.HAT is in the cell order of the Section 1 matrices).
+if (length(S.HAT) == ncol(HYB.SC) && length(L7.OUT$Hc)) L7.SUMMARY$Hc$outlier_chat_z <- L7.SUMMARY$He$outlier_chat_z <- median((S.HAT[L7.OUT$Hc] - mean(S.HAT)) / sd(S.HAT))
 L7.SUMMARY <- do.call(rbind, L7.SUMMARY)
 print(L7.SUMMARY, digits = 3, row.names = FALSE)
 ## Refit without the outlier cells
 L7.MATS <- lapply(setNames(names(LEAK.MATS), names(LEAK.MATS)), function(k) if (length(L7.OUT[[k]])) LEAK.MATS[[k]][, -L7.OUT[[k]], drop = FALSE] else LEAK.MATS[[k]])
 L7.EXPOS <- lapply(setNames(names(LEAK.EXPOS), names(LEAK.EXPOS)), function(k) if (length(L7.OUT[[k]])) LEAK.EXPOS[[k]][-L7.OUT[[k]]] else LEAK.EXPOS[[k]])
+L7.ETA <- lapply(setNames(names(LEAK.ETA), names(LEAK.ETA)), function(k) if (length(LEAK.ETA[[k]]) > 1 && length(L7.OUT[[k]])) LEAK.ETA[[k]][-L7.OUT[[k]]] else LEAK.ETA[[k]])
 L7.HALVES <- with_local_seed(SEED.LEAK + 9, local({
   h <- sample.int(ncol(L7.MATS$Hc), floor(ncol(L7.MATS$Hc) / 2))
   list(Pc = sample.int(ncol(L7.MATS$Pc), floor(ncol(L7.MATS$Pc) / 2)), Pe = sample.int(ncol(L7.MATS$Pe), floor(ncol(L7.MATS$Pe) / 2)), Hc = h, He = h)
 }))
-L7.FITS <- do.call(rbind, mclapply(LEAK.GENES, estimator_pair_gene, mats = L7.MATS, expos = L7.EXPOS, eta = LEAK.ETA, halves = L7.HALVES, mc.cores = CORES))
+L7.FITS <- do.call(rbind, mclapply(LEAK.GENES, estimator_pair_gene, mats = L7.MATS, expos = L7.EXPOS, eta = L7.ETA, halves = L7.HALVES, mc.cores = CORES))
 rownames(L7.FITS) <- LEAK.GENES
 L7.GAP <- list(); L7.SLOPES <- list(); L7.A <- list()
 for (k in names(LEAK.MATS)) {
@@ -280,7 +281,7 @@ for (k in names(LEAK.MATS)) {
   r <- t(vapply(LEAK.GENES, linear_excess_gene, numeric(4), mat = L7.MATS[[k]], expo = L7.EXPOS[[k]])); z <- r[, "a"] / r[, "a_se"]
   L7.A[[k]] <- data.frame(group = k, removed_cells = length(L7.OUT[[k]]), median_a = median(r[, "a"], na.rm = TRUE), share_above = mean(z > 2, na.rm = TRUE), share_below = mean(z < -2, na.rm = TRUE), row.names = NULL)
 }
-L7.DATA <- leak_contrasts(L7.FITS, "disjoint", C.BAR)
+L7.DATA <- leak_contrasts(L7.FITS, "disjoint")
 for (md in c("cis", "trans")) { d <- L7.DATA[L7.DATA$contrast == md, ]
   L7.SLOPES[[md]] <- data.frame(arm = "disjoint, outlier cells removed", contrast = md, leak_regression(d$dlog2mu, d$diff, d$dphi_cr, d$dphi_mom, LEAK.BOOT, SEED.LEAK + 10)) }
 L7.GAP <- do.call(rbind, L7.GAP); L7.SLOPES <- do.call(rbind, L7.SLOPES); L7.A <- do.call(rbind, L7.A); rownames(L7.SLOPES) <- NULL
@@ -316,7 +317,7 @@ for (k in names(LEAK.MATS)) {
 }
 L8 <- do.call(rbind, L8); L8.A <- do.call(rbind, L8.A)
 L8.OWN <- local({
-  lmu <- list(Pc = log2(L8.FIT$Pc[, "mu"]), Pe = log2(L8.FIT$Pe[, "mu"]), Hc = log2(L8.FIT$Hc[, "mu"] / (2 * C.BAR)), He = log2(L8.FIT$He[, "mu"] / (2 * (1 - C.BAR))))
+  lmu <- list(Pc = log2(L8.FIT$Pc[, "mu"]), Pe = log2(L8.FIT$Pe[, "mu"]), Hc = log2(L8.FIT$Hc[, "mu"]), He = log2(L8.FIT$He[, "mu"]))
   lph <- lapply(L8.FIT, function(f) ifelse(f[, "disp"] > 0, log2(f[, "disp"]), NA_real_))
   dx_cis <- lmu$Hc - lmu$He; dy_cis <- lph$Hc - lph$He; dx_tr <- (lmu$Pc - lmu$Pe) - dx_cis; dy_tr <- (lph$Pc - lph$Pe) - dy_cis     # lm() drops genes with an NA (phi = 0)
   data.frame(contrast = c("cis", "trans"), own_slope_cox_reid_scaled = c(unname(coef(lm(dy_cis ~ dx_cis))[2]), unname(coef(lm(dy_tr ~ dx_tr))[2])),

@@ -10,7 +10,7 @@
 ### Offsets are recomputed from the thinned libraries, as the pipeline would; the hybrid fits are the unthinned ones throughout.
 ### Per draw and overall: per group the share of genes at phi = 0 and the median log2 phi of the positive fits; the log2 d (geometric midpoints) and the
 ### raw d (arithmetic) with full and with thinned parents, on the genes where each is defined and on the genes where both are, overall and by decile of
-### the full mean count. Fits are the pipeline's Cox-Reid NB with the share corrections R.C and R.E on the allele dispersions. Genes need a mean count of
+### the full mean count. Fits are the pipeline's Cox-Reid NB with the library split correction of the allele dispersions (SPLIT.ETA). Genes need a mean count of
 ### at least MID3.MIN.COUNT per cell in every unthinned group, as MID1. Section 1 checkpoint only.
 ### Writes results/checks/MID3_thin.csv, MID3_thin_groups.csv, MID3.rds and a row in summary.csv.
 ###############################################################
@@ -24,7 +24,7 @@ if (!exists("MID3.REPS"))      MID3.REPS      <- 3     # thinning draws
 if (!exists("MID3.MIN.COUNT")) MID3.MIN.COUNT <- 0.1   # minimum mean count per cell in every unthinned group
 
 stopifnot("mid_thin_ckpt1.R needs the Section 1 checkpoint" = file.exists(ckpt_path(1)))
-load(ckpt_path(1))      # MIX.SC, MIX.SE, HYB.SC, HYB.SE, C.BAR, R.C, R.E
+load(ckpt_path(1))      # MIX.SC, MIX.SE, HYB.SC, HYB.SE, SPLIT.ETA
 stopifnot(identical(rownames(MIX.SC), rownames(HYB.SC)), identical(rownames(MIX.SE), rownames(MIX.SC)), identical(rownames(HYB.SE), rownames(HYB.SC)))
 
 ## Genes and thinning fractions
@@ -33,13 +33,13 @@ M3.P <- c(Pc = median(colSums(HYB.SC)) / median(colSums(MIX.SC)), Pe = median(co
 stopifnot("an allele library is not shallower than its parent's; thinning needs p < 1" = all(M3.P > 0 & M3.P < 1))
 cat(sprintf("%d genes; thinning fractions: Pc %.3f, Pe %.3f\n", length(M3.GENE.IDS), M3.P[["Pc"]], M3.P[["Pe"]]))
 
-## Fits of one group: Cox-Reid phi (share corrected) of every gene, against offsets from the group's own libraries over the reference depth.
-## Offsets as in Section 2: parents library / DEPTH.REF, hybrid alleles half the cell's hybrid depth. DEPTH.REF stays the unthinned median parental
+## Fits of one group: Cox-Reid phi (split corrected) of every gene, against offsets from the group's own libraries over the reference depth.
+## Offsets as in Section 2: parents library / DEPTH.REF, hybrid alleles the library of their own genome / DEPTH.REF. DEPTH.REF stays the unthinned median parental
 ## library, so a thinned parent's offsets scale with its thinning and its fitted mean falls by p while phi is unchanged.
 DEPTH.REF <- median(c(colSums(MIX.SC), colSums(MIX.SE)))
-M3.HYB.EXPO <- (colSums(HYB.SC) + colSums(HYB.SE)) / DEPTH.REF / 2
-M3.FIT.HYB <- sapply(c(Hc = "Hc", He = "He"), function(k) { m <- if (k == "Hc") HYB.SC else HYB.SE; eta <- if (k == "Hc") R.C else R.E
-  unlist(mclapply(M3.GENE.IDS, function(g) fit_dispersion(as.numeric(m[g, ]), M3.HYB.EXPO, eta, "NB")[["disp"]], mc.cores = CORES)) })
+M3.FIT.HYB <- sapply(c(Hc = "Hc", He = "He"), function(k) { m <- if (k == "Hc") HYB.SC else HYB.SE; eta <- if (k == "Hc") SPLIT.ETA$Hc else SPLIT.ETA$He
+  e <- colSums(m) / DEPTH.REF
+  unlist(mclapply(M3.GENE.IDS, function(g) fit_dispersion(as.numeric(m[g, ]), e, eta, "NB")[["disp"]], mc.cores = CORES)) })
 rownames(M3.FIT.HYB) <- M3.GENE.IDS
 M3.FIT.PAR.FULL <- sapply(c(Pc = "Pc", Pe = "Pe"), function(k) { m <- if (k == "Pc") MIX.SC else MIX.SE; e <- colSums(m) / DEPTH.REF
   unlist(mclapply(M3.GENE.IDS, function(g) fit_dispersion(as.numeric(m[g, ]), e, 0, "NB")[["disp"]], mc.cores = CORES)) })

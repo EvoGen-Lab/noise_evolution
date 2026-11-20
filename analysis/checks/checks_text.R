@@ -78,7 +78,7 @@ REPORT <- c("# Validation checks of the methods document", "",
             "| ID | Status | Headline numbers | Monte Carlo error | Script |", "|---|---|---|---|---|",
             sprintf("| %s | %s | %s | %s | %s |", SUMMARY$ID, SUMMARY$status, gsub("\\|", "/", gsub("; ", "<br>", SUMMARY$headline)), SUMMARY$mc_error, SUMMARY$script), "",
             "Not testable with these data (handoff section 7): species-specific ploidy effects (need diploid parental strains), capture differences between parental and",
-            "hybrid cells, and the bursty-limit reading of theta and zeta.", "")
+            "hybrid cells, and the bursty-limit reading of theta and beta.", "")
 if (file.exists(file.path(CHECK.DIR, "mismatches.md"))) REPORT <- c(REPORT, readLines(file.path(CHECK.DIR, "mismatches.md")))
 writeLines(REPORT, file.path(CHECK.DIR, "REPORT.md"))
 cat("Wrote", file.path(CHECK.DIR, "REPORT.md"), "\n")

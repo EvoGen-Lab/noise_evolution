@@ -8,7 +8,8 @@
 ### Per quantity (mean, disp): the calibrator genes (matched set GENES, finite d, BH q >= MID.SIG for both the trans and the total contrast of that quantity),
 ### their median d with two 95% intervals, and the scale to read it against:
 ###   gene bootstrap  MID.B.GENE resamples of the calibrator genes, the median recomputed in each (the spread a new set of such genes would give);
-###   cell bootstrap  MID.B.CELL resamples of the parental and undivided hybrid cells, with the share terms and the four groups refitted, the median of a
+###   cell bootstrap  MID.B.CELL resamples of the parental and undivided hybrid cells, with the four groups refitted (the split correction on the
+###                   resampled cells), the median of a
 ###                   random subsample of MID.CELL.GENES calibrator genes recomputed in each replicate (mid_shift_gene()); this is the replicate-by-replicate
 ###                   median an adjustment would subtract;
 ###   scale           the genome-wide median d, the median |d| of the genes whose midparent contrast is significant (q < MID.SIG), the IQR of d over the
@@ -16,9 +17,9 @@
 ### The calibrator median is also given by tercile of mean expression, since a capture or culture shift on the log2 mean should not depend on expression.
 ### Decision read from the table: a calibrator median small against the typical significant d and with an interval that covers zero leaves d unadjusted;
 ### otherwise subtracting it (recomputed in each replicate) removes the shared shift.
-### d is recomputed here from the observed fits (CONTRAST.FITS, C.BAR) with the current contrast definition (geometric midpoints on the log2 scale), so a
-### checkpoint written before that definition still gives the right d; its PR q-values (trans, total, mid) and SEs come from the checkpoint as written.
-### Needs the Section 2 checkpoint (GENES, BURST.CONTRASTS, PR, CONTRAST.FITS, C.BAR, CONTRAST.MATS, CONTRAST.EXPOS, SHARE.CELLS). Runs locally; no cluster output.
+### d is recomputed here from the observed allele fits of all hybrid cells (CONTRAST.FITS) with the current contrast definition (geometric midpoints on the
+### log2 scale); its PR q-values (trans, total, mid) and SEs come from the checkpoint as written (the pipeline's mid contrast uses the trans cells).
+### Needs the Section 2 checkpoint (GENES, BURST.CONTRASTS, PR, CONTRAST.FITS, CONTRAST.MATS, CONTRAST.EXPOS, SPLIT.FIT.ETAS). Runs locally; no cluster output.
 ### Results: results/checks/MID1.rds, results/checks/MID1_mid_shift.csv, a row in summary.csv, figures/extra/check_MID1_mid_shift.pdf.
 ###############################################################
 library(here); source(here("R", "setup.R")); source(here("R", "functions_checks.R"))
@@ -35,14 +36,14 @@ set.seed(SEED.SECTION + 30)
 
 stopifnot("mid_shift_check.R needs the Section 2 checkpoint" = file.exists(ckpt_path(2)))
 load(ckpt_path(2))
-need <- c("GENES", "BURST.CONTRASTS", "PR", "CONTRAST.FITS", "C.BAR", "CONTRAST.MATS", "CONTRAST.EXPOS", "SHARE.CELLS")
+need <- c("GENES", "BURST.CONTRASTS", "PR", "CONTRAST.FITS", "CONTRAST.MATS", "CONTRAST.EXPOS", "SPLIT.FIT.ETAS")
 stopifnot("the Section 2 checkpoint lacks an object this check needs" = all(vapply(need, exists, logical(1))))
 MID.Q <- c("mean", "disp")
 stopifnot(all(paste0(rep(MID.Q, each = 3), c("_trans_q", "_total_q", "_mid_q")) %in% names(PR)), identical(PR$gene, BURST.CONTRASTS$gene))
 
-## Observed d of every matched-set gene from its fits, with the current definition
-MID.OBS <- t(vapply(GENES, function(g) { fv <- fit_group_values(CONTRAST.FITS[c("MIX.SC", "MIX.SE", "HYB.SC", "HYB.SE")], g)
-  .mode_contrasts(fv$mu, fv$disp, C.BAR, modes = "mid")["mid", c("mean", "disp")] }, numeric(2)))
+## Observed d of every matched-set gene from its fits, with the current definition; the allele fits of all hybrid cells take the place of the trans cells
+MID.OBS <- t(vapply(GENES, function(g) { fv <- fit_group_values(setNames(CONTRAST.FITS[c("MIX.SC", "MIX.SE", "HYB.SC", "HYB.SE")], c("MIX.SC", "MIX.SE", "HYT.SC", "HYT.SE")), g)
+  .mode_contrasts(fv$mu, fv$disp, modes = "mid")["mid", c("mean", "disp")] }, numeric(2)))
 
 ## Calibrator genes and the scale of d, per quantity
 MID.SETS <- lapply(setNames(MID.Q, MID.Q), function(q) {
@@ -75,7 +76,7 @@ MID.DRAWS <- with_local_seed(SEED.MID + 2, {
 })
 t0 <- Sys.time()
 MID.CELL.REPS <- mclapply(MID.CELL.SET, mid_shift_gene, mats = CONTRAST.MATS[c("MIX.SC", "MIX.SE", "HYB.SC", "HYB.SE")], expos = CONTRAST.EXPOS,
-                          draws = MID.DRAWS, share_cells = SHARE.CELLS, mc.cores = CORES)
+                          etas = SPLIT.FIT.ETAS[c("MIX.SC", "MIX.SE", "HYB.SC", "HYB.SE")], draws = MID.DRAWS, mc.cores = CORES)
 cat(sprintf("cell bootstrap: %d genes x %d replicates in %.1f min\n", length(MID.CELL.SET), MID.B.CELL, as.numeric(difftime(Sys.time(), t0, units = "mins"))))
 ## median over the subsample genes in each replicate, for each quantity; a gene enters a quantity's median only if it calibrates that quantity
 MID.CELL.MED <- sapply(MID.Q, function(q) { k <- MID.CELL.SET %in% MID.SETS[[q]]$genes

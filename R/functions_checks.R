@@ -3,8 +3,8 @@
 ### Functions of the validation checks of the methods document (docs/methods.md): the shared simulation generator, the result writer and the
 ### per-row units of work that the check scripts apply across their grids. Sourced after R/functions.R by analysis/checks/checks_sim.R,
 ### analysis/checks/checks_data.R, analysis/checks/checks_text.R and the check scripts of analysis/checks/ and analysis/doc_checks.R.
-### Notation follows the document: parents Pc and Pe, hybrid alleles Hc and He, dispersion phi, burst frequency theta = 1 / phi, burst size zeta,
-### kinetic balance kappa, transcriptome share c with mean c-bar and variance sigma2_c, multiplier variances eta.
+### Notation follows the document: parents Pc and Pe, hybrid alleles Hc and He, dispersion phi, burst frequency theta = 1 / phi, burst size beta,
+### kinetic balance kappa, transcriptome share s with mean s-bar and variance sigma2_s, split variances eta (split_eta()).
 ###############################################################
 
 ## ============================================================
@@ -68,39 +68,44 @@ with_stream <- function(stream, expr) {
 ## ============================================================
 ## Shared simulation generator (handoff section 3)
 ## ============================================================
-## The observed design: offsets of the parental cells, depth factors S_H and libraries L_H of the hybrid cells, c-bar and sigma2_c. check_design_pools()
+## The observed design: offsets of the parental cells, depth factors S_H = L_H / D and libraries L_H of the hybrid cells, s-bar and sigma2_s. check_design_pools()
 ## takes them from the Section 2 checkpoint objects when they are loaded and otherwise builds stand-in pools whose offset coefficients of variation are
-## those reported for the data (Pc 0.72, Pe 0.87, hybrid 0.44; Methods, Notes for revision). The stand-in median hybrid library is a placeholder.
+## those reported for the data (Pc 0.72, Pe 0.87, hybrid 0.44; Methods, Notes for revision). The stand-in median hybrid library is a placeholder. From the
+## data, s-bar is the mean observed share s-hat = L_Hc / L_H and sigma2_s the variance of the true share: the variance of s-hat less its mean binomial
+## sampling variance, s-hat (1 - s-hat) / (L_H - 1) (law of total variance, the L_H - 1 making the binomial term unbiased), truncated at zero.
 check_design_pools <- function(env = .GlobalEnv, n_stand = c(Pc = 1000, Pe = 1000, H = 2000), lib_h_median = 2e4) {
   have <- all(vapply(c("EXPO.MIX.SC", "EXPO.MIX.SE", "EXPO.HYB", "HYB.SC", "HYB.SE"), exists, logical(1), envir = env))
   if (have) {
-    L <- if (exists("SHARE.CELLS", envir = env)) get("SHARE.CELLS", env)$lib else colSums(get("HYB.SC", env)) + colSums(get("HYB.SE", env))
+    Lc <- colSums(get("HYB.SC", env)); L <- Lc + colSums(get("HYB.SE", env)); sh <- Lc / L
     return(list(O_Pc = get("EXPO.MIX.SC", env), O_Pe = get("EXPO.MIX.SE", env), S = get("EXPO.HYB", env), L = L,
-                cbar = if (exists("C.BAR", envir = env)) get("C.BAR", env) else 0.5024,
-                var_c = if (exists("VAR.C", envir = env)) get("VAR.C", env) else 1.9e-5, source = "observed"))
+                sbar = mean(sh), var_s = max(var(sh) - mean(sh * (1 - sh) / (L - 1)), 0), source = "observed"))
   }
   ln <- function(n, cv) { s <- sqrt(log(1 + cv^2)); exp(rnorm(n, -s^2 / 2, s)) }
   S <- ln(n_stand[["H"]], 0.44) * 2
   list(O_Pc = ln(n_stand[["Pc"]], 0.72), O_Pe = ln(n_stand[["Pe"]], 0.87), S = S, L = round(S * lib_h_median / 2),
-       cbar = 0.5024, var_c = 1.9e-5, source = "stand-in")
+       sbar = 0.5024, var_s = 1.9e-5, source = "stand-in")
 }
 
 ## sim_design: the cells of one simulated experiment, shared by every gene of it. Parental offsets and hybrid cells (S_H with its library L_H) are
-## resampled from the pools; each hybrid cell gets a true share c_i (beta, mean cbar, variance var_c) and an observed share c-hat_i = Binomial(L_i, c_i) / L_i.
-sim_design <- function(pools, n = c(Pc = length(pools$O_Pc), Pe = length(pools$O_Pe), H = length(pools$S)), cbar = pools$cbar, var_c = pools$var_c) {
+## resampled from the pools; each hybrid cell gets a true share s_i (beta, mean sbar, variance var_s) and an observed Sc library L_Hc ~ Binomial(L_H, s_i),
+## kept within 1 and L_H - 1 so both allele offsets are positive (Methods: Library split correction). The allele offsets are the libraries of the two genomes
+## over D, O_Hc = S_H s-hat_i and O_He = S_H (1 - s-hat_i) with s-hat_i = L_Hc / L_H, and eta holds the split variances at the observed shares (split_eta()).
+sim_design <- function(pools, n = c(Pc = length(pools$O_Pc), Pe = length(pools$O_Pe), H = length(pools$S)), sbar = pools$sbar, var_s = pools$var_s) {
   ih <- sample.int(length(pools$S), n[["H"]], replace = TRUE)
-  L <- pmax(round(pools$L[ih]), 2); c_i <- sim_draw_share(n[["H"]], cbar, var_c)
+  L <- pmax(round(pools$L[ih]), 2); s_i <- sim_draw_share(n[["H"]], sbar, var_s)
+  shat <- pmin(pmax(rbinom(n[["H"]], L, s_i), 1), L - 1) / L; S <- pools$S[ih]
   list(O_Pc = sample(pools$O_Pc, n[["Pc"]], replace = TRUE), O_Pe = sample(pools$O_Pe, n[["Pe"]], replace = TRUE),
-       S = pools$S[ih], L = L, c = c_i, chat = rbinom(n[["H"]], L, c_i) / L, cbar = cbar, var_c = var_c)
+       S = S, L = L, s = s_i, shat = shat, O_Hc = S * shat, O_He = S * (1 - shat), eta = split_eta(shat, L), sbar = sbar, var_s = var_s)
 }
 
 ## sim_hybrid_dataset: the counts of one gene on the cells of a design (sim_design()). mu and phi are named c(Pc, Pe, Hc, He): per-genome rates and
-## expression-factor variances. Parents: Y ~ Poisson(O mu a), a with mean 1 and variance phi. Hybrid alleles: Hc ~ Poisson(S_H c_i mu_Hc d_i q_Hci),
-## He ~ Poisson(S_H (1 - c_i) mu_He d_i q_Hei), each allele offset S_H / 2. The shared extrinsic factor d has variance s2d, (1 - omega) times the smaller allele
+## expression-factor variances. Parents: Y ~ Poisson(O mu a), a with mean 1 and variance phi. Hybrid alleles: Hc ~ Poisson(S_H s_i mu_Hc v_i q_Hci),
+## He ~ Poisson(S_H (1 - s_i) mu_He v_i q_Hei), each allele offset its own observed library over D (O_Hc, O_He of sim_design()), with the split variances eta of
+## its cells. The shared extrinsic factor v has variance s2d (sigma2_v), (1 - omega) times the smaller allele
 ## dispersion unless given, and each private factor q has the variance (1 + phi_r) / (1 + s2d) - 1 that gives the allele the factor variance phi_r. The
 ## covariance of the two allele factors is then s2d and omega = 1 - s2d / phi is the intrinsic fraction of the document. family is gamma, lognormal or
 ## bimodal (sim_pos_factor()), with equal first two moments. q_ratio > 1 gives the Hc allele a private variance q_ratio times that of He at the same mean
-## private variance (Appendix B robustness). Returns the counts, the offsets and the true extrinsic and private variances.
+## private variance (Appendix D robustness). Returns the counts, the offsets, the split variances and the true extrinsic and private variances.
 sim_hybrid_dataset <- function(design, mu, phi, omega = 0.5, family = "gamma", s2d = NULL, q_ratio = 1) {
   stopifnot(all(c("Pc", "Pe", "Hc", "He") %in% names(mu)), all(c("Pc", "Pe", "Hc", "He") %in% names(phi)), all(phi >= 0), omega >= 0, omega <= 1)
   nH <- length(design$S)
@@ -110,9 +115,10 @@ sim_hybrid_dataset <- function(design, mu, phi, omega = 0.5, family = "gamma", s
   d <- sim_pos_factor(nH, family, 1, s2d)
   y <- list(Pc = rpois(length(design$O_Pc), design$O_Pc * mu[["Pc"]] * sim_pos_factor(length(design$O_Pc), family, 1, phi[["Pc"]])),
             Pe = rpois(length(design$O_Pe), design$O_Pe * mu[["Pe"]] * sim_pos_factor(length(design$O_Pe), family, 1, phi[["Pe"]])),
-            Hc = rpois(nH, design$S * design$c * mu[["Hc"]] * d * sim_pos_factor(nH, family, 1, vq[["Hc"]])),
-            He = rpois(nH, design$S * (1 - design$c) * mu[["He"]] * d * sim_pos_factor(nH, family, 1, vq[["He"]])))
-  list(y = y, O = list(Pc = design$O_Pc, Pe = design$O_Pe, Hc = design$S / 2, He = design$S / 2), s2d = s2d, s2q = vq)
+            Hc = rpois(nH, design$S * design$s * mu[["Hc"]] * d * sim_pos_factor(nH, family, 1, vq[["Hc"]])),
+            He = rpois(nH, design$S * (1 - design$s) * mu[["He"]] * d * sim_pos_factor(nH, family, 1, vq[["He"]])))
+  list(y = y, O = list(Pc = design$O_Pc, Pe = design$O_Pe, Hc = design$O_Hc, He = design$O_He), eta = list(Pc = 0, Pe = 0, Hc = design$eta$Hc, He = design$eta$He),
+       s2d = s2d, s2q = vq)
 }
 
 ## rgamma1: n gamma draws with mean 1 and variance v (shape = rate = 1 / v); all ones when v is 0. The expression factor of the check simulations.
@@ -144,11 +150,11 @@ profile_ml_phi <- function(y, O) {
   exp(optimize(k_ll, -rev(LOG.THETA.RANGE), maximum = TRUE)$maximum)
 }
 
-## appendixA_phi: the weighted method of moments of Appendix A as the document states it. With p_i = O_i / sum O, A_i = M_i (1 - p_i),
+## appendixC_phi: the weighted method of moments of Appendix C as the document states it. With p_i = O_i / sum O, A_i = M_i (1 - p_i),
 ## B_i = M_i^2 (1 - 2 p_i) + p_i^2 sum M^2 and weights w_i = 1 / (1 + phi M_i)^2, phi-check = sum w ((y - M)^2 - A) / sum w B and
 ## phi-hat = (1 + 1 / sum y) phi-check / (1 - h phi-check), h = sum p^2, restricted to [0, upper], iterated from phi = 0 until the change is below tol.
 ## Returns phi (truncated), raw (the last untruncated value), converged, iter and boundary.
-appendixA_phi <- function(y, O, maxit = 100, tol = 1e-8, upper = exp(-LOG.THETA.RANGE[[1]])) {
+appendixC_phi <- function(y, O, maxit = 100, tol = 1e-8, upper = exp(-LOG.THETA.RANGE[[1]])) {
   out <- c(phi = NA_real_, raw = NA_real_, converged = NA_real_, iter = NA_real_, boundary = NA_real_)
   if (sum(y) == 0 || length(y) < 2) return(out)
   p <- O / sum(O); M <- sum(y) * p; A <- M * (1 - p); B <- M^2 * (1 - 2 * p) + p^2 * sum(M^2); h <- sum(p^2); r2 <- (y - M)^2
@@ -169,14 +175,14 @@ appendixA_phi <- function(y, O, maxit = 100, tol = 1e-8, upper = exp(-LOG.THETA.
 ## ============================================================
 
 ## a1_row: grid row i of A1 (N, Mbar, phi). NREP genes are simulated as NB (gamma factor) counts with offsets resampled from the pool and fitted with the
-## Cox-Reid estimator (pipeline), the unadjusted profile ML at the same mean, the code's weighted moment estimator and the Appendix A estimator.
+## Cox-Reid estimator (pipeline), the unadjusted profile ML at the same mean, the code's weighted moment estimator and the Appendix C estimator.
 ## Returns the Monte Carlo statistics of each against phi, plus the relative bias times N Mbar phi, the scale on which the 1 / (N Mbar phi) bias is flat.
 a1_row <- function(i, grid, nrep, offsets, streams) with_stream(streams[[i]], {
-  g <- grid[i, ]; est <- matrix(NA_real_, nrep, 4, dimnames = list(NULL, c("cox_reid", "profile_ml", "weighted_code", "appendixA")))
+  g <- grid[i, ]; est <- matrix(NA_real_, nrep, 4, dimnames = list(NULL, c("cox_reid", "profile_ml", "weighted_code", "appendixC")))
   for (r in seq_len(nrep)) {
     O <- sample(offsets, g$N, replace = TRUE); mu <- g$Mbar / mean(O)
     y <- rpois(g$N, O * mu * sim_pos_factor(g$N, "gamma", 1, g$phi))
-    est[r, ] <- c(fit_dispersion(y, O)[["disp"]], profile_ml_phi(y, O), fit_dispersion(y, O, method = "weighted")[["disp"]], appendixA_phi(y, O)[["phi"]])
+    est[r, ] <- c(fit_dispersion(y, O)[["disp"]], profile_ml_phi(y, O), fit_dispersion(y, O, method = "weighted")[["disp"]], appendixC_phi(y, O)[["phi"]])
   }
   do.call(rbind, lapply(colnames(est), function(k) {
     s <- mc_stats(est[, k], g$phi)
@@ -208,50 +214,39 @@ a2_one <- function(i, streams, h = 1e-8, n_grid = 2000, tol = 1e-7) with_stream(
              grid_interior = j > 1 && j < n_grid)
 })
 
-## b2_row: grid row i of B2 (sigma2_c, N). NREP sets of N hybrid cells with libraries resampled from the pool, true shares drawn as beta with variance
-## sigma2_c and observed shares as Binomial(L, c) / L, passed to share_terms() (the law of total variance estimator with L - 1). Returns the Monte Carlo
-## statistics of sigma2_c-hat and eta_Hc-hat against the truth.
-b2_row <- function(i, grid, nrep, lib, cbar, streams) with_stream(streams[[i]], {
-  g <- grid[i, ]
-  est <- t(vapply(seq_len(nrep), function(r) {
-    L <- pmax(round(sample(lib, g$N, replace = TRUE)), 2); c_i <- sim_draw_share(g$N, cbar, g$var_c); st <- share_terms(rbinom(g$N, L, c_i) / L, L)
-    c(var_c = st$var_obs - st$var_binom, var_c_trunc = st$var_c, eta_c = st$r_c)
-  }, numeric(3)))
-  rbind(data.frame(g, quantity = "sigma2_c (untruncated)", t(mc_stats(est[, "var_c"], g$var_c)), row.names = NULL),
-        data.frame(g, quantity = "sigma2_c (truncated)", t(mc_stats(est[, "var_c_trunc"], g$var_c)), row.names = NULL),
-        data.frame(g, quantity = "eta_Hc", t(mc_stats(est[, "eta_c"], g$var_c / cbar^2)), row.names = NULL))
-})
-
-## b3_row: grid row i of B3 (phi0, Mbar, sigma2_c). Closed loop of the share correction: both alleles of NREP genes are simulated with true dispersion
-## phi0 on a fresh design whose observed shares give eta-hat (share_terms()); each allele is refitted with the pipeline estimator, corrected with
-## share_r = eta-hat and truncated at zero; each fitted mean is divided by its abundance factor 2 c-bar-hat or 2 (1 - c-bar-hat). Returns the statistics of
-## the corrected phi against phi0, the shares at zero and moved to zero by the correction, and the relative bias of the corrected means.
+## b3_row: grid row i of B3 (phi0, Mbar, sigma2_s, lib_scale). Closed loop of the library split correction (Methods: Library split correction): both
+## alleles of NREP genes are simulated with true dispersion phi0 on a fresh design whose true shares vary with variance sigma2_s and whose observed Sc
+## libraries are binomial draws from hybrid libraries scaled by lib_scale (below 1 enlarges the split error); each allele is fitted on its own library offset
+## with the pipeline estimator and the split variances eta-hat of split_eta() at the observed shares, which subtracts the split bias delta and truncates at
+## zero. Returns the statistics of the corrected phi against phi0, the share moved to zero by the correction, the mean split bias, and the relative bias of
+## the allele means (per-genome rates, no rescaling).
 b3_row <- function(i, grid, nrep, pools, streams) with_stream(streams[[i]], {
-  g <- grid[i, ]
+  g <- grid[i, ]; pl <- pools; pl$L <- pools$L * g$lib_scale
   res <- t(vapply(seq_len(nrep), function(r) {
-    ds <- sim_design(pools, var_c = g$var_c); st <- share_terms(ds$chat, ds$L); mu <- g$Mbar / mean(ds$S / 2)
+    ds <- sim_design(pl, var_s = g$var_s); mu <- g$Mbar / mean(ds$O_Hc)
     x <- sim_hybrid_dataset(ds, mu = c(Pc = mu, Pe = mu, Hc = mu, He = mu), phi = c(Pc = 0, Pe = 0, Hc = g$phi0, He = g$phi0), omega = 1)
-    fc <- fit_dispersion(x$y$Hc, x$O$Hc, st$r_c); fe <- fit_dispersion(x$y$He, x$O$He, st$r_e)
-    c(phi_c = fc[["disp"]], phi_e = fe[["disp"]], app_c = fc[["disp_app"]], app_e = fe[["disp_app"]],
-      mu_c = fc[["mu"]] / (2 * st$cbar) / mu - 1, mu_e = fe[["mu"]] / (2 * (1 - st$cbar)) / mu - 1)
-  }, numeric(6)))
+    fc <- fit_dispersion(x$y$Hc, x$O$Hc, x$eta$Hc); fe <- fit_dispersion(x$y$He, x$O$He, x$eta$He)
+    c(phi_c = fc[["disp"]], phi_e = fe[["disp"]], app_c = fc[["disp_app"]], app_e = fe[["disp_app"]], bias_c = fc[["split_bias"]], bias_e = fe[["split_bias"]],
+      mu_c = fc[["mu"]] / mu - 1, mu_e = fe[["mu"]] / mu - 1)
+  }, numeric(8)))
   phi <- c(res[, "phi_c"], res[, "phi_e"]); app <- c(res[, "app_c"], res[, "app_e"])
   data.frame(g, t(mc_stats(phi, g$phi0)), truncated_by_correction = mean(phi == 0 & app > 0), truncated_se = binom_se(mean(phi == 0 & app > 0), length(phi)),
+             mean_split_bias = mean(c(res[, "bias_c"], res[, "bias_e"]), na.rm = TRUE),
              mean_rel_bias_Hc = mean(res[, "mu_c"]), mean_rel_bias_Hc_se = sd(res[, "mu_c"]) / sqrt(nrep),
              mean_rel_bias_He = mean(res[, "mu_e"]), mean_rel_bias_He_se = sd(res[, "mu_e"]) / sqrt(nrep), row.names = NULL)
 })
 
-## b4_row: grid row i of B4 (family, Mbar, phi, allele weight pi, sigma2_c). The allele's count factor is t a, with t = c / pi the share multiplier of an
-## allele whose mean share is pi (c beta with mean pi and variance sigma2_c) and a of the given family with variance phi. The truth is Var[t a] from 1e6
-## latent draws. NREP genes are fitted without the share correction by the Cox-Reid NB fit, the code's weighted moment estimator and the Appendix A
+## b4_row: grid row i of B4 (family, Mbar, phi, allele weight pi, sigma2_s). The count factor is t a, with t = s / pi a share multiplier of mean one
+## (s beta with mean pi and variance sigma2_s), a factor that is not gamma, and a of the given family with variance phi. The truth is Var[t a] from 1e6
+## latent draws. NREP genes are fitted by the Cox-Reid NB fit, the code's weighted moment estimator and the Appendix C
 ## estimator, which all target Var[t a]. Returns each estimator's statistics against the truth.
 b4_row <- function(i, grid, nrep, N, offsets, streams) with_stream(streams[[i]], {
   g <- grid[i, ]
-  fac <- function(n) (sim_draw_share(n, g$pi, g$var_c) / g$pi) * sim_pos_factor(n, as.character(g$family), 1, g$phi)
+  fac <- function(n) (sim_draw_share(n, g$pi, g$var_s) / g$pi) * sim_pos_factor(n, as.character(g$family), 1, g$phi)
   truth <- var(fac(1e6))
   est <- t(vapply(seq_len(nrep), function(r) {
     O <- sample(offsets, N, replace = TRUE); y <- rpois(N, O * g$Mbar / mean(O) * fac(N))
-    c(cox_reid = fit_dispersion(y, O)[["disp"]], weighted_code = fit_dispersion(y, O, method = "weighted")[["disp"]], appendixA = appendixA_phi(y, O)[["phi"]])
+    c(cox_reid = fit_dispersion(y, O)[["disp"]], weighted_code = fit_dispersion(y, O, method = "weighted")[["disp"]], appendixC = appendixC_phi(y, O)[["phi"]])
   }, numeric(3)))
   do.call(rbind, lapply(colnames(est), function(k) data.frame(g, N = N, truth_var_ta = truth, estimator = k, t(mc_stats(est[, k], truth)), row.names = NULL)))
 })
@@ -262,14 +257,15 @@ b4_row <- function(i, grid, nrep, N, offsets, streams) with_stream(streams[[i]],
 ## allele with the dispersion of the other. Correlations across replicates on the raw scale (phi at zero included) and on the log2 scale (finite only),
 ## with the Fisher SE 1 / sqrt(n - 3).
 a4_row <- function(i, grid, nrep, pools, streams) with_stream(streams[[i]], {
-  g <- grid[i, ]; ds <- sim_design(pools); nH <- length(ds$S); mu <- g$Mbar / mean(ds$S / 2) / (2 * ds$cbar)
+  g <- grid[i, ]; ds <- sim_design(pools); nH <- length(ds$S); mu <- g$Mbar / mean(ds$O_Hc)
   half <- seq_len(nH) <= nH / 2; quart <- seq_len(nH) <= nH / 4 | seq_len(nH) > 3 * nH / 4
   res <- t(vapply(seq_len(nrep), function(r) {
     x <- sim_hybrid_dataset(ds, mu = c(Pc = mu, Pe = mu, Hc = mu, He = mu), phi = c(Pc = g$phi, Pe = g$phi, Hc = g$phi, He = g$phi), omega = g$omega)
-    fc <- fit_dispersion(x$y$Hc, x$O$Hc); fe <- fit_dispersion(x$y$He, x$O$He)
+    ec <- x$eta$Hc
+    fc <- fit_dispersion(x$y$Hc, x$O$Hc, ec); fe <- fit_dispersion(x$y$He, x$O$He, x$eta$He)
     c(mu_c = fc[["mu"]], phi_c = fc[["disp"]], mu_e = fe[["mu"]], phi_e = fe[["disp"]],
-      mu_c_A = fit_dispersion(x$y$Hc[half], x$O$Hc[half])[["mu"]], phi_c_B = fit_dispersion(x$y$Hc[quart], x$O$Hc[quart])[["disp"]],
-      phi_c_D = fit_dispersion(x$y$Hc[!half], x$O$Hc[!half])[["disp"]])
+      mu_c_A = fit_dispersion(x$y$Hc[half], x$O$Hc[half], ec[half])[["mu"]], phi_c_B = fit_dispersion(x$y$Hc[quart], x$O$Hc[quart], ec[quart])[["disp"]],
+      phi_c_D = fit_dispersion(x$y$Hc[!half], x$O$Hc[!half], ec[!half])[["disp"]])
   }, numeric(7)))
   cr <- function(a, b, log2_scale) {
     if (log2_scale) { a <- log2(a); b <- log2(b) }
@@ -301,7 +297,7 @@ a4_moment_row <- function(i, grid, nrep, N, streams) with_stream(streams[[i]], {
 
 ## a9cr_row: A9 (Cox-Reid revisit), grid row i (N, Mbar, phi, offsets "equal" or "observed"). In sparse cells both ML estimators are biased upward; the
 ## question is whether truncation at zero explains it. NREP genes are fitted with the unadjusted profile ML and the Cox-Reid estimate (both truncated at
-## zero) and with the Appendix A moment estimator, kept untruncated (disp_raw) and truncated. Returns bias, SD and P(zero) of each against phi.
+## zero) and with the Appendix C moment estimator, kept untruncated (disp_raw) and truncated. Returns bias, SD and P(zero) of each against phi.
 a9cr_row <- function(i, grid, nrep, offsets, streams) with_stream(streams[[i]], {
   g <- grid[i, ]
   est <- t(vapply(seq_len(nrep), function(r) {
@@ -314,7 +310,7 @@ a9cr_row <- function(i, grid, nrep, offsets, streams) with_stream(streams[[i]], 
 
 ## a10_row: A10, grid row i (factor family, overlap o, offsets "equal" or "observed", mu, phi). The mean is fitted on N cells A and the dispersion on N
 ## cells B that share o N of them. Returns N times the covariance of mu-hat_A with phi-hat_B for the plain moment estimator (S^2 - Ybar) / Ybar^2 on B,
-## the Appendix A estimator, the unadjusted profile ML and the Cox-Reid estimate, each with its Monte Carlo SE and the correlation, next to the formula
+## the Appendix C estimator, the unadjusted profile ML and the Cox-Reid estimate, each with its Monte Carlo SE and the correlation, next to the formula
 ## o mu (E[(a - 1)^3] - 2 phi^2), derived for the moment estimator with equal offsets.
 a10_row <- function(i, grid, nrep, N, offsets, streams) with_stream(streams[[i]], {
   g <- grid[i, ]; nsh <- round(g$overlap * N); ntot <- 2 * N - nsh
@@ -323,10 +319,10 @@ a10_row <- function(i, grid, nrep, N, offsets, streams) with_stream(streams[[i]]
     O <- if (g$offsets == "equal") rep(1, ntot) else sample(offsets, ntot, replace = TRUE); mu <- g$mu / mean(O)
     y <- rpois(ntot, O * mu * sim_pos_factor(ntot, as.character(g$family), 1, g$phi)); A <- seq_len(N); B <- (N - nsh) + seq_len(N)
     yb <- y[B]; ob <- O[B]; mb <- sum(yb) / sum(ob)
-    c(mu_A = sum(y[A]) / sum(O[A]) * mean(O[A]) , moment = (var(yb / ob * mean(ob)) - mean(yb)) / mean(yb)^2, appendixA = fit_dispersion(yb, ob, method = "weighted")[["disp"]],
+    c(mu_A = sum(y[A]) / sum(O[A]) * mean(O[A]) , moment = (var(yb / ob * mean(ob)) - mean(yb)) / mean(yb)^2, appendixC = fit_dispersion(yb, ob, method = "weighted")[["disp"]],
       profile_ml = profile_ml_phi(yb, ob), cox_reid = fit_dispersion(yb, ob)[["disp"]])
-  }, c(mu_A = 0, moment = 0, appendixA = 0, profile_ml = 0, cox_reid = 0)))
-  do.call(rbind, lapply(c("moment", "appendixA", "profile_ml", "cox_reid"), function(k) {
+  }, c(mu_A = 0, moment = 0, appendixC = 0, profile_ml = 0, cox_reid = 0)))
+  do.call(rbind, lapply(c("moment", "appendixC", "profile_ml", "cox_reid"), function(k) {
     cp <- (X[, "mu_A"] - mean(X[, "mu_A"])) * (X[, k] - mean(X[, k]))
     data.frame(g, N = N, estimator = k, N_cov = N * mean(cp), N_cov_mc_se = N * sd(cp) / sqrt(nrep), N_cov_formula = g$overlap * g$mu * (a3 - 2 * g$phi^2),
                cor = cor(X[, "mu_A"], X[, k]), cor_se = 1 / sqrt(nrep - 3), row.names = NULL)
@@ -359,89 +355,94 @@ e3_row <- function(i, grid, nrep, B, offsets, n_cells, streams) with_stream(stre
   }))
 })
 
-## f1_row: grid row i of F1(a) (N, M, phi, offset CV, counts NB or Poisson-lognormal). NREP genes fitted with the Appendix A estimator as documented and with
-## the code's weighted estimator. Returns their statistics against phi (the factor variance), with the convergence and boundary rates of Appendix A.
+## f1_row: grid row i of F1(a) (N, M, phi, offset CV, counts NB or Poisson-lognormal). NREP genes fitted with the Appendix C estimator as documented and with
+## the code's weighted estimator. Returns their statistics against phi (the factor variance), with the convergence and boundary rates of Appendix C.
 f1_row <- function(i, grid, nrep, streams) with_stream(streams[[i]], {
   g <- grid[i, ]; s <- sqrt(log(1 + g$cv^2)); fam <- if (g$counts == "NB") "gamma" else "lognormal"
   res <- t(vapply(seq_len(nrep), function(r) {
-    O <- exp(rnorm(g$N, -s^2 / 2, s)); y <- rpois(g$N, O * g$M * sim_pos_factor(g$N, fam, 1, g$phi)); a <- appendixA_phi(y, O)
-    c(appendixA = a[["phi"]], conv = a[["converged"]], bnd = a[["boundary"]], weighted_code = fit_dispersion(y, O, method = "weighted")[["disp"]])
+    O <- exp(rnorm(g$N, -s^2 / 2, s)); y <- rpois(g$N, O * g$M * sim_pos_factor(g$N, fam, 1, g$phi)); a <- appendixC_phi(y, O)
+    c(appendixC = a[["phi"]], conv = a[["converged"]], bnd = a[["boundary"]], weighted_code = fit_dispersion(y, O, method = "weighted")[["disp"]])
   }, numeric(4)))
-  rbind(data.frame(g, estimator = "appendixA", t(mc_stats(res[, "appendixA"], g$phi)), converged = mean(res[, "conv"]), boundary = mean(res[, "bnd"]), row.names = NULL),
+  rbind(data.frame(g, estimator = "appendixC", t(mc_stats(res[, "appendixC"], g$phi)), converged = mean(res[, "conv"]), boundary = mean(res[, "bnd"]), row.names = NULL),
         data.frame(g, estimator = "weighted_code", t(mc_stats(res[, "weighted_code"], g$phi)), converged = NA, boundary = NA, row.names = NULL))
 })
 
-## f2_rep: one replicate of F2, the large-N limits of Appendix B, for task i (a setting and a replicate number). n cells with depth S_H = 1, Poisson counts,
-## additive expression factors a_r = 1 + d + q_r with shifted exponential deviations (d = sd_d (E - 1), E ~ Exp(1), and likewise q, each with mean 0 and
-## the stated variance), true shares c ~ beta(c-bar, sigma2_c), and the true mean rates and eta in every estimator. Returns the star estimators, the
-## corrected estimators, the variance of the summed factor a*_H, and the SDs of the per-cell terms of the two star estimators, from which the sampling SD
-## of each estimator at any number of cells follows (SD / sqrt(N)). Cells are processed in chunks to bound memory.
+## f2_rep: one replicate of F2, the large-N limits of the Appendix D estimators of the extrinsic and intrinsic variances with the library split correction,
+## for task i (a setting and a replicate number). n cells with hybrid library L_H (Poisson around the setting's lib, at least 2) and D = lib, true shares
+## s ~ beta(s-bar, sigma2_s), observed Sc libraries Binomial(L_H, s) kept within 1 and L_H - 1, allele offsets L_Hc / D and L_He / D, Poisson counts around
+## (L_H s / D) mu_c a_c and (L_H (1 - s) / D) mu_e a_e with additive expression factors a_r = 1 + v + q_r (v = sd_v (E - 1), E ~ Exp(1), and likewise q, each
+## with mean 0 and the stated variance), and the split variances of split_eta() at the observed shares. The replicate accumulates the sums ploidy_components()
+## builds its estimators from (fitted rates as ratios of sums, cell averages of the scaled products, mean split variances), so it returns the star estimators
+## (no split factors) and the corrected estimators as the pipeline computes them, before the truncation at zero, the mean split variances, and the SDs of the
+## per-cell terms of the two estimators at the true rates, from which the sampling SD at any number of cells follows (SD / sqrt(N)). Cells are processed in
+## chunks to bound memory.
 f2_rep <- function(i, tasks, settings, n, chunk = 1e6, streams) with_stream(streams[[i]], {
-  s <- settings[tasks$setting[i], ]; cb <- s$cbar; v <- s$var_c
-  eta_c <- v / cb^2; eta_e <- v / (1 - cb)^2; eta_ce <- v / (cb * (1 - cb)); eta_bar <- (eta_c + eta_e) / 2
-  pi_ <- cb * s$mu_c / (cb * s$mu_c + (1 - cb) * s$mu_e)
-  acc <- c(dd = 0, qq = 0, a1 = 0, a2 = 0, n = 0, dd2 = 0, qq2 = 0)
+  s <- settings[tasks$setting[i], ]
+  acc <- c(yc = 0, ye = 0, oc = 0, oe = 0, tc = 0, te = 0, tx = 0, ec = 0, ee = 0, ex = 0, n = 0, v1 = 0, v2 = 0, q1 = 0, q2 = 0)
   for (k in seq_len(ceiling(n / chunk))) {
     m <- min(chunk, n - (k - 1) * chunk)
-    c_i <- sim_draw_share(m, cb, v); d <- sqrt(s$s2d) * (rexp(m) - 1)
-    ac <- 1 + d + sqrt(s$s2q) * (rexp(m) - 1); ae <- 1 + d + sqrt(s$s2q) * (rexp(m) - 1)
-    yc <- rpois(m, c_i * s$mu_c * ac); ye <- rpois(m, (1 - c_i) * s$mu_e * ae)
-    xc <- yc / (cb * s$mu_c); xe <- ye / ((1 - cb) * s$mu_e)                   # scaled counts with the true rates (O mu* = S c-bar mu)
-    td <- xc * xe; tq <- 0.5 * (xc - xe)^2 - 0.5 * (yc / (cb * s$mu_c)^2 + ye / ((1 - cb) * s$mu_e)^2)
-    astar <- pi_ * (c_i / cb) * ac + (1 - pi_) * ((1 - c_i) / (1 - cb)) * ae
-    acc <- acc + c(sum(td), sum(tq), sum(astar), sum(astar^2), m, sum(td^2), sum(tq^2))
+    L <- pmax(rpois(m, s$lib), 2); si <- sim_draw_share(m, s$sbar, s$var_s); Lc <- pmin(pmax(rbinom(m, L, si), 1), L - 1)
+    oc <- Lc / s$lib; oe <- (L - Lc) / s$lib; et <- split_eta(Lc / L, L)
+    v <- sqrt(s$s2v) * (rexp(m) - 1); ac <- 1 + v + sqrt(s$s2q) * (rexp(m) - 1); ae <- 1 + v + sqrt(s$s2q) * (rexp(m) - 1)
+    yc <- rpois(m, L * si / s$lib * s$mu_c * ac); ye <- rpois(m, L * (1 - si) / s$lib * s$mu_e * ae)
+    xc <- yc / (oc * s$mu_c); xe <- ye / (oe * s$mu_e)                        # scaled counts at the true rates
+    tv <- xc * xe; tq <- 0.5 * (yc * (yc - 1) / (oc * s$mu_c)^2 + ye * (ye - 1) / (oe * s$mu_e)^2) - tv
+    acc <- acc + c(sum(yc), sum(ye), sum(oc), sum(oe), sum(yc * (yc - 1) / oc^2), sum(ye * (ye - 1) / oe^2), sum(yc * ye / (oc * oe)),
+                   sum(et$Hc), sum(et$He), sum(et$x), m, sum(tv), sum(tv^2), sum(tq), sum(tq^2))
   }
-  d_star <- acc[["dd"]] / acc[["n"]] - 1; q_star <- acc[["qq"]] / acc[["n"]]
-  sd2 <- (1 + d_star) / (1 - eta_ce) - 1; sq2 <- (q_star - (eta_bar + eta_ce) * (1 + sd2)) / (1 + eta_bar)
-  c(setting = tasks$setting[i], d_star = d_star, q_star = q_star, sigma2_d = sd2, sigma2_q = sq2,
-    var_astar = acc[["a2"]] / acc[["n"]] - (acc[["a1"]] / acc[["n"]])^2,
-    sd_term_d = sqrt(acc[["dd2"]] / acc[["n"]] - (acc[["dd"]] / acc[["n"]])^2), sd_term_q = sqrt(acc[["qq2"]] / acc[["n"]] - q_star^2))
+  N <- acc[["n"]]; mc <- acc[["yc"]] / acc[["oc"]]; me <- acc[["ye"]] / acc[["oe"]]
+  a_c <- acc[["tc"]] / N / mc^2; a_e <- acc[["te"]] / N / me^2; a_x <- acc[["tx"]] / N / (mc * me)
+  e_c <- acc[["ec"]] / N; e_e <- acc[["ee"]] / N; e_x <- acc[["ex"]] / N
+  c(setting = tasks$setting[i], v_star = a_x - 1, q_star = 0.5 * (a_c + a_e) - a_x,
+    sigma2_v = a_x / (1 + e_x) - 1, sigma2_q = 0.5 * (a_c / (1 + 3 * e_c) + a_e / (1 + 3 * e_e)) - a_x / (1 + e_x),
+    eta_c = e_c, eta_e = e_e, eta_x = e_x,
+    sd_term_v = sqrt(acc[["v2"]] / N - (acc[["v1"]] / N)^2), sd_term_q = sqrt(acc[["q2"]] / N - (acc[["q1"]] / N)^2))
 })
 
-## f2_summary: F2 for one setting from its replicates (rows of f2_rep() output). For each quantity: its target (the stated limit of a star estimator, the
-## true variance for a corrected one, the formula for Var[a*_H]), the share term the correction removes (target minus the share-free value), the mean
-## estimate over replicates, its error with the Monte Carlo SE (SD over replicates / sqrt(R)) and z, and the sampling SD of the estimator at n_obs cells.
-## The error is resolved only when it exceeds about two Monte Carlo SEs; an error below that is also below the sampling SD at n_obs by sqrt(R n / n_obs).
+## f2_summary: F2 for one setting from its replicates (rows of f2_rep() output). For each quantity: its target (the true variance for a corrected estimator;
+## for a star estimator its limit with the split factors to second order in the split error, (1 + sigma2_v)(1 + eta_x) - 1 and
+## (1 + sigma2_v + sigma2_q)(1 + 3 (eta_c + eta_e) / 2) - (1 + sigma2_v)(1 + eta_x), at the replicates' mean split variances), the split term the correction
+## removes (target minus the split-free value), the mean estimate over replicates, its error with the Monte Carlo SE (SD over replicates / sqrt(R)) and z,
+## and the sampling SD of the estimator at n_obs cells. Terms of higher order in the split error (of order eta^2, which the Methods drop) remain in the error;
+## they matter only at small libraries.
 f2_summary <- function(k, settings, reps, n, n_obs) {
-  s <- settings[k, ]; x <- reps[reps[, "setting"] == k, , drop = FALSE]; cb <- s$cbar; v <- s$var_c
-  eta_c <- v / cb^2; eta_e <- v / (1 - cb)^2; eta_ce <- v / (cb * (1 - cb))
-  pi_ <- cb * s$mu_c / (cb * s$mu_c + (1 - cb) * s$mu_e); phiH <- s$s2d + s$s2q
-  lim_d <- s$s2d - eta_ce * (1 + s$s2d)
-  lim_q <- s$s2q + 0.5 * (1 + phiH) * v * (1 / cb^2 + 1 / (1 - cb)^2) + eta_ce * (1 + s$s2d)
-  phiSig <- s$s2d + (pi_^2 + (1 - pi_)^2) * s$s2q
-  form <- phiSig + (1 + s$s2d) * (pi_^2 * eta_c + (1 - pi_)^2 * eta_e - 2 * pi_ * (1 - pi_) * eta_ce) + s$s2q * (pi_^2 * eta_c + (1 - pi_)^2 * eta_e)
-  tg <- data.frame(quantity = c("d_star", "q_star", "sigma2_d", "sigma2_q", "var_astar"), target = c(lim_d, lim_q, s$s2d, s$s2q, form),
-                   share_term = c(lim_d - s$s2d, lim_q - s$s2q, 0, 0, form - phiSig),
-                   sd_term = c(median(x[, "sd_term_d"]), median(x[, "sd_term_q"]), median(x[, "sd_term_d"]), median(x[, "sd_term_q"]), NA))
+  s <- settings[k, ]; x <- reps[reps[, "setting"] == k, , drop = FALSE]
+  ec <- mean(x[, "eta_c"]); ee <- mean(x[, "eta_e"]); ex <- mean(x[, "eta_x"])
+  lim_v <- (1 + s$s2v) * (1 + ex) - 1
+  lim_q <- (1 + s$s2v + s$s2q) * (1 + 1.5 * (ec + ee)) - (1 + s$s2v) * (1 + ex)
+  tg <- data.frame(quantity = c("v_star", "q_star", "sigma2_v", "sigma2_q"), target = c(lim_v, lim_q, s$s2v, s$s2q),
+                   split_term = c(lim_v - s$s2v, lim_q - s$s2q, 0, 0),
+                   sd_term = c(median(x[, "sd_term_v"]), median(x[, "sd_term_q"]), median(x[, "sd_term_v"]), median(x[, "sd_term_q"])))
   R <- nrow(x); est <- colMeans(x[, tg$quantity, drop = FALSE]); se <- apply(x[, tg$quantity, drop = FALSE], 2, sd) / sqrt(R)
-  data.frame(setting = k, s[rep(1, nrow(tg)), ], tg, replicates = R, cells_per_replicate = n, estimate = est, error = est - tg$target, mc_se = se,
-             z = (est - tg$target) / se, sd_at_n_obs = tg$sd_term / sqrt(n_obs), n_obs = n_obs, row.names = NULL)
+  data.frame(setting = k, s[rep(1, nrow(tg)), ], tg, eta_c = ec, eta_e = ee, eta_x = ex, replicates = R, cells_per_replicate = n, estimate = est,
+             error = est - tg$target, mc_se = se, z = (est - tg$target) / se, sd_at_n_obs = tg$sd_term / sqrt(n_obs), n_obs = n_obs, row.names = NULL)
 }
 
 ## f34_row: grid row i of F3 and F4 (omega, phi, Mbar, intrinsic variance ratio q_ratio). NREP genes on one design with the observed N, fitted means and the
-## pipeline's ploidy_components() (share terms from the simulated observed shares). The truth: sigma2_d = s2d (the allele covariance), the mean
-## private variance s2q in the additive form of Appendix B (Var[a] - Cov = (1 + s2d) times the multiplicative private variance), and
-## delta = log2(phi_H / phi_Sigma) with phi_H = s2d + mean s2q and phi_Sigma = s2d + pi^2 s2q_c + (1 - pi)^2 s2q_e (equal to the document's delta when
-## q_ratio = 1). Returns bias, SD and the truncation shares of each estimate.
+## pipeline's ploidy_components() (allele offsets and split variances from the simulated observed shares). The truth: sigma2_v = s2d (the allele covariance),
+## the mean private variance s2q in the additive form of Appendix D (Var[a] - Cov = (1 + s2d) times the multiplicative private variance), and
+## Lambda = log2(phi_H / phi_sum) with phi_H = s2d + mean s2q and phi_sum = s2d + pi^2 s2q_c + (1 - pi)^2 s2q_e (equal to the document's Lambda when
+## q_ratio = 1), Lambda_raw = phi_H - phi_sum. pi is the library-weighted mean true share, the Hc share of the summed counts at equal per-genome rates.
+## Returns bias, SD and the truncation shares of each estimate.
 f34_row <- function(i, grid, nrep, pools, streams) with_stream(streams[[i]], {
-  g <- grid[i, ]; ds <- sim_design(pools); st <- share_terms(ds$chat, ds$L); mu <- g$Mbar / mean(ds$S / 2) / (2 * ds$cbar)
+  g <- grid[i, ]; ds <- sim_design(pools); mu <- g$Mbar / mean(ds$O_Hc)
   sims <- lapply(seq_len(nrep), function(r) sim_hybrid_dataset(ds, mu = c(Pc = mu, Pe = mu, Hc = mu, He = mu), phi = c(Pc = g$phi, Pe = g$phi, Hc = g$phi, He = g$phi),
                                                                 omega = g$omega, q_ratio = g$q_ratio))
   yc <- do.call(rbind, lapply(sims, function(x) x$y$Hc)); ye <- do.call(rbind, lapply(sims, function(x) x$y$He)); rownames(yc) <- rownames(ye) <- paste0("r", seq_len(nrep))
-  pc <- ploidy_components(yc, ye, ds$S / 2, st)
-  s2d <- sims[[1]]$s2d; s2q <- (1 + s2d) * sims[[1]]$s2q; pi_ <- ds$cbar / (ds$cbar + (1 - ds$cbar))
+  pc <- ploidy_components(yc, ye, ds$O_Hc, ds$O_He, ds$eta)
+  s2d <- sims[[1]]$s2d; s2q <- (1 + s2d) * sims[[1]]$s2q; pi_ <- sum(ds$S * ds$s) / sum(ds$S)
   phiH <- s2d + mean(s2q); phiS <- s2d + pi_^2 * s2q[["Hc"]] + (1 - pi_)^2 * s2q[["He"]]
-  truth <- c(sigma_d = s2d, sigma_q = mean(s2q), delta = log2(phiH / phiS), delta_raw = phiH - phiS)
+  truth <- c(sigma_v = s2d, sigma_q = mean(s2q), Lambda = log2(phiH / phiS), Lambda_raw = phiH - phiS)
   do.call(rbind, lapply(names(truth), function(k) data.frame(g, quantity = k, truth = truth[[k]], t(mc_stats(pc[[k]], truth[[k]])), row.names = NULL)))
 })
 
 ## c4_dataset: one experiment of C4 under the null (no cis and no trans effect: every per-genome rate equal and every dispersion equal). G genes on one
 ## design; the cis fraction f is estimated as in analysis.R 2.1 from B_pilot bootstrap replicates of all cells (Var of the hybrid log2 allele ratio and of
 ## the parental log2 ratio, pooled by medians across genes) or fixed in advance (f_fixed). Each gene's log2 mean cis and trans contrasts (allele means
-## divided by their abundance factors) are tested with the pipeline's bootstrap sign test (sign_boot_p()): B replicates resample each parent and the
+## on their own library offsets, per-genome rates) are tested with the pipeline's bootstrap sign test (sign_boot_p()): B replicates resample each parent and the
 ## undivided hybrid cells, each copy keeping its cis or trans membership. Returns the p-values of both arms and the estimated f.
 c4_dataset <- function(i, G, mu_grid, phi, B_pilot, B, f_fixed, pools, streams) with_stream(streams[[i]], {
-  ds <- sim_design(pools); nH <- length(ds$S); cb <- ds$cbar
+  ds <- sim_design(pools); nH <- length(ds$S)
   genes <- lapply(seq_len(G), function(j) { m <- sample(mu_grid, 1); sim_hybrid_dataset(ds, mu = c(Pc = m, Pe = m, Hc = m, He = m), phi = c(Pc = phi, Pe = phi, Hc = phi, He = phi)) })
   l2 <- function(y, o) log2(sum(y) / sum(o))
   ## pilot: bootstrap variances of the hybrid allele log2 ratio (all hybrid cells) and of the parental log2 ratio
@@ -458,8 +459,8 @@ c4_dataset <- function(i, G, mu_grid, phi, B_pilot, B, f_fixed, pools, streams) 
     ## contr: the log2 mean cis and trans contrasts from the parental cells pc, pe and the hybrid cells h (with repeats), split by membership
     contr <- function(x, pc, pe, h) {
       hc <- h[is_c[h]]; ht <- h[!is_c[h]]
-      cis <- (l2(x$y$Hc[hc], x$O$Hc[hc]) - log2(2 * cb)) - (l2(x$y$He[hc], x$O$He[hc]) - log2(2 * (1 - cb)))
-      tr  <- (l2(x$y$Pc[pc], x$O$Pc[pc]) - l2(x$y$Pe[pe], x$O$Pe[pe])) - ((l2(x$y$Hc[ht], x$O$Hc[ht]) - log2(2 * cb)) - (l2(x$y$He[ht], x$O$He[ht]) - log2(2 * (1 - cb))))
+      cis <- l2(x$y$Hc[hc], x$O$Hc[hc]) - l2(x$y$He[hc], x$O$He[hc])
+      tr  <- (l2(x$y$Pc[pc], x$O$Pc[pc]) - l2(x$y$Pe[pe], x$O$Pe[pe])) - (l2(x$y$Hc[ht], x$O$Hc[ht]) - l2(x$y$He[ht], x$O$He[ht]))
       c(cis = cis, trans = tr)
     }
     vapply(genes, function(x) {
@@ -494,7 +495,8 @@ size_table <- function(p, levels = c(0.05, 0.01, 0.001)) {
 }
 
 ## estimator_pair_gene: one gene's fits for the estimator comparison and leak test (analysis/checks/estimator_leak.R). For each group (Pc, Pe, Hc, He) the
-## ratio mean and the dispersion by the Cox-Reid NB fit and by the Appendix A moment estimator, both with the group's share correction, in two arms:
+## ratio mean and the dispersion by the Cox-Reid NB fit and by the Appendix C moment estimator, both with the group's split correction (eta[[k]]: 0, or one
+## split variance per cell of the group, subset with the cells of each fit), in two arms:
 ## "same", mean and dispersions on all cells of the group, and "disjoint", the mean on half A and both dispersions on half B (halves: one index vector
 ## per group), so the errors of the mean and of the dispersion share no cells. trim > 0 leaves out of every fit the cells with the largest scaled
 ## counts y / O (the top trim fraction of the cells in that fit, at least one), which shows how much a few cells carry each estimate. Returns a named
@@ -509,22 +511,22 @@ estimator_pair_gene <- function(g, mats, expos, eta, halves, trim = 0) {
         ix <- get(s); drop <- ix[order(y[ix] / e[ix], decreasing = TRUE)][seq_len(max(1, ceiling(trim * length(ix))))]
         assign(s, setdiff(ix, drop))
       }
-      mu <- sum(y[im]) / sum(e[im])
+      mu <- sum(y[im]) / sum(e[im]); et <- if (length(eta[[k]]) > 1) eta[[k]][ip] else eta[[k]]
       out[paste(arm, k, c("mu", "mbar", "phi_cr", "phi_mom"), sep = ".")] <-
-        c(mu, mu * mean(e[ip]), fit_dispersion(y[ip], e[ip], eta[[k]], "NB")[["disp"]], fit_dispersion(y[ip], e[ip], eta[[k]], "weighted")[["disp"]])
+        c(mu, mu * mean(e[ip]), fit_dispersion(y[ip], e[ip], et, "NB")[["disp"]], fit_dispersion(y[ip], e[ip], et, "weighted")[["disp"]])
     }
   }
   out
 }
 
 ## leak_contrasts: the cis and trans contrasts of one arm of estimator_pair_gene() output (fits, genes x columns), as a long data frame: x = Delta log2 mu
-## (allele means divided by their abundance factors 2 cbar and 2 (1 - cbar); trans = parental log2 ratio minus allele log2 ratio) and, for each estimator,
+## (allele means on their own library offsets, per-genome rates; trans = parental log2 ratio minus allele log2 ratio) and, for each estimator,
 ## the dispersion contrast on the log2 scale (scale "log2", a group with phi = 0 gives NA) or the raw difference of phi (scale "raw", phi = 0 included);
 ## diff = Cox-Reid minus moment. tercile splits the genes by their mean count per cell averaged over the four groups.
-leak_contrasts <- function(fits, arm, cbar, scale = c("log2", "raw")) {
+leak_contrasts <- function(fits, arm, scale = c("log2", "raw")) {
   scale <- match.arg(scale)
   F <- fits[, startsWith(colnames(fits), paste0(arm, ".")), drop = FALSE]; colnames(F) <- sub(paste0("^", arm, "\\."), "", colnames(F))
-  lmu <- list(Pc = log2(F[, "Pc.mu"]), Pe = log2(F[, "Pe.mu"]), Hc = log2(F[, "Hc.mu"] / (2 * cbar)), He = log2(F[, "He.mu"] / (2 * (1 - cbar))))
+  lmu <- list(Pc = log2(F[, "Pc.mu"]), Pe = log2(F[, "Pe.mu"]), Hc = log2(F[, "Hc.mu"]), He = log2(F[, "He.mu"]))
   tr <- function(v) if (scale == "log2") ifelse(v > 0, log2(v), NA_real_) else v
   ph <- lapply(c(cr = "phi_cr", mom = "phi_mom"), function(q) lapply(c(Pc = "Pc", Pe = "Pe", Hc = "Hc", He = "He"), function(k) tr(F[, paste0(k, ".", q)])))
   terc <- cut(rank(rowMeans(F[, paste0(c("Pc", "Pe", "Hc", "He"), ".mbar")]), ties.method = "first"), 3, labels = c("low", "mid", "high"))
@@ -537,7 +539,7 @@ leak_contrasts <- function(fits, arm, cbar, scale = c("log2", "raw")) {
 
 ## linear_excess_gene: L6 for one gene in one group, a test for a variance term linear in the mean that the NB lacks. Under Var(Y_i) = (1 + a) M_i + phi M_i^2
 ## with M_i = O_i mu and mu fitted as sum(y) / sum(O), E[(y_i - M_i)^2] = (1 + a) A_i + phi B_i with A_i = M_i (1 - p_i), B_i = M_i^2 (1 - 2 p_i) + p_i^2 sum M^2
-## and p_i = O_i / sum O (Appendix A). So z_i = (y_i - M_i)^2 - A_i has expectation a A_i + phi B_i, and a and phi follow from a regression of z on A and B
+## and p_i = O_i / sum O (Appendix C). So z_i = (y_i - M_i)^2 - A_i has expectation a A_i + phi B_i, and a and phi follow from a regression of z on A and B
 ## without intercept, identified by the spread of the offsets. Weights 1 / [M_i (1 + phi0 M_i)]^2 with phi0 the Cox-Reid fit; SEs by the sandwich (HC0).
 ## An NB gene has a = 0; a > 0 gives the NB fit phi-hat of about phi + a / M, a dispersion that falls with the mean. beta (named by gene) replaces the
 ## offsets by O^beta, the gene's own depth scaling (depth_slope_gene()). Returns a, its SE, phi_lin, mbar.
@@ -569,16 +571,15 @@ leak_regression <- function(x, y, y_cr, y_mom, B = 1000, seed = 1) {
 ## ============================================================
 
 ## data_boot_gene: B bootstrap replicates of one gene's fits in every contrast dataset, from pre-drawn indices (make_draws()). Each replicate refits mu and
-## phi with the pipeline estimator; with refit_share the share terms are re-estimated on the replicate's resampled hybrid cells (share_cells: c-hat and L
-## in HYB order), otherwise the observed eta is applied; the summed counts HYB.COMB, when in groups, take the gene's share_sub (named by gene). Returns a
-## B x (2 x datasets) matrix of mu and phi.
-data_boot_gene <- function(g, mats, expos, eta, draws, refit_share = TRUE, share_cells = NULL, groups = .CONTRAST.GROUPS, share_sub = NULL) {
+## phi with the pipeline estimator and the split variances of its resampled cells (etas: per dataset 0 or one value per cell in the dataset's column order,
+## as boot_contrasts_one() takes them), so the split correction is recomputed on every replicate. Returns a B x (2 x datasets) matrix of mu and phi.
+data_boot_gene <- function(g, mats, expos, etas, draws, groups = .CONTRAST.GROUPS) {
   out <- matrix(NA_real_, length(draws), 2 * length(groups), dimnames = list(NULL, c(paste0("mu.", groups), paste0("phi.", groups))))
   for (b in seq_along(draws)) {
-    d <- draws[[b]]; r <- eta
-    if (refit_share) { hb <- d$HYB; st <- share_terms(share_cells$chat[hb], share_cells$lib[hb]); r <- share_r_groups(st$r_c, st$r_e) }
+    d <- draws[[b]]
     for (k in groups) {
-      ix <- d[[.DRAW.KEY[[k]]]]; f <- fit_dispersion(mats[[k]][g, ix], expos[[k]][ix], r[[k]], "NB", if (k == "HYB.COMB" && !is.null(share_sub)) share_sub[[g]] else 0)
+      ix <- d[[.DRAW.KEY[[k]]]]; et <- if (length(etas[[k]]) > 1) etas[[k]][ix] else etas[[k]]
+      f <- fit_dispersion(mats[[k]][g, ix], expos[[k]][ix], et, "NB")
       out[b, paste0("mu.", k)] <- f[["mu"]]; out[b, paste0("phi.", k)] <- f[["disp"]]
     }
   }
@@ -586,22 +587,22 @@ data_boot_gene <- function(g, mats, expos, eta, draws, refit_share = TRUE, share
 }
 
 ## boot_gene_stats: the summaries of one gene's bootstrap replicates (data_boot_gene()) that A4, A6, C7 and D8 read. Per dataset: cor(mu, phi) on the raw
-## scale (a zero phi included) and on the log2 scale (finite only), cor(log2 zeta, log2 theta) and cor(log2 kappa, log2 mu) with zeta = mu phi,
-## theta = 1 / phi and kappa = theta / zeta, and the SE ratios SE(log2 kappa) / SE(log2 theta) and SE(log phi) / SE(log mu) (SDs of finite log values).
+## scale (a zero phi included) and on the log2 scale (finite only), cor(log2 beta, log2 theta) and cor(log2 kappa, log2 mu) with beta = mu phi,
+## theta = 1 / phi and kappa = theta / beta, and the SE ratios SE(log2 kappa) / SE(log2 theta) and SE(log phi) / SE(log mu) (SDs of finite log values).
 ## Per reported mode: cor(Delta mu, Delta phi) of the mean contrast (mean partition) with the dispersion contrast of its noise source and of its kinetic
-## balance source and of its burst size source (each from one partition's cells), and the SE of the log2 dispersion contrast (finite replicates). The mean
-## rates are corrected at cbar for the contrasts.
-boot_gene_stats <- function(D, cbar, groups = .CONTRAST.GROUPS) {
+## balance source and of its burst size source (each from one partition's cells), and the SE of the log2 dispersion contrast (finite replicates). The allele
+## means are per-genome rates, so the contrasts take them as fitted.
+boot_gene_stats <- function(D, groups = .CONTRAST.GROUPS) {
   cf <- function(a, b) { ok <- is.finite(a) & is.finite(b); if (sum(ok) > 3 && sd(a[ok]) > 0 && sd(b[ok]) > 0) cor(a[ok], b[ok]) else NA_real_ }
   sdf <- function(a) { a <- a[is.finite(a)]; if (length(a) > 3) sd(a) else NA_real_ }
   out <- list()
   for (k in groups) {
     mu <- D[, paste0("mu.", k)]; ph <- D[, paste0("phi.", k)]; lm_ <- log2(mu); lp <- ifelse(ph > 0, log2(ph), NA_real_)
     out[[paste0("cor_mu_phi_raw.", k)]] <- cf(mu, ph); out[[paste0("cor_mu_phi_log2.", k)]] <- cf(lm_, lp)
-    out[[paste0("cor_zeta_theta.", k)]] <- cf(lm_ + lp, -lp); out[[paste0("cor_kappa_mu.", k)]] <- cf(-lm_ - 2 * lp, lm_)
+    out[[paste0("cor_beta_theta.", k)]] <- cf(lm_ + lp, -lp); out[[paste0("cor_kappa_mu.", k)]] <- cf(-lm_ - 2 * lp, lm_)
     out[[paste0("se_ratio_kappa_theta.", k)]] <- sdf(-lm_ - 2 * lp) / sdf(-lp); out[[paste0("se_ratio_logphi_logmu.", k)]] <- sdf(lp) / sdf(lm_)
   }
-  mc <- lapply(seq_len(nrow(D)), function(b) .mode_contrasts(as.list(D[b, paste0("mu.", groups)]) |> setNames(groups), as.list(D[b, paste0("phi.", groups)]) |> setNames(groups), cbar))
+  mc <- lapply(seq_len(nrow(D)), function(b) .mode_contrasts(as.list(D[b, paste0("mu.", groups)]) |> setNames(groups), as.list(D[b, paste0("phi.", groups)]) |> setNames(groups)))
   arr <- function(md, col) vapply(mc, function(m) m[md, col], numeric(1))
   for (md in .OUT_MODES) {
     dm <- arr(md, "mean")
@@ -638,24 +639,26 @@ a7_self_row <- function(i, grid, nrep, lib, n_cells, streams) with_stream(stream
 })
 
 ## subsample_cis_var_gene: C2 for one gene: for each subsample of hybrid cells (a list of index vectors, one per fraction), the bootstrap variance of the cis
-## log2 contrasts of the mean and of phi (both alleles refitted on the same resampled cells; boot holds B resample vectors per subsample). The hybrid part
-## of the trans contrast is the same allele ratio on the trans cells, so its variance follows the same 1 / n law.
-subsample_cis_var_gene <- function(g, yc, ye, expo, eta, subs, boot) {
+## log2 contrasts of the mean and of phi (both alleles refitted on the same resampled cells, each on its own library offset expos$HYB.SC or expos$HYB.SE with the
+## split variances eta$HYB.SC or eta$HYB.SE of those cells; boot holds B resample vectors per subsample). The hybrid part of the trans contrast is the same allele
+## ratio on the trans cells, so its variance follows the same 1 / n law.
+subsample_cis_var_gene <- function(g, yc, ye, expos, eta, subs, boot) {
   t(vapply(seq_along(subs), function(j) {
-    v <- t(vapply(boot[[j]], function(ix) { ii <- subs[[j]][ix]; fc <- fit_dispersion(yc[g, ii], expo[ii], eta[["HYB.SC"]]); fe <- fit_dispersion(ye[g, ii], expo[ii], eta[["HYB.SE"]])
+    v <- t(vapply(boot[[j]], function(ix) { ii <- subs[[j]][ix]
+      fc <- fit_dispersion(yc[g, ii], expos$HYB.SC[ii], eta$HYB.SC[ii]); fe <- fit_dispersion(ye[g, ii], expos$HYB.SE[ii], eta$HYB.SE[ii])
       c(mean = log2(fc[["mu"]] / fe[["mu"]]), disp = if (fc[["disp"]] > 0 && fe[["disp"]] > 0) log2(fc[["disp"]] / fe[["disp"]]) else NA_real_) }, c(mean = 0, disp = 0)))
     c(n = length(subs[[j]]), var_mean = var(v[is.finite(v[, "mean"]), "mean"]), var_disp = var(v[is.finite(v[, "disp"]), "disp"]))
   }, c(n = 0, var_mean = 0, var_disp = 0)))
 }
 
 ## split_mean_calls: C6, one random partition of the hybrid cells at fraction f within depth deciles: the cis and trans log2 mean contrasts of every gene
-## (corrected allele means of each subset) and their calls |estimate / se| > 1.96 with the observed bootstrap SEs of BOOT.CONTRASTS (a Wald approximation of
-## the permutation tests, enough to read call stability). Returns a genes x 2 logical matrix of calls.
-split_mean_calls <- function(s, genes, yc, ye, expo, depth, f, mu_pc, mu_pe, cbar, se_cis, se_trans, streams) with_stream(streams[[s]], {
+## (allele means of each subset on their own library offsets expo_c and expo_e, per-genome rates) and their calls |estimate / se| > 1.96 with the observed
+## bootstrap SEs of BOOT.CONTRASTS (a Wald approximation of the sign tests, enough to read call stability). Returns a genes x 2 logical matrix of calls.
+split_mean_calls <- function(s, genes, yc, ye, expo_c, expo_e, depth, f, mu_pc, mu_pe, se_cis, se_trans, streams) with_stream(streams[[s]], {
   dec <- cut(rank(depth, ties.method = "first"), 10, labels = FALSE)
   cc <- unlist(lapply(split(seq_along(depth), dec), function(ix) ix[sample.int(length(ix), round(f * length(ix)))])); tt <- setdiff(seq_along(depth), cc)
-  m <- function(y, ix, fac) rowSums(y[genes, ix, drop = FALSE]) / sum(expo[ix]) / fac
-  cis <- log2(m(yc, cc, 2 * cbar) / m(ye, cc, 2 * (1 - cbar))); trans <- log2(mu_pc / mu_pe) - log2(m(yc, tt, 2 * cbar) / m(ye, tt, 2 * (1 - cbar)))
+  m <- function(y, ix, e) rowSums(y[genes, ix, drop = FALSE]) / sum(e[ix])
+  cis <- log2(m(yc, cc, expo_c) / m(ye, cc, expo_e)); trans <- log2(mu_pc / mu_pe) - log2(m(yc, tt, expo_c) / m(ye, tt, expo_e))
   cbind(cis = abs(cis / se_cis) > 1.96, trans = abs(trans / se_trans) > 1.96)
 })
 
@@ -800,24 +803,33 @@ state_cr_glm <- function(y, off, X, lrange = -rev(LOG.THETA.RANGE), maxit = 50, 
 ## state_gene: one gene in every group, its dispersion without and with the cell-state covariates. totals[[k]] is a cells x modules matrix of each module's
 ## summed counts per cell (in the hybrid cells both alleles together, so the state is the cell's and the two alleles share it); members[[s]] holds the
 ## genes of module s. The gene's own counts are left out of every module it belongs to, so its own variance never defines its state. Each covariate is
-## log2((module counts + 0.5) / offset), standardized within the group; a constant covariate is dropped. Both fits take the group's share correction,
-## (phi - eta) / (1 + eta) truncated at zero, as the pipeline does. Returns, per group, mu (ratio estimate), mbar, phi_pipe (fit_dispersion(), the
+## log2((module counts + 0.5) / depth), standardized within the group, with depth the group's offset (zexpos, default expos; for the hybrid alleles the cell's
+## whole hybrid depth, so both alleles of a cell share one score); a constant covariate is dropped. Both fits take the group's split correction as the
+## pipeline does (eta[[k]]: 0, or one split variance per cell): the split bias sum(eta M^2 / F^2) / (2 sum I(M, phi)) at the fitted means M and phi
+## (nb_cell_info()) is subtracted and the result truncated at zero. Returns, per group, mu (ratio estimate), mbar, phi_pipe (fit_dispersion(), the
 ## pipeline fit), phi0 (state_cr_glm(), intercept only), phiZ (with the covariates), lr (twice the gain in adjusted log likelihood) and one coefficient
 ## per module (change in log mean per SD of the state score).
-state_gene <- function(g, mats, expos, eta, totals, members) {
+state_gene <- function(g, mats, expos, eta, totals, members, zexpos = expos) {
   out <- c()
   for (k in names(mats)) {
     y <- as.numeric(mats[[k]][g, ]); e <- expos[[k]]
     own <- if (k %in% c("Hc", "He")) as.numeric(mats$Hc[g, ]) + as.numeric(mats$He[g, ]) else y
-    Z <- vapply(names(members), function(s) log2(totals[[k]][, s] - (if (g %in% members[[s]]) own else 0) + 0.5) - log2(e), numeric(length(e)))
+    Z <- vapply(names(members), function(s) log2(totals[[k]][, s] - (if (g %in% members[[s]]) own else 0) + 0.5) - log2(zexpos[[k]]), numeric(length(e)))
     Z <- scale(Z); keep <- apply(Z, 2, function(v) all(is.finite(v)))
     f0 <- state_cr_glm(y, log(e), matrix(1, length(y), 1))
     fz <- state_cr_glm(y, log(e), cbind(1, Z[, keep, drop = FALSE]))
-    corr <- function(p) if (is.finite(p)) max(0, (p - eta[[k]]) / (1 + eta[[k]])) else NA_real_
+    et <- eta[[k]]
+    corr <- function(f, X) {
+      if (!is.finite(f$phi)) return(NA_real_)
+      if (f$phi == 0 || all(et == 0)) return(f$phi)
+      M <- exp(log(e) + drop(X %*% f$coef)); Fv <- 1 + f$phi * M
+      max(0, f$phi - sum(et * M^2 / Fv^2) / (2 * sum(nb_cell_info(M, f$phi))))
+    }
     beta <- setNames(rep(NA_real_, length(members)), names(members)); beta[keep] <- fz$coef[-1]
     mu <- sum(y) / sum(e)
     out[paste(k, c("mu", "mbar", "phi_pipe", "phi0", "phiZ", "lr", paste0("beta_", names(members))), sep = ".")] <-
-      c(mu, mu * mean(e), fit_dispersion(y, e, eta[[k]], "NB")[["disp"]], corr(f0$phi), corr(fz$phi), 2 * (fz$adj_ll - f0$adj_ll), beta)
+      c(mu, mu * mean(e), fit_dispersion(y, e, et, "NB")[["disp"]], corr(f0, matrix(1, length(y), 1)), corr(fz, cbind(1, Z[, keep, drop = FALSE])),
+        2 * (fz$adj_ll - f0$adj_ll), beta)
   }
   out
 }
@@ -829,7 +841,7 @@ state_gene <- function(g, mats, expos, eta, totals, members) {
 ## mse_cell: one cell of the estimator comparison, row i of grid (group, family, mu, phi). R datasets are simulated on the group's observed offsets
 ## (expos[[group]], the Section 2 depth factors), each count Poisson with mean O mu a and the expression factor a of mean one and variance phi drawn from the
 ## family (sim_pos_factor(): gamma gives NB counts, lognormal and bimodal factors depart from the NB in their third moment). Each dataset is fitted with the
-## pipeline's Cox-Reid estimator (fit_dispersion(method = "NB")) and the Appendix A weighted method of moments (method = "weighted"), both truncated at zero as
+## pipeline's Cox-Reid estimator (fit_dispersion(method = "NB")) and the Appendix C weighted method of moments (method = "weighted"), both truncated at zero as
 ## in the pipeline. The replicates are dealt into nbatch equal batches; in each batch the bias (mean estimate minus phi), the variance and the mean squared
 ## error of the estimates are computed, and the result is their mean over batches with its SE (SD over batches / sqrt(nbatch)). Relative versions divide the
 ## bias by phi and the variance and MSE by phi^2, so genes of different phi share one scale. Returns one row per estimator with the share of estimates at
@@ -852,7 +864,8 @@ mse_cell <- function(i, grid, expos, R, nbatch, streams) with_stream(streams[[i]
 })
 
 ## mse_contrast_cell: one cell of the contrast-level comparison (M2 of estimator_mse.R), row i of grid (family, mu, phi, design, effect). Each of R
-## datasets simulates the two parents on their observed offsets (expos$Pc, expos$Pe) and the two alleles of every hybrid cell on the allele offset (expos$H),
+## datasets simulates the two parents on their observed offsets (expos$Pc, expos$Pe) and the two alleles of every hybrid cell on one allele offset (expos$H,
+## the Sc allele's library over D, so both alleles have the depth of an allele; no library split error is simulated),
 ## all with mean count O mu. The alleles of a cell share an extrinsic factor of variance ext_share x the smaller allele dispersion and carry private factors
 ## that bring each allele to its dispersion ((1 + phi) = (1 + s2d)(1 + v_q)); every factor has mean one and the family's shape (sim_pos_factor()). The design
 ## sets the true log2 dispersion ratios: "null" all equal; "cis" alleles and parents both differ by 2^effect (cis = total = effect, trans = 0); "trans" only
@@ -971,16 +984,17 @@ median_se <- function(x) 1.2533 * mad(x) / sqrt(length(x))
 
 ## mid_shift_gene: one gene's log2 midparent contrasts d (the per-genome hybrid against the mean of the two parents; .mode_contrasts(), mode "mid") of the
 ## mean and of the dispersion in every cell-bootstrap replicate. draws holds the pre-drawn index sets (Pc, Pe, H: parental cells and undivided hybrid cells),
-## drawn once for all genes so the median over genes can be taken replicate by replicate. Each replicate refits the share terms on its resampled hybrid cells
-## and the four groups with the pipeline's NB estimator; a failed refit counts as a zero dispersion. Returns a B x 2 matrix (mean, disp); a zero dispersion
-## gives +-Inf in disp, an undefined value NA.
-mid_shift_gene <- function(g, mats, expos, draws, share_cells) {
+## drawn once for all genes so the median over genes can be taken replicate by replicate. Each replicate refits the four groups with the pipeline's NB
+## estimator, the hybrid alleles on their own library offsets with the split variances of their resampled cells (etas$HYB.SC, etas$HYB.SE); the allele fits
+## of all hybrid cells take the place of the trans cells of the mid contrast. A failed refit counts as a zero dispersion. Returns a B x 2 matrix (mean, disp);
+## a zero dispersion gives +-Inf in disp, an undefined value NA.
+mid_shift_gene <- function(g, mats, expos, etas, draws) {
   t(vapply(draws, function(d) {
-    st <- share_terms(share_cells$chat[d$H], share_cells$lib[d$H]); sr <- share_r_groups(st$r_c, st$r_e)
     ix <- list(MIX.SC = d$Pc, MIX.SE = d$Pe, HYB.SC = d$H, HYB.SE = d$H)
-    f <- lapply(setNames(names(ix), names(ix)), function(k) .fit_one(mats[[k]][g, ix[[k]]], expos[[k]][ix[[k]]], sr[[k]]))
+    f <- lapply(setNames(names(ix), names(ix)), function(k) { et <- etas[[k]]; .fit_one(mats[[k]][g, ix[[k]]], expos[[k]][ix[[k]]], if (length(et) > 1) et[ix[[k]]] else et) })
     mu <- lapply(f, function(x) unname(x[["mu"]])); ph <- lapply(f, function(x) { v <- unname(x[["disp"]]); if (is.finite(v)) v else 0 })
-    .mode_contrasts(mu, ph, st$cbar, modes = "mid")["mid", c("mean", "disp")]
+    names(mu) <- names(ph) <- c("MIX.SC", "MIX.SE", "HYT.SC", "HYT.SE")
+    .mode_contrasts(mu, ph, modes = "mid")["mid", c("mean", "disp")]
   }, numeric(2)))
 }
 
@@ -992,15 +1006,16 @@ mid_shift_gene <- function(g, mats, expos, draws, share_cells) {
 ## the hybrid truly differs from its parents. Row i of grid gives the parental mean count per cell (mean), the dispersion (phi), the expression-factor
 ## family and omega. Each of G genes draws its parental per-genome rates (the Sc rate at mean / mean offset times a lognormal spread of SD 0.3, the Se rate
 ## 2^N(0, 0.7) times that) and dispersions (phi times the spread, Se 2^N(0, 0.5) times it), and its hybrid alleles depart from their parents by 2^N(0, 0.5)
-## in rate and in dispersion, so every dominance contrast has a known nonzero truth. The cells are one sim_design() of the observed design; the observed
-## shares give the share terms; every group is fitted with the pipeline's NB estimator and share corrections on all of its cells, and the contrasts are built
-## by .mode_contrasts() from the fits and from the true values (allele rates times their abundance factors, so the correction recovers them). Returns, per
+## in rate and in dispersion, so every dominance contrast has a known nonzero truth. The cells are one sim_design() of the observed design; every group is
+## fitted with the pipeline's NB estimator on all of its cells, the alleles on their own library offsets with their split variances, and the contrasts
+## (total, cis, trans, mid, par_sc, par_se, inh_c, inh_e) are built by .mode_contrasts() from the fits and from the true values, the all-cell allele fits
+## standing in for both the cis and the trans cells. Returns, per
 ## quantity (mean, disp, bsize, kbal) and contrast, the mean of estimate - truth over genes with its SE, the SD over genes and bias / SD.
 dominance_bias_cell <- function(i, grid, pools, G, streams) with_stream(streams[[i]], {
   g <- grid[i, ]
   stopifnot(G >= 10, g$mean > 0, g$phi > 0)
-  ds <- sim_design(pools); st <- share_terms(ds$chat, ds$L); SR <- share_r_groups(st$r_c, st$r_e); cb <- st$cbar
-  modes <- c("total", "cis", "trans", "mid", "par_sc", "par_se")
+  ds <- sim_design(pools)
+  modes <- c("total", "cis", "trans", "mid", "par_sc", "par_se", "inh_c", "inh_e")
   est <- tru <- array(NA_real_, c(G, length(modes), 4), dimnames = list(NULL, modes, c("mean", "disp", "bsize", "kbal")))
   for (j in seq_len(G)) {
     s <- exp(rnorm(1, 0, 0.3)); mPc <- g$mean * s / mean(ds$O_Pc); mPe <- mPc * 2^rnorm(1, 0, 0.7)
@@ -1009,15 +1024,15 @@ dominance_bias_cell <- function(i, grid, pools, G, streams) with_stream(streams[
     phi <- c(Pc = pPc, Pe = pPe, Hc = pPc * 2^rnorm(1, 0, 0.5), He = pPe * 2^rnorm(1, 0, 0.5))
     sim <- sim_hybrid_dataset(ds, mu, phi, omega = g$omega, family = g$family)
     f <- list(MIX.SC = .fit_one(sim$y$Pc, sim$O$Pc), MIX.SE = .fit_one(sim$y$Pe, sim$O$Pe),
-              HYB.SC = .fit_one(sim$y$Hc, sim$O$Hc, SR[["HYB.SC"]]), HYB.SE = .fit_one(sim$y$He, sim$O$He, SR[["HYB.SE"]]))
+              HYB.SC = .fit_one(sim$y$Hc, sim$O$Hc, sim$eta$Hc), HYB.SE = .fit_one(sim$y$He, sim$O$He, sim$eta$He))
     gm <- lapply(f, function(x) unname(x[["mu"]])); gp <- lapply(f, function(x) unname(x[["disp"]]))
     gm[c("HYC.SC", "HYT.SC", "HYC.SE", "HYT.SE")] <- gm[c("HYB.SC", "HYB.SC", "HYB.SE", "HYB.SE")]
     gp[c("HYC.SC", "HYT.SC", "HYC.SE", "HYT.SE")] <- gp[c("HYB.SC", "HYB.SC", "HYB.SE", "HYB.SE")]
-    tm <- list(MIX.SC = mu[["Pc"]], MIX.SE = mu[["Pe"]], HYB.SC = 2 * cb * mu[["Hc"]], HYB.SE = 2 * (1 - cb) * mu[["He"]])
+    tm <- list(MIX.SC = mu[["Pc"]], MIX.SE = mu[["Pe"]], HYB.SC = mu[["Hc"]], HYB.SE = mu[["He"]])
     tp <- list(MIX.SC = phi[["Pc"]], MIX.SE = phi[["Pe"]], HYB.SC = phi[["Hc"]], HYB.SE = phi[["He"]])
     tm[c("HYC.SC", "HYT.SC", "HYC.SE", "HYT.SE")] <- tm[c("HYB.SC", "HYB.SC", "HYB.SE", "HYB.SE")]
     tp[c("HYC.SC", "HYT.SC", "HYC.SE", "HYT.SE")] <- tp[c("HYB.SC", "HYB.SC", "HYB.SE", "HYB.SE")]
-    oe <- .mode_contrasts(gm, gp, cb, modes); ot <- .mode_contrasts(tm, tp, cb, modes)
+    oe <- .mode_contrasts(gm, gp, modes); ot <- .mode_contrasts(tm, tp, modes)
     est[j, , ] <- cbind(oe[, "mean"], oe[, "disp"], oe[, "mean"] + oe[, "disp"], -oe[, "mean"] - 2 * oe[, "disp"])
     tru[j, , ] <- cbind(ot[, "mean"], ot[, "disp"], ot[, "mean"] + ot[, "disp"], -ot[, "mean"] - 2 * ot[, "disp"])
   }
@@ -1092,14 +1107,14 @@ rare_cond_cell <- function(i, grid, expos, hyb_split, R, B, ext_share = 0.5, J_m
 ## ============================================================
 
 ## SIGN.BOOT.STATS: the 24 statistics one dataset yields, contrast x quantity x scale. The quantities are the dispersion phi, the burst frequency
-## theta = 1 / phi, the burst size zeta = mu phi and the kinetic balance kappa = theta / zeta = 1 / (mu phi^2); the contrasts are total (Pc - Pe), cis
+## theta = 1 / phi, the burst size beta = mu phi and the kinetic balance kappa = theta / beta = 1 / (mu phi^2); the contrasts are total (Pc - Pe), cis
 ## (the alleles of the cis cells) and trans (total minus the allele contrast of the trans cells); the scales are log2 and raw.
-SIGN.BOOT.STATS <- as.vector(outer(outer(c("total", "cis", "trans"), c("phi", "theta", "zeta", "kappa"), paste, sep = "."), c("log2", "raw"), paste, sep = "."))
+SIGN.BOOT.STATS <- as.vector(outer(outer(c("total", "cis", "trans"), c("phi", "theta", "beta", "kappa"), paste, sep = "."), c("log2", "raw"), paste, sep = "."))
 
 ## sign_boot_stats: the 24 statistics (SIGN.BOOT.STATS) from the fitted (mu, phi) of the six groups (rows Pc, Pe, Hcc, Hec, Hct, Het; columns mu, phi).
 ## A zero phi gives log2 phi = -Inf and theta = Inf; +Inf - Inf gives NaN, the undefined value the test counts on the null side.
 sign_boot_stats <- function(f) {
-  q <- cbind(phi = f[, "phi"], theta = 1 / f[, "phi"], zeta = f[, "mu"] * f[, "phi"], kappa = 1 / (f[, "mu"] * f[, "phi"]^2))
+  q <- cbind(phi = f[, "phi"], theta = 1 / f[, "phi"], beta = f[, "mu"] * f[, "phi"], kappa = 1 / (f[, "mu"] * f[, "phi"]^2))
   out <- numeric(0)
   for (sc in c("log2", "raw")) {
     v <- if (sc == "log2") suppressWarnings(log2(q)) else q
@@ -1129,7 +1144,7 @@ sign_boot_cell <- function(i, grid, pools, B, ext_share = 0.5, streams) with_str
   if (g$target == "total") phi[["Pc"]] <- g$phi * g$ratio
   if (g$target == "cis")   phi[["Hc"]] <- g$phi * g$ratio
   s2d <- ext_share * min(phi[["Hc"]], phi[["He"]]); vq <- pmax((1 + phi[c("Hc", "He")]) / (1 + s2d) - 1, 0)
-  ## true statistics: per-genome rate mu in every group (the hybrid allele offset is half the cell's depth, so the allele rate is the per-genome rate)
+  ## true statistics: per-genome rate mu in every group (each hybrid allele is offset by an allele library, so the allele rate is the per-genome rate)
   tf <- cbind(mu = mu, phi = c(Pc = phi[["Pc"]], Pe = phi[["Pe"]], Hcc = phi[["Hc"]], Hec = phi[["He"]], Hct = phi[["Hc"]], Het = phi[["He"]]))
   truth <- sign_boot_stats(tf)
   fit6 <- function(y, e, ix) { f <- rbind(Pc = fit_dispersion(y$Pc[ix$Pc], e$Pc[ix$Pc])[c("mu", "disp")], Pe = fit_dispersion(y$Pe[ix$Pe], e$Pe[ix$Pe])[c("mu", "disp")],

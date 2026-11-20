@@ -6,8 +6,8 @@
 ### Without the Section 2 tests there are no q-values, so a calibrator is chosen by its point estimates: |total| < tau and |trans| < tau on the log2
 ### scale of the quantity, for every tau in MID1.TAU, so the dependence of the median on the choice shows. Point estimates only; no intervals.
 ### Fits: the pipeline's Cox-Reid NB estimator (fit_dispersion()) on all cells of each group, with the offsets of analysis.R Section 2 (a parent's library
-### over the median parental library; half the cell's hybrid depth for each hybrid allele), the transcriptome share corrections R.C and R.E on the allele
-### dispersions, and the allele means divided by their abundance factors 2 c-bar and 2 (1 - c-bar). Contrasts on all hybrid cells (no cis and trans
+### over the median parental library; the library of its own genome over the same reference for each hybrid allele, so the allele means are per-genome
+### rates), and the library split correction of the allele dispersions with the split variances SPLIT.ETA of each cell. Contrasts on all hybrid cells (no cis and trans
 ### partition): total = log2 Pc - log2 Pe, cis = log2 Hc - log2 He, trans = total - cis, d = (log2 Hc + log2 He) / 2 - (log2 Pc + log2 Pe) / 2.
 ### A gene enters a quantity when all four groups have a finite positive value (mean, or phi > 0) and a mean count of at least MID1.MIN.COUNT per cell.
 ### Writes results/checks/MID1_ckpt1.csv (summary), MID1_ckpt1_genes.csv (per gene), MID1_ckpt1.rds and a row in summary.csv.
@@ -21,22 +21,20 @@ if (!exists("MID1.TAU"))       MID1.TAU       <- c(0.1, 0.25, 0.5)   # log2 thre
 if (!exists("MID1.MIN.COUNT")) MID1.MIN.COUNT <- 0.1                 # minimum mean count per cell in every group
 
 stopifnot("mid_shift_ckpt1.R needs the Section 1 checkpoint" = file.exists(ckpt_path(1)))
-load(ckpt_path(1))      # MIX.SC, MIX.SE, HYB.SC, HYB.SE, C.BAR, R.C, R.E
+load(ckpt_path(1))      # MIX.SC, MIX.SE, HYB.SC, HYB.SE, SPLIT.ETA
 stopifnot(identical(rownames(MIX.SC), rownames(HYB.SC)), identical(rownames(MIX.SE), rownames(MIX.SC)), identical(rownames(HYB.SE), rownames(HYB.SC)))
 
-## Offsets, share corrections and abundance factors of Section 2
+## Offsets and split variances of Section 2
 DEPTH.REF <- median(c(colSums(MIX.SC), colSums(MIX.SE)))
 M1.MATS  <- list(Pc = MIX.SC, Pe = MIX.SE, Hc = HYB.SC, He = HYB.SE)
-M1.EXPOS <- list(Pc = colSums(MIX.SC) / DEPTH.REF, Pe = colSums(MIX.SE) / DEPTH.REF,
-                 Hc = (colSums(HYB.SC) + colSums(HYB.SE)) / DEPTH.REF / 2, He = (colSums(HYB.SC) + colSums(HYB.SE)) / DEPTH.REF / 2)
-M1.ETA   <- c(Pc = 0, Pe = 0, Hc = R.C, He = R.E)
-M1.ABUND <- c(Pc = 1, Pe = 1, Hc = 2 * C.BAR, He = 2 * (1 - C.BAR))
+M1.EXPOS <- list(Pc = colSums(MIX.SC) / DEPTH.REF, Pe = colSums(MIX.SE) / DEPTH.REF, Hc = colSums(HYB.SC) / DEPTH.REF, He = colSums(HYB.SE) / DEPTH.REF)
+M1.ETA   <- list(Pc = 0, Pe = 0, Hc = SPLIT.ETA$Hc, He = SPLIT.ETA$He)
 
 ## Fits of every gene in the four groups: per-genome mean rate mu, dispersion phi and mean count per cell
 M1.FIT <- lapply(names(M1.MATS), function(k) {
   f <- do.call(rbind, mclapply(seq_len(nrow(M1.MATS[[k]])), function(i) fit_dispersion(M1.MATS[[k]][i, ], M1.EXPOS[[k]], M1.ETA[[k]], "NB")[c("mu", "disp")],
                                mc.cores = CORES))
-  cbind(mu = f[, "mu"] / M1.ABUND[[k]], phi = f[, "disp"], count = rowMeans(M1.MATS[[k]]))
+  cbind(mu = f[, "mu"], phi = f[, "disp"], count = rowMeans(M1.MATS[[k]]))
 })
 names(M1.FIT) <- names(M1.MATS)
 cat(sprintf("fitted %d genes in each of Pc, Pe, Hc, He\n", nrow(M1.FIT$Pc)))

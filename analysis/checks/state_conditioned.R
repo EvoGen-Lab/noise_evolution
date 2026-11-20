@@ -1,7 +1,7 @@
 ###############################################################
 ### state_conditioned.R
 ### State-conditioned dispersion: how much of each gene's dispersion, and of the cis and trans noise contrasts, comes from cell states that other genes
-### mark. Runs from the Section 1 checkpoint alone (no Section 2 rerun and no cluster output), with the offsets and share corrections of Section 2 as in
+### mark. Runs from the Section 1 checkpoint alone (no Section 2 rerun and no cluster output), with the offsets and split corrections of Section 2 as in
 ### estimator_leak.R.
 ### No cells are removed and no cells are clustered. Each gene is fitted twice by the same Cox-Reid NB fit (state_cr_glm()): with a constant mean (phi0,
 ### the total dispersion) and with continuous state scores in the mean (phiZ, the dispersion given the states). Clustering cells on expression and then
@@ -37,14 +37,15 @@ MBAR.BREAKS      <- c(0, 0.1, 0.3, 1, 3, 10, Inf)
 set.seed(SEED.SECTION + 24)
 
 stopifnot("state_conditioned.R needs the Section 1 checkpoint" = file.exists(ckpt_path(1)))
-load(ckpt_path(1))      # MIX.SC, MIX.SE, HYB.SC, HYB.SE (cells after QC, genes after the union filter), C.BAR, R.C, R.E
+load(ckpt_path(1))      # MIX.SC, MIX.SE, HYB.SC, HYB.SE (cells after QC, genes after the union filter), SPLIT.ETA
 
-## Offsets and share corrections of Section 2 (as estimator_leak.R).
+## Offsets and split variances of Section 2 (as estimator_leak.R). The state scores of the hybrid cells use the whole hybrid depth (STATE.ZEXPOS), so both alleles
+## of a cell share one score.
 DEPTH.REF.S <- median(c(colSums(MIX.SC), colSums(MIX.SE)))
 STATE.MATS  <- list(Pc = MIX.SC, Pe = MIX.SE, Hc = HYB.SC, He = HYB.SE)
-STATE.EXPOS <- list(Pc = colSums(MIX.SC) / DEPTH.REF.S, Pe = colSums(MIX.SE) / DEPTH.REF.S,
-                    Hc = (colSums(HYB.SC) + colSums(HYB.SE)) / DEPTH.REF.S / 2, He = (colSums(HYB.SC) + colSums(HYB.SE)) / DEPTH.REF.S / 2)
-STATE.ETA   <- c(Pc = 0, Pe = 0, Hc = R.C, He = R.E)
+STATE.EXPOS <- list(Pc = colSums(MIX.SC) / DEPTH.REF.S, Pe = colSums(MIX.SE) / DEPTH.REF.S, Hc = colSums(HYB.SC) / DEPTH.REF.S, He = colSums(HYB.SE) / DEPTH.REF.S)
+STATE.ZEXPOS <- c(STATE.EXPOS[c("Pc", "Pe")], list(Hc = (colSums(HYB.SC) + colSums(HYB.SE)) / DEPTH.REF.S, He = (colSums(HYB.SC) + colSums(HYB.SE)) / DEPTH.REF.S))
+STATE.ETA   <- list(Pc = 0, Pe = 0, Hc = SPLIT.ETA$Hc, He = SPLIT.ETA$He)
 
 ## Module members present in the data, and each module's summed counts per cell (both alleles together in the hybrid cells).
 STATE.MEMBERS <- lapply(STATE.SETS, function(ids) intersect(unique(unlist(lapply(ids, go_gene_set))), rownames(MIX.SC)))
@@ -61,7 +62,7 @@ if (is.finite(STATE.MAX.GENES) && length(STATE.GENES) > STATE.MAX.GENES) STATE.G
 cat(sprintf("State-conditioned fits: %d genes; cells Pc %d, Pe %d, hybrid %d\n", length(STATE.GENES), ncol(MIX.SC), ncol(MIX.SE), ncol(HYB.SC)))
 
 STATE.FITS <- do.call(rbind, mclapply(STATE.GENES, state_gene, mats = STATE.MATS, expos = STATE.EXPOS, eta = STATE.ETA, totals = STATE.TOTALS,
-                                      members = STATE.MEMBERS, mc.cores = CORES, mc.preschedule = FALSE))
+                                      members = STATE.MEMBERS, zexpos = STATE.ZEXPOS, mc.cores = CORES, mc.preschedule = FALSE))
 rownames(STATE.FITS) <- STATE.GENES
 GROUPS <- names(STATE.MATS)
 STATE.COLS <- c("mu", "mbar", "phi_pipe", "phi0", "phiZ", "lr", paste0("beta_", names(STATE.MEMBERS)))
@@ -112,10 +113,10 @@ check_save("SC2", SC2, "run",
            mc_error = "none (deterministic fits)", script = CHECK.SCRIPT)
 
 ##############################################################################
-## SC3. Cis and trans contrasts of log2 phi, total against state-conditioned. Allele means are divided by their abundance factors (as leak_contrasts()).
+## SC3. Cis and trans contrasts of log2 phi, total against state-conditioned. Allele means are per-genome rates on their own library offsets (as leak_contrasts()).
 ## The own slope is the slope of Delta log2 phi on Delta log2 mu; leak_regression() takes the total and the conditioned contrasts as its two estimators,
 ## so its slope is that of (total - conditioned) on Delta log2 mu, with a gene-bootstrap interval.
-LMU <- list(Pc = log2(FIT[["Pc"]][["mu"]]), Pe = log2(FIT[["Pe"]][["mu"]]), Hc = log2(FIT[["Hc"]][["mu"]] / (2 * C.BAR)), He = log2(FIT[["He"]][["mu"]] / (2 * (1 - C.BAR))))
+LMU <- list(Pc = log2(FIT[["Pc"]][["mu"]]), Pe = log2(FIT[["Pe"]][["mu"]]), Hc = log2(FIT[["Hc"]][["mu"]]), He = log2(FIT[["He"]][["mu"]]))
 LPH <- lapply(c(total = "phi0", state = "phiZ"), function(q) lapply(setNames(GROUPS, GROUPS), function(k) ifelse(FIT[[k]][[q]] > 0, log2(FIT[[k]][[q]]), NA_real_)))
 CONTRAST.W <- list(cis = c(Hc = 1, He = -1), trans = c(Pc = 1, Pe = -1, Hc = -1, He = 1))   # cis: allele log2 ratio; trans: parental minus allele log2 ratio
 SC3 <- list(); SC3.PTS <- list()

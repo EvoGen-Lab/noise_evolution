@@ -2,8 +2,12 @@
 ### functions_artefacts.R
 ### Functions of the tests of why the data depart from the NB (handoff "tests of why the data depart from the NB", tests T0 to T12),
 ### sourced after R/functions.R and R/functions_checks.R by analysis/checks/artefact_tests.R and cluster/scripts/artefact_null_grid.R.
-### Groups are Pc, Pe, Hc and He; every fit is the pipeline's Cox-Reid NB fit (fit_dispersion()) with the group's share correction unless stated.
+### Groups are Pc, Pe, Hc and He; every fit is the pipeline's Cox-Reid NB fit (fit_dispersion()) with the group's library split correction unless stated:
+### eta is 0 for a parent and one split variance per cell for a hybrid allele (split_eta()), subset with the cells of every fit (.eta_at()).
 ###############################################################
+
+## .eta_at: the split variances of the cells ix of a fit: eta itself when it is one value for every cell (0 for a parent), eta[ix] otherwise.
+.eta_at <- function(eta, ix) if (length(eta) > 1) eta[ix] else eta
 
 ## BOUND.CRIT: the critical value of the likelihood bounds of dispersion_bound_stats(), twice the fall in the adjusted log-likelihood from its maximum: 2.71,
 ## the 0.90 quantile of a chi-square with one degree of freedom, which makes each bound one-sided 95%.
@@ -13,17 +17,18 @@ BOUND.CRIT <- qchisq(0.90, 1)
 ## 2 [ell_CR(phi-hat) - ell_CR(0)], reported for reference. disp_upper is the value above phi-hat at which twice the fall in the adjusted log-likelihood from its
 ## maximum equals crit (2.71, BOUND.CRIT), found by uniroot on the log scale from phi-hat (or from the lower end of the search range when phi-hat = 0) and capped
 ## at the top of the range; disp_lower is the value below phi-hat at which the fall is the same, or 0 when the fall never reaches it (lrt at most crit). mbar is
-## the mean fitted count per cell. Both bounds take the share correction, (phi - share_r) / (1 + share_r) - share_sub truncated at zero, like the estimate; the
+## the mean fitted count per cell. Both bounds take the library split correction like the estimate: the split bias at the bound,
+## sum(eta M^2 / F^2) / (2 sum I(M, p)) with F = 1 + p M (nb_cell_info()), is subtracted and the result truncated at zero (eta: 0 or one value per cell); the
 ## fall comes from the fitted likelihood. A gene with no counts gives bounds 0, too few cells NA. fit is the fit_dispersion() result for these counts when the
 ## caller already has it. The pipeline tests contrasts by the bootstrap sign test and does not use these bounds; the artefact tests use the lower bound as a
 ## bootstrap-free marker of a dispersion above zero (bound_pos).
-dispersion_bound_stats <- function(y, expo, share_r = 0, share_sub = 0, crit = BOUND.CRIT, fit = NULL) {
+dispersion_bound_stats <- function(y, expo, eta = 0, crit = BOUND.CRIT, fit = NULL) {
   out <- c(lrt = NA_real_, disp_lower = NA_real_, disp_upper = NA_real_, mbar = NA_real_)
   keep <- is.finite(y) & is.finite(expo) & expo > 0
-  y <- y[keep]; e <- expo[keep]
+  y <- y[keep]; e <- expo[keep]; et <- if (length(eta) > 1) eta[keep] else rep(eta, length(y))
   if (length(y) < 2) return(out)
   if (sum(y) == 0) { out[c("lrt", "disp_lower", "disp_upper", "mbar")] <- 0; return(out) }
-  if (is.null(fit)) fit <- fit_dispersion(y, e, share_r, "NB", share_sub)
+  if (is.null(fit)) fit <- fit_dispersion(y, e, et, "NB")
   phi_app <- fit[["disp_app"]]
   if (!is.finite(phi_app)) return(out)
   m <- fit[["mu"]] * e
@@ -44,7 +49,7 @@ dispersion_bound_stats <- function(y, expo, share_r = 0, share_sub = 0, crit = B
     for (j in seq_along(grid)[-1])
       if (f(grid[j]) > 0) { lower <- exp(uniroot(f, sort(grid[c(j - 1, j)]), tol = 1e-4)$root); break }
   }
-  correct <- function(p) max((p - share_r) / (1 + share_r) - share_sub, 0)
+  correct <- function(p) if (p <= 0 || all(et == 0)) p else max(p - sum(et * m^2 / (1 + p * m)^2) / (2 * sum(nb_cell_info(m, p))), 0)
   c(lrt = lrt, disp_lower = correct(lower), disp_upper = correct(upper), mbar = mean(m))
 }
 
@@ -62,19 +67,20 @@ art_trim_idx <- function(y, e, frac) order(y / e, decreasing = TRUE)[seq_len(max
 ##   excess_frac          the share of the excess sum((y - M)^2 - M) over all cells, M from the all-cells fit, carried by the trimmed cells; NA when the
 ##                        total excess is not positive (T0b);
 ##   strat1..3, mstrat1..3  log2(phi in depth tercile s / phi) and the expected count per cell in that tercile (terc gives each cell's tercile; T3);
-##   thin_log2phi, thin_mu_ratio  log2(phi of the thinned counts / phi) and the ratio of the means, when y_thin and e_thin are given (T7a).
+##   thin_log2phi, thin_mu_ratio  log2(phi of the thinned counts / phi) and the ratio of the means, when y_thin and e_thin are given (T7a); eta_thin is the
+##                        split variances of the thinned cells (the libraries thin with the counts), eta when the offsets are kept.
 ## The trimmed cell indices are returned as attribute "trim".
-art_gene_stats <- function(y, e, eta, frac, terc, y_thin = NULL, e_thin = NULL) {
+art_gene_stats <- function(y, e, eta, frac, terc, y_thin = NULL, e_thin = NULL, eta_thin = eta) {
   f <- fit_dispersion(y, e, eta); phi <- f[["disp"]]; mu <- f[["mu"]]
-  tr <- art_trim_idx(y, e, frac); ft <- fit_dispersion(y[-tr], e[-tr], eta)
+  tr <- art_trim_idx(y, e, frac); ft <- fit_dispersion(y[-tr], e[-tr], .eta_at(eta, -tr))
   l2 <- function(a, b) if (!is.finite(a) || !is.finite(b) || b <= 0) NA_real_ else if (a <= 0) -Inf else log2(a / b)
   M <- mu * e; ex <- (y - M)^2 - M
-  st <- vapply(1:3, function(s) l2(fit_dispersion(y[terc == s], e[terc == s], eta)[["disp"]], phi), numeric(1))
+  st <- vapply(1:3, function(s) l2(fit_dispersion(y[terc == s], e[terc == s], .eta_at(eta, terc == s))[["disp"]], phi), numeric(1))
   out <- c(mu = mu, mbar = mu * mean(e), phi = phi, log2_trim = l2(ft[["disp"]], phi),
            excess_frac = if (sum(ex) > 0) sum(ex[tr]) / sum(ex) else NA_real_,
            strat1 = st[1], strat2 = st[2], strat3 = st[3], mstrat1 = mu * mean(e[terc == 1]), mstrat2 = mu * mean(e[terc == 2]), mstrat3 = mu * mean(e[terc == 3]),
            thin_log2phi = NA_real_, thin_mu_ratio = NA_real_)
-  if (!is.null(y_thin)) { fh <- fit_dispersion(y_thin, e_thin, eta); out[["thin_log2phi"]] <- l2(fh[["disp"]], phi); out[["thin_mu_ratio"]] <- fh[["mu"]] / mu }
+  if (!is.null(y_thin)) { fh <- fit_dispersion(y_thin, e_thin, eta_thin); out[["thin_log2phi"]] <- l2(fh[["disp"]], phi); out[["thin_mu_ratio"]] <- fh[["mu"]] / mu }
   attr(out, "trim") <- tr
   out
 }
@@ -105,7 +111,7 @@ art_influence <- function(y, e, eta, k = 20) {
   out <- c()
   for (m in c("NB", "weighted")) {
     phi <- fit_dispersion(y, e, eta, m)[["disp"]]
-    inf <- vapply(top, function(i) phi - fit_dispersion(y[-i], e[-i], eta, m)[["disp"]], numeric(1))
+    inf <- vapply(top, function(i) phi - fit_dispersion(y[-i], e[-i], .eta_at(eta, -i), m)[["disp"]], numeric(1))
     tag <- if (m == "NB") "cr" else "mom"
     out[paste0(c("max_share_", "top5_share_"), tag)] <- if (phi > 0) c(max(inf) / phi, sum(sort(inf, decreasing = TRUE)[1:min(5, length(inf))]) / phi) else c(NA, NA)
   }
@@ -153,7 +159,7 @@ art_null_chunk <- function(genes, mats, expos, eta, frac, terc, R, R4, R11, thin
 }
 
 ## art_sim_dataset: T8 and T12, one simulated dataset of every gene and group from the observed fits (fits: genes x columns <group>.mu, <group>.phi of the
-## all-cells Cox-Reid fits; hybrid allele means include their abundance factor), the observed offsets and cell counts, as gamma NB. scenario:
+## all-cells Cox-Reid fits; hybrid allele means are per-genome rates on their own library offsets), the observed offsets and cell counts, as gamma NB. scenario:
 ##   A           every group of a gene at one dispersion, the geometric mean of its positive fitted values (true Delta phi = 0, true Delta mu observed);
 ##   B / S0      every group at its fitted dispersion;
 ##   S1 rho      B plus an additive Poisson component of mean rho mu per cell (outside the offset);
@@ -202,7 +208,7 @@ art_gene_core <- function(g, mats, expos, eta, halves, frac) {
     cl <- as.numeric(dispersion_bound_stats(y, e, eta[[k]])[["disp_lower"]] > 0)
     le <- linear_excess_gene(1, matrix(y, 1), e)
     out[paste(k, c("mu", "mbar", "phi", "bound_pos", "log2_trim", "excess_frac", "a", "a_se", "mu_A", "phi_B"), sep = ".")] <-
-      c(st[c("mu", "mbar", "phi")], cl, st[c("log2_trim", "excess_frac")], le[c("a", "a_se")], sum(y[A]) / sum(e[A]), fit_dispersion(y[B], e[B], eta[[k]])[["disp"]])
+      c(st[c("mu", "mbar", "phi")], cl, st[c("log2_trim", "excess_frac")], le[c("a", "a_se")], sum(y[A]) / sum(e[A]), fit_dispersion(y[B], e[B], .eta_at(eta[[k]], B))[["disp"]])
   }
   out
 }
@@ -211,7 +217,7 @@ art_gene_core <- function(g, mats, expos, eta, halves, frac) {
 ## median trimming statistic and excess share and the median a; per group the Spearman correlation of a with the mean and the trend of log2 phi on log2 mu
 ## across genes (phi > 0); and the own slopes of Delta log2 phi on Delta log2 mu for cis and trans in the same-cell and disjoint arms, on genes whose groups
 ## all have phi > 0 and a lower likelihood bound above zero (bound_pos, a bootstrap-free marker of a dispersion above zero), with a gene-bootstrap interval (B draws, indices drawn first).
-art_signature <- function(core, cbar, mbar_breaks, B = 200, seed = 1) {
+art_signature <- function(core, mbar_breaks, B = 200, seed = 1) {
   bins <- list(); grp <- list()
   for (k in ART.GROUPS) {
     v <- function(q) core[, paste0(k, ".", q)]
@@ -224,7 +230,7 @@ art_signature <- function(core, cbar, mbar_breaks, B = 200, seed = 1) {
     grp[[k]] <- data.frame(group = k, spearman_a_mean = suppressWarnings(cor(v("a"), v("mbar"), method = "spearman", use = "complete.obs")),
                            trend_log2phi_on_log2mu = unname(coef(lm(log2(v("phi")[ok]) ~ log2(v("mu")[ok])))[2]), row.names = NULL)
   }
-  lmu <- function(k, q) { m <- core[, paste0(k, ".", q)]; if (k == "Hc") m / (2 * cbar) else if (k == "He") m / (2 * (1 - cbar)) else m }
+  lmu <- function(k, q) core[, paste0(k, ".", q)]          # per-genome rates: each allele is offset by its own genome's library
   slopes <- list()
   for (arm in c("same", "disjoint")) {
     qm <- if (arm == "same") "mu" else "mu_A"; qp <- if (arm == "same") "phi" else "phi_B"
@@ -245,12 +251,12 @@ art_signature <- function(core, cbar, mbar_breaks, B = 200, seed = 1) {
 
 ## art_scenario_task: one task of the scenario array (T8, T12): simulate a dataset (art_sim_dataset()), fit every gene (art_gene_core()) and return its
 ## signature (art_signature()) with the scenario labels.
-art_scenario_task <- function(i, grid, fits, expos, eta, halves, genes, frac, cbar, mbar_breaks, streams, cores = 1) {
+art_scenario_task <- function(i, grid, fits, expos, eta, halves, genes, frac, mbar_breaks, streams, cores = 1) {
   t <- grid[i, ]
   mats <- art_sim_dataset(fits, expos, genes, t$scenario, t$par1, t$par2, streams[[i]])
   core <- do.call(rbind, parallel::mclapply(genes, art_gene_core, mats = mats, expos = expos, eta = eta, halves = halves, frac = frac, mc.cores = cores))
   rownames(core) <- genes
-  sig <- art_signature(core, cbar, mbar_breaks, seed = i)
+  sig <- art_signature(core, mbar_breaks, seed = i)
   lapply(sig, function(d) cbind(task = i, scenario = t$scenario, par1 = t$par1, par2 = t$par2, rep = t$rep, d))
 }
 
