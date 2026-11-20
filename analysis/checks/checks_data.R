@@ -1,9 +1,10 @@
 ###############################################################
 ### checks_data.R
 ### Data checks of the methods document (docs/methods.md), one block per check ID of the validation handoff: A3, A5, A7 (data arm), A8, B1, B2 (data
-### arm), B5, B6, C1, C2, C3, C6, D9, E2, E3 (data arm), E4, F1(b, c), F5 and G1, and a local bootstrap of a gene subsample for A4, A6, C7 and D8.
+### arm), B5, B6, C1, C2, C3, C6, D9, E4, F1(b, c), F5 and G1, and a local bootstrap of a gene subsample for A4, A6, C7 and D8. E2 and E3 (data arm), which
+### read the resolution rule and the likelihood bounds, were retired with them.
 ### Reads the Section 1 and Section 2 checkpoints (results/checkpoints/section1_checkpoint.rda, section2_checkpoint.rda); a check whose inputs are
-### missing is recorded as "not run" with the reason. The checks that read the bootstrap and null outputs (C3, D9, E2 significance counts, E3) use the
+### missing is recorded as "not run" with the reason. The checks that read the bootstrap outputs (C3, D9) use the
 ### cluster results already merged into the Section 2 checkpoint (BOOT.CONTRASTS, PR); the local bootstrap needs no cluster output.
 ### Each result goes to results/checks/<ID>.rds with a row in results/checks/summary.csv; figures go to figures/extra/.
 ###############################################################
@@ -13,7 +14,7 @@ library(parallel)
 CHECK.SCRIPT  <- "analysis/checks/checks_data.R"
 CORES         <- if (.Platform$OS.type == "windows") 1 else max(1, detectCores() - 1)
 SEED.CHECKS   <- 3026
-N.CHECK.GENES <- 300      # genes in the local bootstrap and refit subsamples (random genes of the matched set, resolved in every dataset)
+N.CHECK.GENES <- 300      # genes in the local bootstrap and refit subsamples (random genes of the matched set, phi > 0 in every dataset)
 N.CHECK.BOOT  <- 200      # bootstrap replicates per gene in the local bootstrap
 set.seed(SEED.SECTION + 21)
 
@@ -107,7 +108,7 @@ if (have1) {
 ## A11. Third moment of the expression factor against the gamma (Methods: Separate partitions; Notes for revision: non-gamma expression factors)
 # The mean and dispersion errors of one group are uncorrelated on shared cells only when the factor's third central moment equals the gamma's 2 phi^2;
 # the excess E[(a - 1)^3] - 2 phi^2 sets their covariance and the bias of the NB fit under a non-gamma factor (B4). Factorial moments estimate it for
-# every gene resolved in the dataset (factor_moment_table()). Per-gene third moments are noisy and skewed at these cell numbers, so the subsample genes are tested
+# every gene with an informative mean and phi > 0 in the dataset (factor_moment_table()). Per-gene third moments are noisy and skewed at these cell numbers, so the subsample genes are tested
 # against NB data simulated at their own fitted mean and variance on the same offsets (factor_excess_test(), A11.SIM draws), which carries the
 # estimator's finite-sample bias into the null; the share of genes with p < 0.05 is read against 0.05, and the observed k3 / (2 phi^2) against its
 # null mean. One gene's test has little power (simulated lognormal factors with phi 0.5 and 2000 cells: p < 0.05 in about 13% of genes), so the group
@@ -118,7 +119,7 @@ A11 <- list(table = list(), tests = list(), summary = list())
 for (k in A11.GROUPS) {
   m <- if (k == "HYB.SC") HYB.SC else if (k == "HYB.SE") HYB.SE else if (have1) get(k, E1.ENV) else NULL
   if (is.null(m)) next
-  e <- CONTRAST.EXPOS[[k]]; cls1 <- GENE.TABLE$gene[GENE.TABLE[[paste0(k, ".resolved")]] %in% TRUE]     # genes whose dispersion is resolved in this dataset
+  e <- CONTRAST.EXPOS[[k]]; cls1 <- GENE.TABLE$gene[(GENE.TABLE[[paste0(k, ".info_ok")]] & GENE.TABLE[[paste0(k, ".disp")]] > 0) %in% TRUE]     # genes with an informative mean and phi > 0 in this dataset
   tab <- factor_moment_table(m, e, genes = cls1)
   tg <- intersect(SUB.GENES, cls1)
   tst <- with_local_seed(SEED.CHECKS + 9, t(vapply(tg, factor_excess_test, numeric(6), mat = m, expo = e, B = A11.SIM)))
@@ -132,7 +133,7 @@ for (k in A11.GROUPS) {
 }
 A11 <- lapply(A11, function(x) do.call(rbind, x))
 if (is.null(A11$summary)) check_save("A11", NULL, "not run", headline = "count matrices missing", script = CHECK.SCRIPT) else
-  check_save("A11", A11, "run", headline = sprintf("%s: k3 / (2 phi^2) pooled over %d resolved genes %.2f; tested %d genes: mean z %.2f (SE %.2f), median ratio %.2f against %.2f under a gamma factor, p < 0.05 in %.3f (above %.3f, below %.3f)",
+  check_save("A11", A11, "run", headline = sprintf("%s: k3 / (2 phi^2) pooled over %d genes with phi > 0 %.2f; tested %d genes: mean z %.2f (SE %.2f), median ratio %.2f against %.2f under a gamma factor, p < 0.05 in %.3f (above %.3f, below %.3f)",
                                                  A11$summary$dataset, A11$summary$genes, A11$summary$pooled_k3_over_gamma, A11$summary$tested, A11$summary$mean_z, A11$summary$mean_z_se, A11$summary$median_ratio,
                                                  A11$summary$median_null_ratio, A11$summary$share_p05, A11$summary$share_above, A11$summary$share_below),
              mc_error = sprintf("%d null draws per gene; binomial SE of a 5%% share %.3f", A11.SIM, A11$summary$share_p05_se[1]), script = CHECK.SCRIPT)
@@ -252,16 +253,14 @@ check_save("C6", C6, "run", headline = c(sprintf("KS p (depth, cis vs trans) %s:
            mc_error = "50 partitions", script = CHECK.SCRIPT)
 
 ##############################################################################
-## D9. Genes at the p-value floor 1 / (B + 1), and whether BH at q = 0.05 can reach it (Methods: p-values)
-# B is N.PERM for the permutation nulls (mean contrasts except mid) and N.SIM for the simulated nulls. With m tests, k genes at the floor are all rejected
-# by BH when floor <= 0.05 k / m.
+## D9. Genes at the p-value floor 2 / (B + 1) of the bootstrap sign test, and whether BH at q = 0.05 can reach it (Methods: Tests of contrasts; Multiple testing)
+# B is N.BOOT, the bootstrap replicates of every test. With m tests, k genes at the floor are all rejected by BH when floor <= 0.05 k / m.
 D9 <- list()
-NSIM.D9 <- local({ f <- file.path(INPUT.DIR, "gene_perm_inputs.rda"); e <- new.env(); if (file.exists(f)) { load(f, envir = e); get("N.SIM", e) } else 2000 })
 for (cn in grep("_p$", names(PR), value = TRUE)) {
   p <- PR[[cn]]; p <- p[is.finite(p)]
   if (!length(p)) next
-  B <- if (grepl("^mean_", cn) && cn != "mean_mid_p") N.PERM else NSIM.D9; fl <- 1 / (B + 1); k <- sum(p <= fl * (1 + 1e-9))
-  D9[[cn]] <- data.frame(test = cn, m = length(p), B = B, floor = fl, at_floor = k, min_p = min(p), bh_reaches_floor = k > 0 && fl <= 0.05 * k / length(p),
+  fl <- 2 / (N.BOOT + 1); k <- sum(p <= fl * (1 + 1e-9))
+  D9[[cn]] <- data.frame(test = cn, m = length(p), B = N.BOOT, floor = fl, at_floor = k, min_p = min(p), bh_reaches_floor = k > 0 && fl <= 0.05 * k / length(p),
                          bh_one_gene = fl <= 0.05 / length(p), row.names = NULL)
 }
 D9 <- do.call(rbind, D9)
@@ -269,41 +268,10 @@ check_save("D9", D9, "run", headline = sprintf("%s: %d of %d at the floor %.2g; 
            mc_error = "exact counts", script = CHECK.SCRIPT)
 
 ##############################################################################
-## E2. Tested and significant dispersion contrasts across resolution thresholds (Methods: Informative estimates)
-# A group is resolved when at most t of its bootstrap replicates refit to zero (RESOLVED.ZERO.MAX = 0.025 in the analysis). The zero fractions are stored per gene
-# and dataset in GENE.TABLE, and the unmasked null p-values in PERM.RESULTS, so every threshold is recomputed exactly: a contrast is tested when its fits define it
-# and every group is resolved at t, and significant at BH q < 0.05 over the genes tested at t.
-E2 <- list(counts = list(), significant = list())
-E2.T <- c(0.01, 0.025, 0.05, 0.10)
-PR.ALL <- PERM.RESULTS[match(GENE.TABLE$gene, PERM.RESULTS$gene), ]
-for (t in E2.T) {
-  res <- sapply(.CONTRAST.GROUPS, function(k) (GENE.TABLE[[paste0(k, ".zero_frac")]] <= t) %in% TRUE & (GENE.TABLE[[paste0(k, ".disp")]] > 0) %in% TRUE)
-  E2$counts[[as.character(t)]] <- data.frame(zero_frac_max = t, dataset = .CONTRAST.GROUPS, resolved = colSums(res), row.names = NULL)
-  for (md in .OUT_MODES) {
-    gr <- .MODES[[.DISP_SOURCE[[md]]]]; ok <- rowSums(res[, gr, drop = FALSE]) == length(gr)
-    pl <- PR.ALL[[paste0("disp_", md, "_p")]]; pr <- PR.ALL[[paste0("rdisp_", md, "_p")]]
-    tl <- ok & GENE.TABLE[[paste0("log_", md, "_valid")]] & is.finite(pl); tr <- ok & GENE.TABLE[[paste0("raw_", md, "_valid")]] & is.finite(pr)
-    E2$significant[[paste(t, md)]] <- data.frame(zero_frac_max = t, mode = md, log2_tested = sum(tl), log2_sig = sum(p.adjust(pl[tl], "BH") < 0.05),
-                                                 raw_tested = sum(tr), raw_sig = sum(p.adjust(pr[tr], "BH") < 0.05), row.names = NULL)
-  }
-}
-E2 <- lapply(E2, function(x) do.call(rbind, x))
-x <- aggregate(cbind(log2_tested, log2_sig, raw_sig) ~ zero_frac_max, E2$significant, sum)
-check_save("E2", E2, "run", headline = sprintf("zero fraction at most %g: tested log2 dispersion contrasts %d, significant log2 %d, raw %d (all modes)", x$zero_frac_max, x$log2_tested, x$log2_sig, x$raw_sig),
-           mc_error = "exact counts from the stored zero fractions and null p-values", script = CHECK.SCRIPT)
-
-##############################################################################
-## E3 (data arm) and E4. Defined contrasts left untested because a group is unresolved, likelihood-bound calls for one resolved group; gene sets and exclusions
-## per contrast and scale
-E3D <- list(unresolved = EXCLUDED.COUNTS[EXCLUDED.COUNTS$scale != "mean", c("contrast", "scale", "eligible", "tested", "unresolved")], bounds = BOUNDS.SEPARATION)
-check_save("E3_data", E3D, "run", headline = c(sprintf("%s %s: %d defined, %d tested, %d unresolved", E3D$unresolved$contrast, E3D$unresolved$scale, E3D$unresolved$eligible,
-                                                       E3D$unresolved$tested, E3D$unresolved$unresolved),
-                                               sprintf("%s: one group resolved in %d genes, likelihood bounds separate in %d", BOUNDS.SEPARATION$contrast,
-                                                       BOUNDS.SEPARATION$one_group_resolved, BOUNDS.SEPARATION$bounds_separate)),
-           mc_error = "from gene_boot", script = CHECK.SCRIPT)
+## E4. Gene sets and exclusions per contrast and scale
 write.csv(EXCLUDED.COUNTS, file.path(CHECK.DIR, "E4_excluded_counts.csv"), row.names = FALSE)
 write.csv(GENE.SET.SIZES, file.path(CHECK.DIR, "E4_gene_set_sizes.csv"), row.names = FALSE)
-write.csv(GENE.TABLE[, c("gene", grep("_valid$|^resolved_|^in_matched_set$|^inference_set$", names(GENE.TABLE), value = TRUE))], file.path(CHECK.DIR, "E4_gene_sets.csv"), row.names = FALSE)
+write.csv(GENE.TABLE[, c("gene", grep("_valid$|^in_matched_set$|^inference_set$", names(GENE.TABLE), value = TRUE))], file.path(CHECK.DIR, "E4_gene_sets.csv"), row.names = FALSE)
 check_save("E4", list(excluded = EXCLUDED.COUNTS, sizes = GENE.SET.SIZES), "code", headline = sprintf("tables written: E4_excluded_counts.csv, E4_gene_set_sizes.csv, E4_gene_sets.csv; matched set %d genes",
                                                                                                      sum(GENE.TABLE$in_matched_set)), script = CHECK.SCRIPT)
 
@@ -334,10 +302,11 @@ check_save("F5", F5, "run", headline = sprintf("observed on predicted: slope %.3
 ##############################################################################
 ## G1. Every number the text quotes, regenerated from the pipeline
 G1 <- local({
-  med_c <- median(GENE.TABLE$HYB.SC.disp[GENE.TABLE$HYB.SC.resolved]); med_e <- median(GENE.TABLE$HYB.SE.disp[GENE.TABLE$HYB.SE.resolved])
+  med_c <- median(GENE.TABLE$HYB.SC.disp[(GENE.TABLE$HYB.SC.info_ok & GENE.TABLE$HYB.SC.disp > 0) %in% TRUE])
+  med_e <- median(GENE.TABLE$HYB.SE.disp[(GENE.TABLE$HYB.SE.info_ok & GENE.TABLE$HYB.SE.disp > 0) %in% TRUE])
   med_c_all <- median(SPLIT.FITS$HYB.SC$DISP, na.rm = TRUE); med_e_all <- median(SPLIT.FITS$HYB.SE$DISP, na.rm = TRUE)
   nmin <- min(c(vapply(CONTRAST.EXPOS[c("MIX.SC", "MIX.SE", "HYB.SC")], length, integer(1)), PARTITION.REPORT$n_cis, PARTITION.REPORT$n_trans))
-  data.frame(quantity = c("c-bar-hat", "eta_Hc", "eta_He", "median phi Hc (resolved)", "median phi He (resolved)", "median phi Hc (all fits)", "median phi He (all fits)",
+  data.frame(quantity = c("c-bar-hat", "eta_Hc", "eta_He", "median phi Hc (phi > 0)", "median phi He (phi > 0)", "median phi Hc (all fits)", "median phi He (all fits)",
                           "correction term Hc (1 + phi) eta", "correction term He (1 + phi) eta", "phi below which (1 + phi) eta / phi > 1% (Hc)", "smallest group or partition (cells)"),
              text = c(0.5024, 7.4e-5, 7.5e-5, 0.150, 0.152, 0.150, 0.152, 8.5e-5, 8.6e-5, 0.0075, 800),
              pipeline = c(C.BAR, R.C, R.E, med_c, med_e, med_c_all, med_e_all, (1 + med_c) * R.C, (1 + med_e) * R.E, R.C / (0.01 - R.C), nmin), row.names = NULL)

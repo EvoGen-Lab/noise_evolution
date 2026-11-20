@@ -16,8 +16,8 @@
 ### phi values share an axis; "raw" plots the raw quantities.
 ### M2 repeats the comparison on the log2 total, cis and trans contrasts the pipeline tests, with a shared extrinsic factor for the two alleles of a hybrid
 ### cell, the hybrid cells split into cis and trans cells, and three designs (null, a cis effect, a trans effect); results in M2.rds, M2_contrast_mse.csv,
-### M2_contrast_mse_ratio.csv and figures/extra/check_M2_<measure>.pdf. M3 measures the false-positive rate of the pipeline's dispersion test (shifted
-### bootstrap null, resolution gate) when a rare cell state occurs at the same frequency in every group; results in M3.rds, M3_rare_state_type1.csv and
+### M2_contrast_mse_ratio.csv and figures/extra/check_M2_<measure>.pdf. M3 measures the false-positive rate of the pipeline's dispersion test (the
+### bootstrap sign test) when a rare cell state occurs at the same frequency in every group; results in M3.rds, M3_rare_state_type1.csv and
 ### figures/extra/check_M3_type1.pdf.
 ### Runtime: M1 about MSE.R x 2 fits per cell; at MSE.R = 500 on one core expect roughly 30 to 60 minutes for the default grid. M2 fits six groups with
 ### both estimators per dataset; at MSE.C.R = 300 and 5 mu values it takes about as long as M1.
@@ -149,7 +149,7 @@ if ("M1" %in% MSE.RUN) {
 # alleles and the parents differ by MSE.C.EFFECT, so cis = total = effect and trans = 0) and trans (only the parents differ, so trans = total = effect and
 # cis = 0); in each, the reference dispersion is the grid phi on the Sc side. mu takes MSE.C.N.MU values of the M1 grid and phi the M1 values. The bias,
 # variance and MSE of the log2 total, cis and trans contrasts are computed over the datasets in which the contrast is defined (every group phi > 0), with
-# that share (defined); the pipeline additionally requires every group to be resolved in its bootstrap, which this check does not simulate.
+# that share (defined), the rule by which the pipeline reports a log2 contrast.
 if ("M2" %in% MSE.RUN) {
   MSE.C.R          <- 300                   # simulated datasets per cell
   MSE.C.N.MU       <- 5                     # mu values taken from MSE.MU, evenly spread over its range
@@ -219,18 +219,18 @@ if ("M2" %in% MSE.RUN) {
 }
 
 ##############################################################################
-## M3. Rare cell states and the false-positive rate of the dispersion test (Methods: Null for the log2 dispersion contrasts, Informative estimates)
+## M3. Rare cell states and the false-positive rate of the dispersion test (Methods: Tests of contrasts)
 # A rare cell state (a few cells with expression J times the bulk) at the same frequency p in every group adds binomial noise in how many such cells each group
 # happens to contain, for example 3 in one parent and 0 in the other. That noise is part of the true sampling variance of a dispersion contrast. The pipeline's
-# shifted bootstrap resamples each group's own cells, so a group that sampled none of the rare cells never produces one in its resamples, and the null may be
-# too narrow for total and trans. cis is expected to be protected, because the state belongs to the cell and lifts both alleles together. M3 measures it:
-# every group shares mu, phi, p and J (all true contrasts zero), each dataset is tested with the pipeline's rule (shifted bootstrap null, resolution gate),
+# bootstrap resamples each group's own cells, so a group that sampled none of the rare cells never produces one in its resamples, and the bootstrap
+# distribution may be too narrow for total and trans. cis is expected to be protected, because the state belongs to the cell and lifts both alleles together. M3 measures it:
+# every group shares mu, phi, p and J (all true contrasts zero), each dataset is tested with the pipeline's rule (the bootstrap sign test, no test at a zero fit),
 # and the rejection rate among tested datasets is the type I error (mse_rare_cell()). p = 0 is the baseline. sd_ratio is the SD of the observed contrast over
-# datasets divided by the median SD of its null; above 1 means the null is too narrow. The rate among datasets whose parents' rare-cell counts differ by two
+# datasets divided by the median SD of its bootstrap replicates; above 1 means the bootstrap is too narrow. The rate among datasets whose parents' rare-cell counts differ by two
 # or more isolates the case of concern. Runtime grows with M3.R x M3.B x 6 fits per estimator; on 8 cores the defaults take roughly half an hour.
 if ("M3" %in% MSE.RUN) {
   M3.R     <- 200                         # datasets per cell
-  M3.B     <- 199                         # shifted bootstrap draws per dataset
+  M3.B     <- 199                         # bootstrap replicates per dataset (smallest p-value 2 / (B + 1) = 0.01)
   M3.P     <- c(0, 0.001, 0.003, 0.01)    # rare-state frequency per cell
   M3.J     <- c(10, 50)                   # fold of expression in the rare state
   M3.MU    <- MSE.MU[unique(round(quantile(seq_along(MSE.MU), c(0.3, 0.7))))]   # two mu values of the M1 grid
@@ -242,7 +242,7 @@ if ("M3" %in% MSE.RUN) {
   t0 <- Sys.time()
   M3 <- do.call(rbind, mclapply(seq_len(nrow(M3.GRID)), mse_rare_cell, grid = M3.GRID, expos = MSE.EXPOS, hyb_split = M3.HYB.SPLIT, R = M3.R, B = M3.B,
                                 ext_share = 0.5, estimators = M3.EST, streams = M3.STREAMS, mc.cores = CORES, mc.preschedule = FALSE))
-  cat(sprintf("M3: %d grid cells x %d datasets x %d null draws in %.1f min\n", nrow(M3.GRID), M3.R, M3.B, as.numeric(difftime(Sys.time(), t0, units = "mins"))))
+  cat(sprintf("M3: %d grid cells x %d datasets x %d bootstrap replicates in %.1f min\n", nrow(M3.GRID), M3.R, M3.B, as.numeric(difftime(Sys.time(), t0, units = "mins"))))
   print(M3[, c("mu", "phi", "p", "J", "estimator", "contrast", "tested", "type1_05", "type1_05_se", "sd_ratio", "rare_split_share", "type1_05_rare_split")], digits = 3, row.names = FALSE)
   write.csv(M3, file.path(CHECK.DIR, "M3_rare_state_type1.csv"), row.names = FALSE)
   M3.FLAG <- M3[M3$type1_05 - 0.05 > 2 * M3$type1_05_se & is.finite(M3$type1_05_se), ]

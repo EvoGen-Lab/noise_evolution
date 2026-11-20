@@ -10,7 +10,7 @@
 ### Definitions, fixed before any result (checked against estimator_leak.R; see results/checks/T0_audit.md):
 ###   trimming    the top ceiling(0.005 n) cells of a fit by scaled count y / O are left out (5 of 834 Pc, 7 of 1240 Pe, 15 of 2804 hybrid cells);
 ###   own slope   the OLS slope of Delta log2 phi (Cox-Reid) on Delta log2 mu across genes; T8, T9 and T12 keep genes whose groups all have phi > 0 and
-###               a lower likelihood bound on phi above zero (bound_pos, the bootstrap-free stand-in for the pipeline's resolution);
+###               a lower likelihood bound on phi above zero (bound_pos, a bootstrap-free marker of a dispersion above zero);
 ###   leak slope  the slope of [Delta log2 phi (Cox-Reid) - Delta log2 phi (moment)] on Delta log2 mu, equal to the Cox-Reid own slope minus the moment
 ###               own slope on the same genes;
 ###   a           the coefficient of A_i = M_i (1 - p_i) in E[(y - M)^2 - A_i] = a A_i + phi B_i (linear_excess_gene()), a variance term linear in the mean.

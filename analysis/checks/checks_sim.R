@@ -1,14 +1,15 @@
 ###############################################################
 ### checks_sim.R
 ### Simulation checks of the methods document (docs/methods.md), one block per check ID of the validation handoff: A1, A2, A4 and C7 (simulation arms),
-### B2 (simulation arm), B3, B4, C4, D5, D6, E1, E3 (simulation arm), F1(a), F2, F3 and F4, plus the packaging of the null calibration array (D1 to D4,
-### D7, D10) and a reduced local run of it. Every check simulates from the shared generator (sim_hybrid_dataset(), R/functions_checks.R) on the observed
+### B2 (simulation arm), B3, B4, C4, E3 (simulation arm), F1(a), F2, F3 and F4. The checks of the earlier permutation and shifted bootstrap nulls and of the
+### likelihood bounds (D1 to D7, D10, E1, H5) were retired with those tests; the bootstrap sign test that replaced them is checked by P1
+### (analysis/checks/sign_boot_test.R). Every check simulates from the shared generator (sim_hybrid_dataset(), R/functions_checks.R) on the observed
 ### design when the Section 2 checkpoint exists, and on stand-in offsets with the observed coefficients of variation otherwise (recorded in each result).
 ### Each result goes to results/checks/<ID>.rds with a row in results/checks/summary.csv; figures go to figures/extra/.
 ###
 ### Random numbers: every grid row or dataset draws from its own L'Ecuyer-CMRG stream (check_streams()), so a result does not depend on the number of
 ### cores. CHECK.SIZE scales the replicate counts (1 = the sizes below). RUN.CHECKS selects the checks to run.
-### Runs locally; no cluster output is needed. The calibration array itself runs on the cluster (null_calibration_grid.R, null_calibration.sub).
+### Runs locally; no cluster output is needed.
 ###############################################################
 library(here); source(here("R", "setup.R")); source(here("R", "functions_checks.R"))
 library(parallel)
@@ -17,7 +18,7 @@ CHECK.SCRIPT <- "analysis/checks/checks_sim.R"
 CORES        <- if (.Platform$OS.type == "windows") 1 else max(1, detectCores() - 1)   # mclapply forks, so Windows runs on one core
 if (!exists("CHECK.SIZE")) CHECK.SIZE <- 1   # a value set before sourcing (analysis/doc_checks.R) is kept
 SEED.CHECKS  <- 2026
-if (!exists("RUN.CHECKS")) RUN.CHECKS <- c("A2", "A1", "A7", "A9", "A10", "B2", "B3", "B4", "E1", "F1", "F2", "F3", "F4", "C4", "A4", "E3", "D5", "D6", "CAL", "CALMERGE")
+if (!exists("RUN.CHECKS")) RUN.CHECKS <- c("A2", "A1", "A7", "A9", "A10", "B2", "B3", "B4", "F1", "F2", "F3", "F4", "C4", "A4", "E3")
 set.seed(SEED.SECTION + 20)
 
 ## The observed design: offsets, hybrid depth factors and libraries, c-bar and sigma2_c from the Section 2 checkpoint when it exists.
@@ -114,28 +115,6 @@ if ("A10" %in% RUN.CHECKS) {
   check_save("A10", A10, "run", headline = c(sprintf("moment, equal offsets, %s overlap %.1f: N cov %.3f (MC SE %.3f) against formula %.3f", x$family, x$overlap, x$N_cov, x$N_cov_mc_se, x$N_cov_formula),
                                              sprintf("%s %s offsets %s overlap %.1f: N cov %.3f (MC SE %.3f), cor %.3f", A10$estimator, A10$offsets, A10$family, A10$overlap, A10$N_cov, A10$N_cov_mc_se, A10$cor)[A10$estimator != "moment" | A10$offsets != "equal"]),
              mc_error = sprintf("MC SE per row; cor SE %.4f", 1 / sqrt(ceiling(20000 * CHECK.SIZE) - 3)), script = CHECK.SCRIPT)
-}
-
-##############################################################################
-## E1. Boundary likelihood-ratio test, upper bound and classes (Methods: Informative estimates)
-# (a) At phi = 0 the statistic is an equal mixture of a point mass at zero and a chi-square with one degree of freedom, so the test at 2.71 has size 5%.
-# (b) The upper likelihood bound is where the adjusted likelihood ratio from phi-hat reaches the same critical value (2.71, a one-sided 95% bound; the
-# document says "upper 95% likelihood bound" without naming the critical value, see mismatches.md); its coverage is P(phi <= bound). (c) The class shares
-# when the true phi Mbar is near the near-zero threshold 0.1.
-if ("E1" %in% RUN.CHECKS) {
-  Ga <- expand.grid(N = c(200, 800, 1600), Mbar = c(0.05, 0.2, 1, 5), cv = c(0.3, 0.7, 1), phi = c(0, 0.01, 0.1, 0.5))
-  Gc <- do.call(rbind, lapply(c(0.2, 1, 5), function(m) data.frame(N = 800, Mbar = m, cv = 0.7, phi = c(0.02, 0.05, 0.1, 0.2, 0.5) / m)))
-  G <- rbind(Ga, Gc); S <- check_streams(nrow(G), SEED.CHECKS + 3)
-  E1 <- do.call(rbind, mclapply(seq_len(nrow(G)), e1_row, grid = G, nrep = ceiling(1000 * CHECK.SIZE), streams = S, mc.cores = CORES))
-  E1$part <- c(rep("ab", nrow(Ga)), rep("c", nrow(Gc)))
-  z <- E1[E1$part == "ab" & E1$phi == 0, ]; cvg <- E1[E1$part == "ab" & E1$phi > 0, ]; cc <- E1[E1$part == "c", ]
-  check_save("E1", E1, "run",
-             headline = c(sprintf("(a) size at phi = 0: median %.4f, range %.4f to %.4f over %d cells (N, Mbar, CV)", median(z$reject), min(z$reject), max(z$reject), nrow(z)),
-                          sprintf("(b) coverage of the upper bound: median %.4f, range %.4f to %.4f", median(cvg$cover_upper), min(cvg$cover_upper), max(cvg$cover_upper)),
-                          sprintf("(c) phi Mbar = 0.1: class2 share %s, class3 share %s at Mbar %s", paste(sprintf("%.3f", cc$class2[abs(cc$phiMbar - 0.1) < 1e-9]), collapse = "/"),
-                                  paste(sprintf("%.3f", cc$class3[abs(cc$phiMbar - 0.1) < 1e-9]), collapse = "/"), paste(cc$Mbar[abs(cc$phiMbar - 0.1) < 1e-9], collapse = "/")),
-                          sprintf("phi Mbar = 0.02 called class1 (resolved above zero): %s", paste(sprintf("%.3f", cc$class1[abs(cc$phiMbar - 0.02) < 1e-9]), collapse = "/"))),
-             mc_error = sprintf("binomial SE of a 5%% rate with %d genes: %.4f", ceiling(1000 * CHECK.SIZE), binom_se(0.05, ceiling(1000 * CHECK.SIZE))), script = CHECK.SCRIPT)
 }
 
 ##############################################################################
@@ -249,10 +228,10 @@ if (any(c("F3", "F4") %in% RUN.CHECKS)) {
 
 ##############################################################################
 ## C4. Internal pilot invariance (Methods: Estimating partition fractions; Wittes and Brittain 1990)
-# Under the null the cis and trans tests should keep their size whether f is estimated from bootstrap variances of the same cells or fixed in advance.
+# Under the null the cis and trans sign tests should keep their size whether f is estimated from bootstrap variances of the same cells or fixed in advance.
 if ("C4" %in% RUN.CHECKS) {
   nd <- ceiling(40 * CHECK.SIZE); S <- check_streams(nd, SEED.CHECKS + 10)
-  C4 <- do.call(rbind, mclapply(seq_len(nd), c4_dataset, G = 100, mu_grid = c(0.3, 1, 3, 10), phi = 0.3, B_pilot = 50, n_perm = 500, f_fixed = 0.4, pools = POOLS,
+  C4 <- do.call(rbind, mclapply(seq_len(nd), c4_dataset, G = 100, mu_grid = c(0.3, 1, 3, 10), phi = 0.3, B_pilot = 50, B = 499, f_fixed = 0.4, pools = POOLS,
                                 streams = S, mc.cores = CORES))
   tab <- do.call(rbind, lapply(c("p_cis_est", "p_trans_est", "p_cis_fixed", "p_trans_fixed"), function(k) data.frame(arm = k, size_table(C4[[k]]))))
   check_save("C4", list(pvalues = C4, size = tab), "run",
@@ -290,104 +269,3 @@ if ("E3" %in% RUN.CHECKS) {
              mc_error = sprintf("binomial SE of 95%% coverage with %d intervals: %.4f", ceiling(200 * CHECK.SIZE), binom_se(0.95, ceiling(200 * CHECK.SIZE))), script = CHECK.SCRIPT)
 }
 
-##############################################################################
-## D5. Raw dispersion null: projections (a) and the reuse of the log2 draws for total and cis (b) (Methods: Null for the raw dispersion contrasts)
-if ("D5" %in% RUN.CHECKS) {
-  n <- ceiling(1e4 * CHECK.SIZE); S <- check_streams(n, SEED.CHECKS + 13)
-  D5a <- as.data.frame(t(vapply(seq_len(n), d5_case, numeric(5), streams = S)))
-  G <- expand.grid(Mbar = c(1, 5), phi = c(0.05, 0.3, 1)); S <- check_streams(nrow(G), SEED.CHECKS + 14)
-  D5b <- do.call(rbind, mclapply(seq_len(nrow(G)), d5b_row, grid = G, n_genes = ceiling(150 * CHECK.SIZE), n_sim = 200, offsets = POOLS$O_Pc, n_cells = 800, streams = S, mc.cores = CORES))
-  check_save("D5", list(a = D5a, b = D5b), "run",
-             headline = c(sprintf("(a) %d cases: raw |sum lambda phi0| > 1e-12 in %d, negative null values %d; log2 projection errors > 1e-12: %d; kinetic: %d", n,
-                                  sum(D5a$raw_target_err > 1e-12 & D5a$raw_reachable == 1), sum(D5a$raw_negative), sum(D5a$log2_err > 1e-12, na.rm = TRUE), sum(D5a$kin_err > 1e-12, na.rm = TRUE)),
-                          sprintf("(b) %s Mbar %g phi %g: size %.3f (SE %.3f)", D5b$arm, D5b$Mbar, D5b$phi, D5b$reject_0.05, D5b$se_0.05)),
-             mc_error = "binomial SE per arm", script = CHECK.SCRIPT)
-}
-
-##############################################################################
-## D6. Midparent mean null: the null allele means average to the midparent and keep the cis contrast (Methods: Midparent)
-# The construction of null_contrasts_one(): fitted allele means mu*_r (MU of HYB.SC and HYB.SE), corrected by .correct_means(), and each allele's expected
-# counts M-hat scaled by mu_MP / mu_H. The expected counts are passed through the same corrections, so the null mean contrast must be zero and the cis
-# contrast unchanged, for random fitted means and c-bar.
-if ("D6" %in% RUN.CHECKS) {
-  n <- ceiling(1e4 * CHECK.SIZE); S <- check_streams(n, SEED.CHECKS + 15)
-  D6 <- t(vapply(seq_len(n), d6_case, numeric(2), streams = S))
-  check_save("D6", D6, "code", headline = sprintf("%d random cases: |mid null contrast| > 1e-12 in %d, |change of cis| > 1e-12 in %d (size: D1 mean_mid in the calibration array)",
-                                                  n, sum(D6[, "mid"] > 1e-12), sum(D6[, "cis"] > 1e-12)), mc_error = "exact counts", script = CHECK.SCRIPT)
-}
-
-##############################################################################
-## Null calibration array (D1 to D4, D7, D10): inputs for cluster/scripts/null_calibration_grid.R and a reduced local run
-# The cluster job runs every task of calib_task_grid() with the sizes below; the local run takes a few tasks at reduced size to confirm the pipeline
-# runs end to end and to give first numbers, marked "reduced".
-if ("CAL" %in% RUN.CHECKS) {
-  CAL.GRID <- calib_task_grid(); CAL.G <- 100; CAL.N.SIM <- 1000; CAL.N.PERM <- 1000; CAL.SEED <- SEED.CHECKS + 16
-  CAL.STREAMS <- check_streams(nrow(CAL.GRID), CAL.SEED)
-  save(CAL.GRID, CAL.G, CAL.N.SIM, CAL.N.PERM, CAL.SEED, CAL.STREAMS, POOLS, file = file.path(INPUT.DIR, "null_calibration_inputs.rda"))
-  cat(sprintf("Saved null_calibration_inputs.rda: %d tasks x %d genes, N.SIM %d, N.PERM %d\n", nrow(CAL.GRID), CAL.G, CAL.N.SIM, CAL.N.PERM))
-  LOCAL.TASKS <- which(CAL.GRID$mean == 1 & CAL.GRID$phi == 0.3 & CAL.GRID$omega == 0.75 & CAL.GRID$family == "gamma" &
-                         (CAL.GRID$design %in% c("equal", "means") | (CAL.GRID$design == "level" & CAL.GRID$par == 1.5) | (CAL.GRID$design == "dispratio" & CAL.GRID$par == 4)))
-  CAL.LOCAL <- do.call(rbind, lapply(LOCAL.TASKS, calib_dataset, grid = CAL.GRID, G = ceiling(40 * CHECK.SIZE), n_sim = 200, n_perm = 400, pools = POOLS, streams = CAL.STREAMS, cores = CORES))
-  CAL.LOCAL.SIZE <- calib_size_summary(CAL.LOCAL)
-  check_save("D1_local", list(pvalues = CAL.LOCAL, size = CAL.LOCAL.SIZE), "reduced",
-             headline = c(sprintf("%s %s: reject at 0.05 %.3f (SE %.3f, n %d)", CAL.LOCAL.SIZE$design, CAL.LOCAL.SIZE$test, CAL.LOCAL.SIZE$reject_0.05, CAL.LOCAL.SIZE$se_0.05, CAL.LOCAL.SIZE$n)),
-             mc_error = "binomial SE per test; reduced size (N.SIM 200, N.PERM 400)", script = CHECK.SCRIPT)
-}
-
-##############################################################################
-## Null calibration array results (D1 to D4, D7, D10), read from the cluster outputs
-# Run after the array finishes and its null_calibration_output_<k>of<K>.rda files are copied to OUTPUT.DIR. The task keys must cover the grid of the inputs.
-if ("CALMERGE" %in% RUN.CHECKS) {
-  CAL.FILES <- list.files(OUTPUT.DIR, "^null_calibration_output_[0-9]+of[0-9]+\\.rda$", full.names = TRUE)
-  if (!length(CAL.FILES)) {
-    for (id in c("D1", "D2", "D3", "D4", "D7", "D10")) check_save(id, NULL, "not run", headline = "no null_calibration_output files in OUTPUT.DIR (cluster job pending)", script = CHECK.SCRIPT)
-  } else {
-    load(file.path(INPUT.DIR, "null_calibration_inputs.rda"))
-    CAL <- list()
-    for (f in CAL.FILES) { e <- new.env(); load(f, envir = e); CAL[[f]] <- e$CAL.PART }
-    CAL <- do.call(rbind, CAL)
-    stopifnot("calibration outputs do not cover every task of the inputs" = setequal(unique(CAL$task), CAL.GRID$task))
-    gam <- CAL$family == "gamma"
-    D1 <- calib_size_summary(CAL[gam & CAL$design %in% c("equal", "means"), ], strata = c("mean", "phi"))
-    D1.MAIN <- D1[!grepl("^w", D1$test), ]
-    check_save("D1", D1, "run", headline = c(size_headline(D1.MAIN[D1.MAIN$design == "equal", ], "equal design, NB, by mean and phi"),
-                                             size_headline(D1.MAIN[D1.MAIN$design == "means", ], "means design (dispersion nulls), NB, by mean and phi"),
-                                             sprintf("KS p < 0.01 in %d of %d tests", sum(D1.MAIN$ks_p < 0.01), nrow(D1.MAIN))),
-               mc_error = "binomial SE per test and stratum", script = CHECK.SCRIPT)
-    # D1_boundary: the departure near the zero boundary. The pipeline tests a dispersion, burst size or kinetic balance contrast only when every group is resolved
-    # (D1 reads those p-values); the same nulls on the genes left untested (some group above RESOLVED.ZERO.MAX of zero refits) are kept in the _p_all columns.
-    UNRES <- CAL[gam & CAL$design %in% c("equal", "means"), ]
-    for (cn in grep("_p_all$", names(UNRES), value = TRUE)) { base <- sub("_all$", "", cn); UNRES[[base]] <- ifelse(is.na(UNRES[[base]]), UNRES[[cn]], NA_real_) }
-    UNRES[grep("^mean_.*_p$", names(UNRES), value = TRUE)] <- NA_real_                       # the mean nulls need no resolution and are read in D1
-    D1B <- calib_size_summary(UNRES, strata = c("mean", "phi")); D1B <- D1B[D1B$n > 0 & !grepl("^w", D1B$test), ]
-    check_save("D1_boundary", D1B, "run", headline = if (nrow(D1B)) c(size_headline(D1B, "genes with an unresolved group (untested in the pipeline), NB"),
-                                                                     sprintf("%d test-stratum cells with at least one unresolved gene", nrow(D1B))) else "no gene had an unresolved group",
-               mc_error = "binomial SE per test and stratum", script = CHECK.SCRIPT)
-    D2 <- calib_size_summary(CAL[CAL$design == "dispratio", ])
-    check_save("D2", D2, "run", headline = vapply(sort(unique(D2$par)), function(r) size_headline(D2[D2$par == r, ], paste("phi ratio", r)), ""), mc_error = "binomial SE per test", script = CHECK.SCRIPT)
-    D3 <- calib_size_summary(CAL[CAL$design == "level", ], strata = "omega")
-    check_save("D3", D3, "run", headline = sprintf("k %g, omega %g, %s: size %.3f (SE %.3f)", D3$par, D3$omega, ifelse(grepl("paired", D3$test), "arm B (pairs kept)", "arm A (pipeline)"), D3$reject_0.05, D3$se_0.05),
-               mc_error = "binomial SE per row", script = CHECK.SCRIPT)
-    D4 <- list(family = calib_size_summary(CAL[CAL$design == "equal" & !gam, ]), s2d_known = calib_size_summary(CAL[CAL$design == "s2d_known", ]),
-               s2d_error = aggregate(cbind(err = sigma_d_hat - sigma_d_true) ~ mean + phi + omega, CAL[CAL$design == "equal" & gam, ], function(x) c(median = median(x), mad = mad(x))),
-               private_truncated = aggregate(private_truncated ~ mean + phi + omega, CAL[CAL$design == "equal" & gam, ], mean))
-    check_save("D4", D4, "run", headline = c(size_headline(D4$family[D4$family$family == "lognormal" & !grepl("^w", D4$family$test), ], "(a) lognormal truth"),
-                                             size_headline(D4$family[D4$family$family == "bimodal" & !grepl("^w", D4$family$test), ], "(a) bimodal truth"),
-                                             size_headline(D4$s2d_known[!grepl("^w", D4$s2d_known$test), ], "(b) true sigma2_d in the null"),
-                                             sprintf("(c) private variance truncated: share of genes from %.3f to %.3f across strata", min(D4$private_truncated$private_truncated), max(D4$private_truncated$private_truncated))),
-               mc_error = "binomial SE per test", script = CHECK.SCRIPT)
-    D7 <- D1[grepl("^(bsize|kbal)_", D1$test) & D1$design == "equal", ]
-    check_save("D7", D7, "run", headline = c(size_headline(D7[grepl("^kbal_", D7$test), ], "kappa, f_kappa partition (shared cells)"),
-                                             size_headline(D7[grepl("^bsize_", D7$test), ], "burst size, f_zeta partition (shared cells)")), mc_error = "binomial SE per test", script = CHECK.SCRIPT)
-    # H5: with every true contrast zero (equal design and its non-gamma and known-sigma_d variants), the mean estimate over genes is the bias of the full
-    # estimation chain, read against the spread of the estimates over genes.
-    H5 <- contrast_bias_summary(CAL[CAL$design %in% c("equal", "s2d_known"), ], strata = c("design", "family", "mean", "phi", "omega"))
-    H5$z <- H5$bias / H5$bias_se
-    SB <- summary_by(H5, "quantity", "bias_over_sd", z = "z", keys = c("mode", "family", "mean", "phi", "omega"))
-    check_save("H5", H5, "run", headline = sprintf("%s: |bias| > 2 MC SE in %d of %d cells, largest |bias| / SD %.3f at %s", SB$level, SB$n_z2, SB$n, SB$max_abs, SB$at),
-               mc_error = "bias_se per row (SD over genes / sqrt(genes))", script = CHECK.SCRIPT)
-    D10 <- D1[grepl("^w", D1$test), ]
-    check_save("D10", D10, "run", headline = c(size_headline(D10[D10$design == "equal", ], "weighted estimator, equal design"), size_headline(D10[D10$design == "means", ], "weighted estimator, means design")),
-               mc_error = "binomial SE per test", script = CHECK.SCRIPT)
-  }
-}

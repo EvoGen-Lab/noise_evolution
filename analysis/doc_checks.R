@@ -11,7 +11,7 @@
 ###   M4    whether the state-conditioned layer (analysis.R Section 2.5) flags the false calls that a rare state makes (check M3), with the state shared by
 ###         every group or present in the parents only, the two-culture case of the data (rare_cond_cell()); needs only the Section 1 checkpoint.
 ### The checks keep their own seeds and streams, so a part reruns identically on its own. Cluster-dependent parts read outputs already copied back:
-### the null calibration array (checks_sim.R CALMERGE: D1 to D4, D7, D10, H5) and the artefact array (artefact_tests.R T0, T8, T12).
+### the sign-test array (sign_boot_test.R MERGE: P1) and the artefact array (artefact_tests.R T0, T8, T12).
 ###############################################################
 library(here); source(here("R", "setup.R")); source(here("R", "functions_checks.R"))
 library(parallel)
@@ -46,18 +46,14 @@ DOC.CHECKS <- data.frame(rbind(
   c("Transcriptome share corrections", "The share corrections close the loop; fits truncated by the correction", "B3, B6", "sim, data", "Section 2 (B6)"),
   c("Per-genome hybrid estimates", "Route A against the summed counts; the per-genome mean", "B5, F5, ROUTE.CHECK", "data, pipeline", "Section 2"),
   c("Per-genome hybrid estimates; dominance", "The dominance contrasts are unbiased when the hybrid departs from its parents", "DOM1", "DOM1", "none (observed design with Section 2)"),
-  c("Informative estimates", "Size of the boundary test and coverage of the likelihood bounds", "E1", "sim", "none"),
-  c("Informative estimates", "Tested and significant contrasts across thresholds; untested contrasts; bound calls", "E2, E3, E4", "data", "Section 2"),
+  c("Contrasts", "Gene sets and exclusions per contrast and scale (observed-fit rules)", "E4", "data", "Section 2"),
   c("Contrasts: bootstrap intervals", "Coverage of the percentile intervals with zero refits at -Inf", "E3", "sim", "none"),
   c("Statistical power", "Partition fractions and sizes; cis variance falls as 1/n; equal precision; depth balance; call stability", "C1, C2, C3, C6", "data", "Section 2"),
-  c("Statistical power", "Internal pilot invariance", "C4", "sim", "none"),
   c("Model assumptions: large samples", "Every partition keeps about 800 cells", "PARTITION.REPORT", "pipeline", "Section 2"),
   c("Separate partitions for each quantity", "Mean and dispersion errors covary on shared cells by mu (E[(a - 1)^3] - 2 phi^2) / N", "A4, A10, C7", "sim, data", "Section 2 (data arms)"),
-  c("Null distributions", "Size of every null at the study's parameters, near the boundary, with non-gamma factors and with the weighted estimator", "D1, D1_boundary, D2, D3, D4, D7, D10", "sim", "null_calibration array outputs"),
-  c("Null distributions", "Bias of the full estimation chain when every true contrast is zero", "H5", "sim", "null_calibration array outputs"),
-  c("Null distributions", "Raw-scale projections and reuse of the log2 draws; the midparent mean null", "D5, D6", "sim", "none"),
-  c("Null distributions (proposed)", "The bootstrap sign test of the dispersion-family contrasts: type I error for Poisson and small equal dispersions, power, cost of ties on the null side", "P1, P1_local", "sign_boot", "sign_boot array outputs (P1); Section 1 for the depths"),
-  c("Null distributions: p-values", "Genes at the p-value floor and the reach of BH", "D9", "data", "Section 2"),
+  c("Tests of contrasts", "The bootstrap sign test: type I error for Poisson and small equal dispersions, power, cost of ties on the null side", "P1, P1_local", "sign_boot", "sign_boot array outputs (P1); Section 1 (P1_local)"),
+  c("Tests of contrasts", "The cis and trans sign tests keep their size when f is estimated from the same cells", "C4", "sim", "none"),
+  c("Multiple testing", "Genes at the p-value floor 2 / (B + 1) and the reach of BH", "D9", "data", "Section 2"),
   c("Appendix A", "Bias of the moment estimator; convergence and agreement on the data", "F1", "sim, data", "Section 2 (data arm)"),
   c("Appendix B", "Asymptotics, the observed N and unequal intrinsic variances", "F2, F3, F4", "sim", "none"),
   c("Model assumptions (departures from the NB)", "Why the data depart from the NB: low-quality cells, ambient RNA, depth scaling, cell states, outlier cells", "T0, T1, T2, T3, T4, T6, T7, T8, T9, T10, T11, T12", "artefact", "Section 1; artefact array outputs (T0, T8, T12)"),
