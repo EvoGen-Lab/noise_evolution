@@ -67,9 +67,9 @@ for (k in seq_along(chunks)) {
   ## reused across the SIZE.RATIO sweep, so the sweep isolates the effect of
   ## SIZE.RATIO.
   ##
-  ## Calling power at a Benjamini-Hochberg FDR: a dataset whose two groups are
-  ## resolved gets a shifted bootstrap p-value (NI resamples of each group, as
-  ## in the pipeline); an unresolved dataset is untested and counts as not called.
+  ## Calling power at a Benjamini-Hochberg FDR: a dataset whose observed fits are
+  ## both positive gets a bootstrap sign-test p-value (NI resamples of each group, as
+  ## in the pipeline); a dataset with a zero or failed observed fit is untested and counts as not called.
   ## For each SIZE.RATIO above 1, the p-values of a random subset of
   ## true-difference datasets (fraction PI1 of the pooled set) are pooled
   ## with the SIZE.RATIO = 1 datasets, which supply the null. BH is applied

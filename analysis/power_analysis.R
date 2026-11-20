@@ -3,12 +3,12 @@
 ### Section 10 of the pipeline: power of the pipeline's test for
 ### a burst-frequency (NB size) difference between two groups,
 ### simulated over mean expression, cell count, burst frequency and
-### size ratio. The dispersion contrasts are tested as in Section 2.3:
-### against the shifted bootstrap null, and only when every group is
-### resolved (at most RESOLVED.ZERO.MAX of the resamples at zero).
+### size ratio. The contrasts are tested as in Section 2.3: by the
+### bootstrap sign test, with a failed refit counted as zero and no
+### test where an observed fit is zero or failed.
 ###
 ### Run after analysis.R has written the Section 2 checkpoint
-### (section2_checkpoint.rda, which supplies PR, N.PERM and N.SIM).
+### (section2_checkpoint.rda, which supplies PR and N.BOOT).
 ### Functions live in R/functions_power.R (this analysis and the
 ### cluster script power_grid.R) and R/functions.R (shared NB fit).
 ### Cluster round trip: this script writes power_inputs.rda (10.1),
@@ -25,16 +25,13 @@ library(here)
 source(here("R", "setup.R"))
 source(here("R", "functions_power.R"))
 
-# PR (per-gene null p-values with BH q-values), N.PERM (permutations of the mean nulls) and N.SIM (draws of the shifted
-# bootstrap nulls of the dispersion contrasts) come from the Section 2 checkpoint
+# PR (per-gene sign-test p-values with BH q-values) and N.BOOT (bootstrap replicates of the sign test) come from the Section 2 checkpoint
 SEC2 <- new.env()
 load(ckpt_path(2), envir = SEC2)
-if (!all(c("PR", "N.PERM", "N.SIM") %in% ls(SEC2)))
-  stop("The Section 2 checkpoint lacks PR, N.PERM or N.SIM. Checkpoints written before methods revision 18037 do not hold ",
-       "N.SIM; rerun Section 2, whose checkpoint save includes it.")
+if (!all(c("PR", "N.BOOT") %in% ls(SEC2)))
+  stop("The Section 2 checkpoint lacks PR or N.BOOT. Checkpoints written before the bootstrap sign test do not hold N.BOOT; rerun Section 2.")
 PR     <- SEC2$PR
-N.PERM <- SEC2$N.PERM
-N.SIM  <- SEC2$N.SIM
+N.BOOT <- SEC2$N.BOOT
 # SEC2 stays loaded for Section 10.9, which reads the real design parameters
 
 console_start(10)
@@ -45,9 +42,9 @@ set.seed(SEED.SECTION + 10)
 # Run through 10.1 to build power_inputs.rda, then submit
 # power.sub (a SLURM job array) to the cluster. Once every power_output_<k>of<K>.rda
 # exists, run 10.2 onward to reshape them back into POWER and reproduce every plot.
-# PR (null p-values with BH q-values) and N.SIM come from the Section 2 checkpoint:
+# PR (sign-test p-values with BH q-values) and N.BOOT come from the Section 2 checkpoint:
 # PR sets PI1, the fraction of truly different genes in the simulated mixture, and
-# N.SIM matches the number of null draws to the gene-level dispersion test.
+# N.BOOT matches the number of bootstrap replicates to the gene-level test.
 
 
 # Significance level for power analysis. Power is judged at this Benjamini-Hochberg
@@ -71,7 +68,7 @@ CELL.RATIO <- 1
 EXPOSURE.CV <- 0.8
 
 NJ <- 1000 # Simulated datasets per row
-NI <- N.SIM # Shifted bootstrap null draws per dataset, matched to the gene-level dispersion test
+NI <- N.BOOT # Bootstrap replicates per dataset, matched to the gene-level sign test
 PI1 <- min(0.5, max(0.02, mean(PR$disp_total_q < ALPHA, na.rm = TRUE)))
 cat(sprintf("PI1 (fraction of genes called by BH at q < %.2f, parental burst frequency) = %.3f\n", ALPHA, PI1))
 N.MIX <- 50 # Random mixtures averaged per grid cell
@@ -241,11 +238,9 @@ console_stop()
 ##############################################################################
 # Sections 10.1 to 10.8 simulate one two-group contrast. The pipeline tests two others:
 # cis (the alleles of the same hybrid cells) and trans (the parental ratio minus the hybrid allele ratio).
-# Sections 10.9 to 10.14 simulate each with the data structure and the nulls the pipeline uses
-# (power_modes_row() in R/functions_power.R, null helpers in R/functions.R): on the dispersion axis the
-# shifted bootstrap null with the resolution gate, on the mean axis the permutation nulls (the within-cell
-# allele swap for cis, pooled parent and hybrid cells for trans), so the modes are directly comparable at
-# the same effect and depth. The effect stays SIZE.RATIO, a
+# Sections 10.9 to 10.14 simulate each with the data structure and the test the pipeline uses
+# (power_modes_row() in R/functions_power.R): the bootstrap sign test on the mean and the dispersion axis,
+# with the hybrid cells resampled whole, so the modes are directly comparable at the same effect and depth. The effect stays SIZE.RATIO, a
 # ratio of NB sizes (burst frequency), in log2 units:
 #   null          ratio 1 everywhere
 #   cis effect    hybrid allele ratio = ratio, parental ratio = ratio (trans = 0)
@@ -254,9 +249,7 @@ console_stop()
 # an intrinsic gamma factor v, so the alleles' latent correlation is phi and each allele has latent CV^2
 # 1 / SIZE; phi = 0 gives unpaired alleles and, as a control, cis and trans should then follow the
 # total result. The counts are Poisson, so the marginal law is close to negative binomial; the check below
-# confirms the recovered size. The trans mean null runs in two versions on the same data: the pipeline's
-# independent shuffles (mode "trans") and a pairing-preserving swap (perm_trans_pool_paired(), mode
-# "trans_paired", mean axis only), so the SIZE.RATIO == 1 type I error compares them.
+# confirms the recovered size.
 
 # Real design parameters from the Section 2 checkpoint: hybrid and parent cell counts, the split
 # fraction f* the pipeline chose, the hybrid-to-parent per-allele depth ratio, and the allele
@@ -303,13 +296,13 @@ FRAC.M       <- sort(unique(round(c(0.1, 0.2, 0.3, 0.4, 0.5, MODES.REAL$f_star[i
 DEPTH.RATIO.M <- round(MODES.REAL$depth, 3)
 SIZE.RATIO.M <- c(1, 1.25, 1.5, 2, 3, 4, 6, 8)
 NJ.M <- 200    # simulated datasets per row
-NI.M <- 2000   # permutations (mean axis) and shifted bootstrap draws (dispersion axis) per dataset; the pipeline uses N.PERM and N.SIM
-# BH power needs the null p-values to resolve small values: the smallest p-value is 1 / (NI.M + 1), and BH
+NI.M <- 2000   # bootstrap replicates per dataset for the sign test on both axes; the pipeline uses N.BOOT
+# BH power needs the null p-values to resolve small values: the smallest p-value is 2 / (NI.M + 1), and BH
 # over the pooled null and alternative datasets rejects only when enough alternatives sit at or below
 # ALPHA * rank / total. A small NI.M therefore makes the BH power curve a step that stays at zero until the raw power
 # is high. The number of alternatives that must reach the p-value floor is checked here, and the tables fall back
 # to the raw rejection rate (p < ALPHA) when it is large.
-BH.NEED <- ceiling((NJ.M + round(NJ.M * PI1 / (1 - PI1))) * (1 / (NI.M + 1)) / ALPHA)
+BH.NEED <- ceiling((NJ.M + round(NJ.M * PI1 / (1 - PI1))) * (2 / (NI.M + 1)) / ALPHA)
 MODES.PW.COL <- if (BH.NEED <= 0.1 * round(NJ.M * PI1 / (1 - PI1))) "power_bh" else "power_raw"
 cat(sprintf("BH needs %d alternatives at the p-value floor (of %d); tables and curves use %s\n", BH.NEED, round(NJ.M * PI1 / (1 - PI1)), MODES.PW.COL))
 GRID.M <- expand.grid(m = seq_along(MEAN.READS.M), p = seq_along(SIZE.M), h = seq_along(PHI.M),
@@ -330,7 +323,7 @@ MODES.INPUTS <- list(GRID = GRID.M, MEAN.READS = MEAN.READS.M, SIZE = SIZE.M, PH
 ## Reads power_modes_inputs.rda (saved below), writes one power_modes_output_<k>of<K>.rda per array task
 ## (ROWS.PART, RESULTS.PART), reassembled in 10.10
 save(MODES.INPUTS, file = file.path(INPUT.DIR, "power_modes_inputs.rda"))
-cat(sprintf("power modes inputs written: %d rows x %d SIZE.RATIO values, cis and trans (and the paired trans mean null)\n", nrow(GRID.M), length(SIZE.RATIO.M)))
+cat(sprintf("power modes inputs written: %d rows x %d SIZE.RATIO values, cis and trans\n", nrow(GRID.M), length(SIZE.RATIO.M)))
 cat("Submit power_modes.sub (job array) now; resume below once every power_modes_output_<k>of<K>.rda exists.\n")
 ## ---- end cluster round trip ----
 
@@ -346,7 +339,7 @@ stopifnot(!any(vapply(MODES.RES, is.null, logical(1))))   # every array task mus
 MODES <- modes_long(MODES.RES, GRID.M, MEAN.READS.M, SIZE.M, PHI.M, FRAC.M, DESIGN.M, DEPTH.RATIO.M)
 MODES.POWER <- MODES$power
 MODES.SD    <- MODES$sd_null
-MODES.COL   <- c(cis = SPECIES.COLOR[["Sc"]], trans = SPECIES.COLOR[["Se"]])     # the dispersion axis has one trans null, the shifted bootstrap
+MODES.COL   <- c(cis = SPECIES.COLOR[["Sc"]], trans = SPECIES.COLOR[["Se"]])
 MODES.LTY   <- c(cis = 1, trans = 1)
 
 ## 10.11 Power against effect size, by mode, at every grid point (size axis)
@@ -397,11 +390,11 @@ for (mr in MEAN.READS.M) for (sz in SIZE.M) {
 plot.new(); legend("center", legend = paste("phi =", PHI.M), col = colorRampPalette(POWER.COLOR)(length(PHI.M)), pch = 19, lty = 1, bty = "n")
 dev.off()
 
-## 10.13 Type I error at ratio 1, by mode and null version, and the split fraction at which cis and trans cross
+## 10.13 Type I error at ratio 1, by mode, and the split fraction at which cis and trans cross
 # The SIZE.RATIO == 1 entry of power_bh is the raw false-positive rate at p < ALPHA among the tested datasets. The
 # binomial SE with NJ.M datasets is sqrt(ALPHA * (1 - ALPHA) / NJ.M). The size axis carries the effect; the mean axis has
 # no effect in this parametrization, so its rate is a second control. The tested share at ratio 1 (MODES.TESTED) is the
-# fraction of datasets whose groups are all resolved, which the dispersion test needs.
+# fraction of datasets whose observed fits are all positive, which the log2 test needs.
 MODES.TYPE1 <- aggregate(power_bh ~ mode + axis + phi, data = MODES.POWER[MODES.POWER$ratio == 1, ], FUN = function(x) c(mean = mean(x), max = max(x)))
 MODES.TYPE1 <- do.call(data.frame, MODES.TYPE1)
 names(MODES.TYPE1) <- c("mode", "axis", "phi", "type1_mean", "type1_max")

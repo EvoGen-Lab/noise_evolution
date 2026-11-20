@@ -4,7 +4,7 @@
 ### estimate per grid row (mean reads x size x phi x f x design x depth
 ### ratio) on a FORK cluster, saves the output. Each row covers every
 ### SIZE.RATIO value, the cis and trans contrasts on paired-allele hybrid
-### data with the pipeline's nulls (power_modes_row()).
+### data with the pipeline's bootstrap sign test (power_modes_row()).
 ### Mirrors power_grid.R.
 ###
 ### Inputs  : power_modes_inputs.rda (MODES.INPUTS, a list holding GRID,
@@ -60,9 +60,8 @@ for (k in seq_along(chunks)) {
   ## power_modes_row: power of the cis and trans contrasts for one row of GRID across every SIZE.RATIO
   ## value; the unit of work that power_modes_grid.R distributes with parLapply. Paired-allele hybrid data
   ## (shared extrinsic factor with fraction phi), the hybrid cells split into cis cells (f) and trans cells
-  ## (1 - f), parents unpaired; the mean axis is nulled by permutation (allele swap for cis, pooled relabelings
-  ## for trans, with a pairing-preserving arm) and the dispersion axis by the shifted bootstrap with the
-  ## resolution gate, as in the gene-level jobs. Returns power by mode, ratio and axis (mu, disp) at a BH FDR,
+  ## (1 - f), parents unpaired; the mean and the dispersion axis are tested by the bootstrap sign test with
+  ## the hybrid cells resampled whole, as in the gene-level jobs. Returns power by mode, ratio and axis (mu, disp) at a BH FDR,
   ## the share of datasets tested, ratio 1 as the type I error, and the SD of the observed contrast under the null.
   results[[k]] <- parLapply(cl, chunks[[k]], power_modes_row, ALPHA = ALPHA, CELL.RATIO = CELL.RATIO, DEPTH.RATIO = DEPTH.RATIO, DESIGN = DESIGN, EXPOSURE.CV = EXPOSURE.CV, FRAC = FRAC, GRID = GRID, MEAN.READS = MEAN.READS, N.MIX = N.MIX, NI = NI, NJ = NJ, PHI = PHI, PI1 = PI1, SEED.BASE = SEED.BASE, SIZE = SIZE, SIZE.RATIO = SIZE.RATIO)
   done <- done + length(chunks[[k]])
