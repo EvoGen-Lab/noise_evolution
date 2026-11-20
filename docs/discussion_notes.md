@@ -8,6 +8,7 @@ What the checks exclude:
 - A counting artefact in the hybrid: the variance term linear in the mean is smaller in the hybrid alleles than in the parents (MID2).
 - Sequencing depth: thinning each parent to its allele's depth removes about 0.2 of the 1.4 log2 shift (MID3).
 - Cell number: subsampling the hybrid to each parent's cell count changes the zero-fit shares but not the shift (MID4).
+- Residual error from splitting hybrid reads between the alleles. The split term adds about 1e-4 to each allele's dispersion (eta of about 7.5e-5), three orders of magnitude below the observed difference (median allele phi about 0.17 against about 0.06 to 0.1 for the thinned parents). Its correction lowers the hybrid estimates and raises their share of zero fits, so it works against the result, and the checks used the corrected allele dispersions. (The code applies the transcriptome share correction; the Methods' per-cell split correction has the same form and size.)
 - The summing of two allele copies: parents are haploid and each hybrid allele is one copy, no contrast sums the alleles, and summing independent copies would lower the dispersion rather than raise it.
 
 What the design cannot separate:
