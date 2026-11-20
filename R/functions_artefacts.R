@@ -5,6 +5,50 @@
 ### Groups are Pc, Pe, Hc and He; every fit is the pipeline's Cox-Reid NB fit (fit_dispersion()) with the group's share correction unless stated.
 ###############################################################
 
+## BOUND.CRIT: the critical value of the likelihood bounds of dispersion_bound_stats(), twice the fall in the adjusted log-likelihood from its maximum: 2.71,
+## the 0.90 quantile of a chi-square with one degree of freedom, which makes each bound one-sided 95%.
+BOUND.CRIT <- qchisq(0.90, 1)
+
+## dispersion_bound_stats: the likelihood bounds of one dispersion estimate (NB fit of one gene in one group). lrt is the boundary likelihood-ratio statistic
+## 2 [ell_CR(phi-hat) - ell_CR(0)], reported for reference. disp_upper is the value above phi-hat at which twice the fall in the adjusted log-likelihood from its
+## maximum equals crit (2.71, BOUND.CRIT), found by uniroot on the log scale from phi-hat (or from the lower end of the search range when phi-hat = 0) and capped
+## at the top of the range; disp_lower is the value below phi-hat at which the fall is the same, or 0 when the fall never reaches it (lrt at most crit). mbar is
+## the mean fitted count per cell. Both bounds take the share correction, (phi - share_r) / (1 + share_r) - share_sub truncated at zero, like the estimate; the
+## fall comes from the fitted likelihood. A gene with no counts gives bounds 0, too few cells NA. fit is the fit_dispersion() result for these counts when the
+## caller already has it. The pipeline tests contrasts by the bootstrap sign test and does not use these bounds; the artefact tests use the lower bound as a
+## bootstrap-free marker of a dispersion above zero (bound_pos).
+dispersion_bound_stats <- function(y, expo, share_r = 0, share_sub = 0, crit = BOUND.CRIT, fit = NULL) {
+  out <- c(lrt = NA_real_, disp_lower = NA_real_, disp_upper = NA_real_, mbar = NA_real_)
+  keep <- is.finite(y) & is.finite(expo) & expo > 0
+  y <- y[keep]; e <- expo[keep]
+  if (length(y) < 2) return(out)
+  if (sum(y) == 0) { out[c("lrt", "disp_lower", "disp_upper", "mbar")] <- 0; return(out) }
+  if (is.null(fit)) fit <- fit_dispersion(y, e, share_r, "NB", share_sub)
+  phi_app <- fit[["disp_app"]]
+  if (!is.finite(phi_app)) return(out)
+  m <- fit[["mu"]] * e
+  ll <- .cr_loglik(y, m); ll_hat <- ll(phi_app)
+  lrt <- if (phi_app > 0) 2 * (ll_hat - ll(0)) else 0
+  f <- function(lp) 2 * (ll_hat - ll(exp(lp))) - crit
+  bottom <- -LOG.THETA.RANGE[[2]]; top <- -LOG.THETA.RANGE[[1]]
+  lo <- max(log(phi_app), bottom)
+  upper <- exp(top)                                                         ## the upper bound is capped at the top of the search range
+  if (lo < top) {
+    grid <- unique(c(seq(lo, top, by = 0.5), top))
+    for (j in seq_along(grid)[-1])
+      if (f(grid[j]) > 0) { upper <- exp(uniroot(f, grid[c(j - 1, j)], tol = 1e-4)$root); break }
+  }
+  lower <- 0                                                                ## the fall never reaches crit below phi-hat when lrt <= crit
+  if (phi_app > 0 && lrt > crit && log(phi_app) > bottom) {
+    grid <- unique(c(seq(log(phi_app), bottom, by = -0.5), bottom))
+    for (j in seq_along(grid)[-1])
+      if (f(grid[j]) > 0) { lower <- exp(uniroot(f, sort(grid[c(j - 1, j)]), tol = 1e-4)$root); break }
+  }
+  correct <- function(p) max((p - share_r) / (1 + share_r) - share_sub, 0)
+  c(lrt = lrt, disp_lower = correct(lower), disp_upper = correct(upper), mbar = mean(m))
+}
+
+
 ## ART.GROUPS: the four groups of every test, in the order of the Section 1 matrices.
 ART.GROUPS <- c("Pc", "Pe", "Hc", "He")
 
@@ -148,7 +192,7 @@ art_sim_dataset <- function(fits, expos, genes, scenario, par1 = NA, par2 = NA, 
 
 ## art_gene_core: the per-gene fits that the signature of a dataset is built from, for one gene: in every group the all-cells Cox-Reid fit (mu, mbar, phi)
 ## with bound_pos (1 when the lower likelihood bound on phi is above zero: phi > 0 and the boundary LRT above BOUND.CRIT, dispersion_bound_stats(); this
-## needs no bootstrap and stands in for the pipeline's resolution, which these Section 1 checks cannot run), the trimming statistic and excess share (art_gene_stats() without strata or thinning), the linear term a of L6 with its SE,
+## needs no bootstrap, which these Section 1 checks cannot run), the trimming statistic and excess share (art_gene_stats() without strata or thinning), the linear term a of L6 with its SE,
 ## and the disjoint arm (mean on half A, phi on half B). Returns a named vector group.quantity.
 art_gene_core <- function(g, mats, expos, eta, halves, frac) {
   out <- c()
@@ -166,7 +210,7 @@ art_gene_core <- function(g, mats, expos, eta, halves, frac) {
 ## art_signature: the signature of one dataset (observed or simulated) from art_gene_core() rows (core, genes x columns): by group and mean-count bin the
 ## median trimming statistic and excess share and the median a; per group the Spearman correlation of a with the mean and the trend of log2 phi on log2 mu
 ## across genes (phi > 0); and the own slopes of Delta log2 phi on Delta log2 mu for cis and trans in the same-cell and disjoint arms, on genes whose groups
-## all have phi > 0 and a lower likelihood bound above zero (bound_pos, the bootstrap-free stand-in for the pipeline's resolution), with a gene-bootstrap interval (B draws, indices drawn first).
+## all have phi > 0 and a lower likelihood bound above zero (bound_pos, a bootstrap-free marker of a dispersion above zero), with a gene-bootstrap interval (B draws, indices drawn first).
 art_signature <- function(core, cbar, mbar_breaks, B = 200, seed = 1) {
   bins <- list(); grp <- list()
   for (k in ART.GROUPS) {

@@ -4,9 +4,10 @@
 ### matches its closed form and the boundary rule, the fit recovers phi and flags a maximum at the end of the search range, the share corrections lower
 ### the fitted phi by the expected amount, simulated Poisson genes pass the boundary likelihood-ratio test at the nominal rate, and the one-sided 95%
 ### likelihood bounds cover the true phi at about 95% each. Also checks the matrix fitter on one core and on a PSOCK cluster.
-### Needs   : R/functions.R. Writes nothing; stops with an error when a check fails.
+### The pipeline tests contrasts by the bootstrap sign test; dispersion_bound_stats() serves the artefact tests only and lives in R/functions_artefacts.R.
+### Needs   : R/functions.R, R/functions_checks.R, R/functions_artefacts.R. Writes nothing; stops with an error when a check fails.
 ###############################################################
-suppressWarnings(suppressMessages(source("R/functions.R")))
+suppressWarnings(suppressMessages({ source("R/functions.R"); source("R/functions_checks.R"); source("R/functions_artefacts.R") }))
 set.seed(1)
 
 ## the adjusted slope at phi = 0+ equals one half of sum((y - m)^2) - sum(m) + sum(m^2) / sum(m), and reduces to the (N - 1) m rule at equal offsets
@@ -53,5 +54,5 @@ rownames(mat) <- paste0("g", 1:12)
 f1 <- fit_counts_offset(mat, e, share_r = 1e-4, share_sub = seq(0, 0.011, length.out = 12))
 cl <- parallel::makeCluster(2)
 f2 <- fit_counts_offset(mat, e, cl = cl, share_r = 1e-4, share_sub = seq(0, 0.011, length.out = 12)); parallel::stopCluster(cl)
-stopifnot(isTRUE(all.equal(f1, f2)), all(c("LRT", "DISP_LOWER", "DISP_UPPER", "MBAR", "HIT_RANGE", "DISP_APP") %in% names(f1)), !any(grepl("CLASS", names(f1))))
+stopifnot(isTRUE(all.equal(f1, f2)), all(c("HIT_RANGE", "DISP_APP") %in% names(f1)), !any(grepl("CLASS|LRT|DISP_LOWER", names(f1))))
 cat("Cox-Reid fit checks passed\n")
