@@ -1,0 +1,34 @@
+#!/bin/sh -l
+# FILENAME:  sign_boot.sbatch
+#
+# Check P1, the bootstrap sign test of the dispersion-family contrasts: the 72 cells of P1.GRID (24 null cells of 500 datasets, 48 power cells of
+# 200), each dataset with B = 499 replicates of six NB refits, dealt round-robin across the array tasks.
+#
+# Sizing. One dataset is about (B + 1) x 6 = 3000 fits of 1000 to 2000 cells, about 10 core-seconds, so the grid needs about
+# (24 x 500 + 48 x 200) x 10 / 3600 = 60 core-hours. Each cell runs on one core, so a null cell takes about 1.4 hours and a power cell about
+# 0.6 hours. With 3 tasks of 24 cores every task holds 24 cells side by side and finishes in about the time of its longest cell; the time limit
+# allows a large margin. sign_boot_grid.R reads the task count from SLURM_ARRAY_TASK_COUNT.
+#
+# Restarts. A task writes its output file only when it finishes. Resubmitting the array recomputes only the tasks whose output is missing.
+#
+# Files next to this script: functions.R, functions_checks.R, sign_boot_grid.R, sign_boot_inputs.rda.
+
+#SBATCH --account=bphm
+#SBATCH --nodes=1
+#SBATCH --ntasks=1
+#SBATCH --partition=cpu
+#SBATCH --cpus-per-task=24
+#SBATCH --qos=normal
+#SBATCH --time=12:00:00
+#SBATCH --job-name sign_boot
+#SBATCH --array=1-3
+#SBATCH --output=sign_boot_%A_%a.out
+
+module load r/4.5.2
+
+export OMP_NUM_THREADS=1
+export MKL_NUM_THREADS=1
+export OPENBLAS_NUM_THREADS=1
+export VECLIB_MAXIMUM_THREADS=1
+
+Rscript sign_boot_grid.R

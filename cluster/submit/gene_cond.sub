@@ -1,0 +1,25 @@
+#!/bin/sh -l
+# FILENAME:  gene_cond.sbatch
+#
+# State-conditioned sensitivity as a job array over gene blocks: task k runs gene block k and writes gene_cond_output_<k>of<K>.rda. Resubmitting the
+# array recomputes only the blocks whose output file is missing. gene_cond.R checks that --array matches N.COND.ARRAY in its inputs (analysis.R Section 2.5).
+
+#SBATCH --account=bphm
+#SBATCH --nodes=1
+#SBATCH --ntasks=1
+#SBATCH --partition=cpu
+#SBATCH --cpus-per-task=24
+#SBATCH --qos=normal
+#SBATCH --time=3:00:00
+#SBATCH --job-name gene_cond
+#SBATCH --array=1-4
+#SBATCH --output=gene_cond_%A_%a.out
+
+module load r/4.5.2
+
+export OMP_NUM_THREADS=1
+export MKL_NUM_THREADS=1
+export OPENBLAS_NUM_THREADS=1
+export VECLIB_MAXIMUM_THREADS=1
+
+Rscript gene_cond.R

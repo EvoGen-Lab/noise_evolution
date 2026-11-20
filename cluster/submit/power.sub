@@ -4,8 +4,9 @@
 # Power-analysis grid: 400 (MEAN.READS, N.CELLS, SIZE) rows dealt round-robin across the array
 # tasks. Each task requests the per-job limits: 1 node, 24 cores, 10 days.
 #
-# Sizing. The permutation-null fits cost about 24,000 core-hours in total (timed on a
-# development machine; allow a factor of 2 either way on the cluster nodes). With 16 tasks of
+# Sizing. The bootstrap refits cost about 24,000 core-hours in total at NI = 2000 (timed on a
+# development machine for the earlier shifted bootstrap null, which refits the same groups the same number of times;
+# allow a factor of 2 either way on the cluster nodes, and about half at NI = N.BOOT = 1000). With 16 tasks of
 # 24 cores the average task needs about 62 hours and the busiest about 74 hours, roughly
 # 3 days of the 10-day limit. power_grid.R reads the task count from SLURM_ARRAY_TASK_COUNT,
 # so changing --array needs no other edit.
