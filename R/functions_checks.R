@@ -963,6 +963,25 @@ state_assign <- function(z, thr, cycle_levels) {
 }
 
 ## ============================================================
+## Midparent design shift (analysis/checks/mid_shift_check.R)
+## ============================================================
+
+## mid_shift_gene: one gene's log2 midparent contrasts d (the per-genome hybrid against the mean of the two parents; .mode_contrasts(), mode "mid") of the
+## mean and of the dispersion in every cell-bootstrap replicate. draws holds the pre-drawn index sets (Pc, Pe, H: parental cells and undivided hybrid cells),
+## drawn once for all genes so the median over genes can be taken replicate by replicate. Each replicate refits the share terms on its resampled hybrid cells
+## and the four groups with the pipeline's NB estimator; a failed refit counts as a zero dispersion. Returns a B x 2 matrix (mean, disp); a zero dispersion
+## gives +-Inf in disp, an undefined value NA.
+mid_shift_gene <- function(g, mats, expos, draws, share_cells) {
+  t(vapply(draws, function(d) {
+    st <- share_terms(share_cells$chat[d$H], share_cells$lib[d$H]); sr <- share_r_groups(st$r_c, st$r_e)
+    ix <- list(MIX.SC = d$Pc, MIX.SE = d$Pe, HYB.SC = d$H, HYB.SE = d$H)
+    f <- lapply(setNames(names(ix), names(ix)), function(k) .fit_one(mats[[k]][g, ix[[k]]], expos[[k]][ix[[k]]], sr[[k]]))
+    mu <- lapply(f, function(x) unname(x[["mu"]])); ph <- lapply(f, function(x) { v <- unname(x[["disp"]]); if (is.finite(v)) v else 0 })
+    .mode_contrasts(mu, ph, st$cbar, modes = "mid")["mid", c("mean", "disp")]
+  }, numeric(2)))
+}
+
+## ============================================================
 ## Document checks run by analysis/doc_checks.R
 ## ============================================================
 
