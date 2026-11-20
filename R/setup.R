@@ -44,7 +44,7 @@ for (d in c(INPUT.DIR, OUTPUT.DIR, CHECKPOINT.DIR, CONSOLE.DIR, TABLE.DIR,
 
 # Classes
 REG.CLASS <- c("Conserved", "Cis", "Trans", "Cis + Trans", "Compensatory")
-DOM.CLASS <- c("Conserved", "Sc.Dominant", "Se.Dominant", "Overdominant", "Underdominant", "Additive")
+DOM.CLASS <- c("Conserved", "Additive", "Sc.Dominant", "Sc.Partial", "Se.Dominant", "Se.Partial", "Overdominant", "Underdominant")   # Methods: Dominance
 
 ## Color palettes
 # Species anchors
@@ -52,7 +52,8 @@ SPECIES.COLOR <- c(Sc = "#B5533C", Se = "#3E6B7A")
 # Regulatory classes
 COLOR.LIST.1 <- c("#D4D4CF","#2B2F42","#640B14","#E0A526","#5F8F5A"); names(COLOR.LIST.1) <- REG.CLASS
 # Dominance classes
-COLOR.LIST.2 <- c("#D4D4CF", SPECIES.COLOR[["Sc"]], SPECIES.COLOR[["Se"]], "#7A2E4E","#D9A7BF","#8C8C86"); names(COLOR.LIST.2) <- DOM.CLASS
+# Partially dominant genes take the colour of the dominant class toward the same parent.
+COLOR.LIST.2 <- c("#D4D4CF", "#8C8C86", SPECIES.COLOR[["Sc"]], SPECIES.COLOR[["Sc"]], SPECIES.COLOR[["Se"]], SPECIES.COLOR[["Se"]], "#7A2E4E", "#D9A7BF"); names(COLOR.LIST.2) <- DOM.CLASS
 # Diverging heatmap ramp (warm = enriched, cool = depleted
 COLOR.LIST.3 <- colorRampPalette(c("#70453F","#A2623A","#C8893A","#DDB264","#F7F7F7","#D6ABD6","#BB82C3","#9D57AA","#6F3C79"))(11)
 # Warm ramp with monotone lightness

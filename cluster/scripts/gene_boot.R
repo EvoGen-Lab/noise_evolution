@@ -1,43 +1,52 @@
 ###############################################################
 ### gene_boot.R
-### Reads the bootstrap inputs, runs the paired per-gene
-### bootstrap on a FORK cluster, saves the output. Mirrors the
-### structure of Permutation_Norm0_V2.R.
+### Reads the bootstrap inputs, runs the paired per-gene bootstrap on a FORK cluster, saves the output. Two stages (Methods: Shared shift), set by the
+### environment variable GENE_BOOT_STAGE (default 1):
 ###
-### Inputs  : gene_boot_inputs.rda (CONTRAST.MATS, CONTRAST.EXPOS, CONTRAST.FITS, GENES, N.BOOT,
-###           DRAWS.REPS: one set of pre-drawn resamples per bootstrap replicate; SHARE.CELLS: each hybrid cell's observed Sc share and library size, from
-###           which every replicate refits the transcriptome share terms; SHARE.OBS: the observed share quantities (mean share, share corrections of the
-###           datasets); GATES: the contrasts each gene's observed fits define)
-### Output  : gene_boot_output_<k>of<K>.rda for array task k of K, holding
-###           BOOT.CONTRASTS (one row per gene) for replicate k. Task k
-###           uses DRAWS.REPS[[k]]; replicate 1 is the reported bootstrap
-###           and the others check seed adequacy. Each row holds every contrast's estimate, bootstrap SE and percentile interval and,
-###           for the NB estimator, its bootstrap sign-test p-value (sign_boot_p(); a failed refit counts as a zero dispersion).
-###           Replicate 1 also holds BOOT.DOM.DRAWS: for each log2 dominance dispersion contrast (disp_mid, disp_par_sc, disp_par_se) a genes x B
-###           matrix of its replicate values, from which analysis.R refits the hybrid's shared rise in every replicate (dom_adjust_contrast()).
+### Stage 1 (job array, gene_boot.sub)
+###   Inputs  : gene_boot_inputs.rda (CONTRAST.MATS, CONTRAST.EXPOS, CONTRAST.FITS, GENES, N.BOOT, DRAWS.REPS: one set of pre-drawn resamples per bootstrap
+###             replicate; CONTRAST.ETAS: the split variance of every cell of every dataset, 0 for the parents, which every replicate reads for its resampled
+###             cells; GATES: the contrasts each gene's observed fits define)
+###   Output  : gene_boot_output_<k>of<K>.rda for array task k of K, holding BOOT.CONTRASTS (one row per gene) for replicate k. Task k uses DRAWS.REPS[[k]];
+###             replicate 1 is the reported bootstrap and the others check seed adequacy. Each row holds every contrast's estimate, bootstrap SE and
+###             percentile interval, the sign-test p-value of every NB contrast (sign_boot_p(); a failed refit counts as a zero dispersion) and the moment
+###             estimates with their flags. Replicate 1 also holds BOOT.DOM.DRAWS, the genes x B replicate values of the mid log2 dispersion contrast,
+###             from which analysis.R refits the shared shift in every replicate.
+### Stage 2 (one task, gene_boot_shift.sub; after analysis.R has written the shift)
+###   Inputs  : gene_boot_inputs.rda and gene_shift_inputs.rda (DOM.SHIFT: genes x (1 + B), the shared shift Xi at each gene's log2 mu_H from the observed
+###             curve and from each replicate curve)
+###   Output  : gene_boot_shift_output.rda, holding BOOT.CONTRASTS for replicate 1 with every hybrid-allele dispersion divided by 2^Xi: the stage-1 columns
+###             (unchanged), the shifted contrasts a<quantity>_<mode>_* and the degrees of dominance k_<quantity>_* and kt_<quantity>_*.
 ###
-### Progress is printed by the master after each chunk of genes,
-### so it lands in the job log even though the workers are forked.
+### Progress is printed by the master after each chunk of genes, so it lands in the job log even though the workers are forked.
 ###############################################################
 
 library('parallel')
 library('MASS')          # glm.nb ships with base R; set lib= if your cluster needs it
 
 source("functions.R")
-write_pkg_versions("gene_boot")   # R and package versions of this job, compared with renv.lock by check_pkg_versions()
+STAGE <- as.integer(Sys.getenv("GENE_BOOT_STAGE", unset = "1"))
+stopifnot(STAGE %in% 1:2)
+write_pkg_versions(if (STAGE == 1) "gene_boot" else "gene_boot_shift")   # R and package versions of this job, compared with renv.lock by check_pkg_versions()
 
-DOM.KEEP.MODES <- c("mid", "par_sc", "par_se")   # dominance modes whose log2 dispersion replicates are kept (.DOM.ADJ.MODES in functions.R)
-load("gene_boot_inputs.rda")     # GENES is the inference set (every gene for which at least one contrast is defined), not only the matched set. CONTRAST.MATS, CONTRAST.EXPOS, CONTRAST.FITS, GENES, DRAWS.REPS, N.BOOT, SHARE.CELLS, SHARE.OBS, GATES
+load("gene_boot_inputs.rda")     # GENES is the inference set (every gene for which at least one contrast is defined). CONTRAST.MATS, CONTRAST.EXPOS, CONTRAST.FITS, GENES, DRAWS.REPS, N.BOOT, CONTRAST.ETAS, GATES
+SHIFT <- NULL
+if (STAGE == 2) {
+  load("gene_shift_inputs.rda")  # DOM.SHIFT
+  stopifnot(identical(sort(rownames(DOM.SHIFT)), sort(GENES)), ncol(DOM.SHIFT) == N.BOOT + 1)
+  SHIFT <- DOM.SHIFT
+}
 
-## Job-array position: task k bootstraps replicate k. A finished task leaves its
-## output file, so resubmitting the array only computes the missing replicates.
-ARRAY.ID <- as.integer(Sys.getenv("SLURM_ARRAY_TASK_ID", unset = "1"))
-N.ARRAY  <- as.integer(Sys.getenv("SLURM_ARRAY_TASK_COUNT", unset = "1"))
+## Job-array position: stage-1 task k bootstraps replicate k. A finished task leaves its output file, so resubmitting the array only computes the missing
+## replicates. Stage 2 runs replicate 1 alone.
+ARRAY.ID <- if (STAGE == 1) as.integer(Sys.getenv("SLURM_ARRAY_TASK_ID", unset = "1")) else 1L
+N.ARRAY  <- if (STAGE == 1) as.integer(Sys.getenv("SLURM_ARRAY_TASK_COUNT", unset = "1")) else length(DRAWS.REPS)
 if (N.ARRAY != length(DRAWS.REPS))
   stop(sprintf("array has %d tasks but the inputs hold %d replicates", N.ARRAY, length(DRAWS.REPS)))
 DRAWS    <- DRAWS.REPS[[ARRAY.ID]]
-OUT.FILE <- sprintf("gene_boot_output_%dof%d.rda", ARRAY.ID, N.ARRAY)
+OUT.FILE <- if (STAGE == 1) sprintf("gene_boot_output_%dof%d.rda", ARRAY.ID, N.ARRAY) else "gene_boot_shift_output.rda"
 if (file.exists(OUT.FILE)) { cat(sprintf("%s already exists, nothing to do\n", OUT.FILE)); quit(save = "no") }
+KEEP <- if (STAGE == 1 && ARRAY.ID == 1) "disp_mid" else NULL   # the mid log2 dispersion contrast, whose replicates refit the shared shift
 
 NUM.CORES <- as.integer(Sys.getenv("SLURM_CPUS_PER_TASK", unset = detectCores()))
 
@@ -49,19 +58,17 @@ N.UPDATES  <- 40                                              # roughly this man
 CHUNK.SIZE <- max(NUM.CORES, ceiling(length(GENES) / N.UPDATES))
 chunks     <- split(GENES, ceiling(seq_along(GENES) / CHUNK.SIZE))
 
-cat(sprintf("bootstrap start: replicate %d of %d, %d genes, B=%d, %d cores, %d chunks\n",
-            ARRAY.ID, N.ARRAY, length(GENES), N.BOOT, NUM.CORES, length(chunks)))
+cat(sprintf("bootstrap start: stage %d, replicate %d of %d, %d genes, B=%d, %d cores, %d chunks\n",
+            STAGE, ARRAY.ID, N.ARRAY, length(GENES), N.BOOT, NUM.CORES, length(chunks)))
 flush.console()
 
 results <- vector("list", length(chunks))
 t0 <- Sys.time(); done <- 0
 for (k in seq_along(chunks)) {
-  ## One gene's paired bootstrap: refits all 20 contrast groups on each pre-drawn resample, forms every mode's
-  ## mean and dispersion contrasts per replicate, and returns the point estimate, bootstrap SE,
-  ## boundary fraction and mean-disp draw correlation for the six reportable modes. Replicates where
-  ## any needed fit is non-finite give NA for that contrast and are left out of its SD.
-  results[[k]] <- parLapply(cl, chunks[[k]], boot_contrasts_one, expos = CONTRAST.EXPOS, fits = CONTRAST.FITS, mats = CONTRAST.MATS, draws = DRAWS, share_cells = SHARE.CELLS, share_obs = SHARE.OBS, gates = GATES, methods = c("NB", "weighted"),
-                            keep = if (ARRAY.ID == 1) paste0("disp_", DOM.KEEP.MODES) else NULL)
+  ## One gene's paired bootstrap: refits all 18 contrast groups on each pre-drawn resample with the split variances of its cells, forms every contrast per
+  ## replicate, and returns the estimate, bootstrap SE, percentile interval and sign-test p-value of every contrast (stage 2: also after the shared shift).
+  results[[k]] <- parLapply(cl, chunks[[k]], boot_contrasts_one, expos = CONTRAST.EXPOS, fits = CONTRAST.FITS, mats = CONTRAST.MATS, draws = DRAWS, etas = CONTRAST.ETAS,
+                            gates = GATES, methods = c("NB", "weighted"), keep = KEEP, shift = SHIFT)
   done <- done + length(chunks[[k]])
   el   <- as.numeric(difftime(Sys.time(), t0, units = "mins"))
   eta  <- if (el > 0) (length(GENES) - done) * (el / done) else NA_real_
@@ -71,13 +78,12 @@ for (k in seq_along(chunks)) {
   flush.console()
 }
 
-## The replicate values the dominance adjustment needs (replicate 1 only), one genes x B matrix per contrast, taken from each row's attribute before the
-## rows are bound
+## The replicate values the shared shift needs (stage 1, replicate 1 only), one genes x B matrix, taken from each row's attribute before the rows are bound
 rows <- unlist(results, recursive = FALSE)
-BOOT.DOM.DRAWS <- if (ARRAY.ID == 1) lapply(setNames(paste0("disp_", DOM.KEEP.MODES), paste0("disp_", DOM.KEEP.MODES)), function(k)
-  matrix(t(vapply(rows, function(r) attr(r, "draws")[, k], numeric(N.BOOT))), length(rows), N.BOOT, dimnames = list(vapply(rows, `[[`, "", "gene"), NULL))) else NULL
+BOOT.DOM.DRAWS <- if (!is.null(KEEP)) matrix(t(vapply(rows, function(r) attr(r, "draws")[, KEEP], numeric(N.BOOT))), length(rows), N.BOOT,
+                                             dimnames = list(vapply(rows, `[[`, "", "gene"), NULL)) else NULL
 BOOT.CONTRASTS <- do.call(rbind, rows)
-save(BOOT.CONTRASTS, BOOT.DOM.DRAWS, file = OUT.FILE)
+if (STAGE == 1) save(BOOT.CONTRASTS, BOOT.DOM.DRAWS, file = OUT.FILE) else save(BOOT.CONTRASTS, file = OUT.FILE)
 
 cat(sprintf("bootstrap done: %d genes in %.1f min [replicate %d]\n",
             nrow(BOOT.CONTRASTS),

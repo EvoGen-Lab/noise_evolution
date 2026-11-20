@@ -1,9 +1,11 @@
-<!-- Draft appendix for "Statistical models for allele-specific expression, noise, and ploidy" (docs/methods.md, revision 18037).
+<!-- Superseded: Appendix E of docs/methods.md is now the specification of the state-conditioned estimates, with the program slope written tau (beta here),
+     the program score S (Z here) and the marker set G (script-P here); the code columns are cslope_<dataset> (tau). This draft is kept for its history.
+     Draft appendix for "Statistical models for allele-specific expression, noise, and ploidy" (docs/methods.md, revision 18037).
      Written against analysis.R Section 2.5, cluster/scripts/gene_cond.R and R/functions.R (fit_dispersion(z = ), .pois_loglinear(), cond_contrasts_one()).
      Symbols were checked against the notation table and every section of methods.md: Z, β, ψ and the set 𝒫 are new and appear nowhere else in the
      document. W, w, s, t, a and T were avoided (Appendix A weights, the per-cell slope, the share multiplier, the expression factor). -->
 
-## Appendix C. State-conditioned estimates
+## Appendix E. State-conditioned estimates
 
 This appendix gives an estimate of every contrast that is conditioned on one cell state. It flags the significant contrasts that the state, rather than the genotype, carries.
 
@@ -71,9 +73,9 @@ We applied the transcriptome share corrections of the hybrid alleles to the cond
 
 | Assumption | Statement | Used in |
 | --- | --- | --- |
-| Separate cultures | Parental and hybrid cells come from different cultures, so the *trans*, midparent and parental contrasts carry any culture difference. Conditioning on the program score removes only the measured part | Appendix C |
-| Log-linear state effect | A gene's mean count changes with the program score as 2^(β\_r Z\_i), with the dispersion constant around that mean | Appendix C |
-| Score independent of share | The transcriptome share of a hybrid cell is independent of its program score, so the share corrections apply to the conditioned dispersions unchanged | Appendix C |
+| Separate cultures | Parental and hybrid cells come from different cultures, so the *trans*, midparent and parental contrasts carry any culture difference. Conditioning on the program score removes only the measured part | Appendix E |
+| Log-linear state effect | A gene's mean count changes with the program score as 2^(β\_r Z\_i), with the dispersion constant around that mean | Appendix E |
+| Score independent of share | The transcriptome share of a hybrid cell is independent of its program score, so the share corrections apply to the conditioned dispersions unchanged | Appendix E |
 
 **Rows for Notation.**
 
@@ -82,8 +84,8 @@ We applied the transcriptome share corrections of the hybrid alleles to the cond
 | 𝒫 | Set of the program's marker genes |
 | Z | Program score of a cell, the log₂ marker count per unit offset centered at its culture's median |
 | β | Log₂ change in a gene's mean per log₂ unit of the program score |
-| ψ | Weighted sum of powers of the program score in the Cox–Reid adjustment (Appendix C) |
+| ψ | Weighted sum of powers of the program score in the Cox–Reid adjustment (Appendix E) |
 
-**Pointer sentence for Contrasts.** *Appendix C* refits every contrast with a cell-state program in the mean and flags the significant contrasts that the program carries.
+**Pointer sentence for Contrasts.** *Appendix E* refits every contrast with a cell-state program in the mean and flags the significant contrasts that the program carries.
 
 **Reference to add.** Gasch AP, Spellman PT, Kao CM, Carmel-Harel O, Eisen MB, Storz G, Botstein D, Brown PO (2000) Genomic expression programs in the response of yeast cells to environmental changes. Molecular Biology of the Cell 11:4241–4257. https://doi.org/10.1091/mbc.11.12.4241 (verify with `checks_text.R` G2; Crossref was not reachable when this draft was written).

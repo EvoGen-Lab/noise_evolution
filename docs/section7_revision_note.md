@@ -1,7 +1,7 @@
 # Section 7 revision note
 
-Section 2.5 (`analysis/analysis.R`) now conditions every contrast on the derepression and stress program (Methods Appendix C draft,
-`docs/methods_appendix_C_state_conditioning.md`). Several parts of Section 7 describe the same cell states with different definitions. This note lists what
+Section 2.5 (`analysis/analysis.R`) now conditions every contrast on the derepression and stress program (Methods Appendix E draft,
+`docs/methods_appendix_E_state_conditioning.md`). Several parts of Section 7 describe the same cell states with different definitions. This note lists what
 to revise so that Section 7 describes the states that Section 2.5 conditions on, and states the two-culture design where it matters. Nothing below is
 implemented yet.
 
@@ -33,7 +33,7 @@ implemented yet.
    parental clusters. Compare the 7.5 between-cluster share of variance with the change in dispersion under conditioning (`COND.CONTRASTS`, `d disp`), since
    both measure the variance that cell states explain.
 5. **Methods main text.** Add one paragraph to the main Methods stating the two-culture design and which contrasts it affects, with the pointer sentence to
-   Appendix C.
+   Appendix E.
 
 ## Reruns that the revision would need
 
