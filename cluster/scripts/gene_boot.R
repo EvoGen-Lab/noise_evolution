@@ -10,11 +10,10 @@
 ###   Output  : gene_boot_output_<k>of<K>.rda for array task k of K, holding BOOT.CONTRASTS (one row per gene) for replicate k. Task k uses DRAWS.REPS[[k]];
 ###             replicate 1 is the reported bootstrap and the others check seed adequacy. Each row holds every contrast's estimate, bootstrap SE and
 ###             percentile interval, the sign-test p-value of every NB contrast (sign_boot_p(); a failed refit counts as a zero dispersion) and the moment
-###             estimates with their flags. Replicate 1 also holds BOOT.DOM.DRAWS, the genes x B replicate values of the mid log2 dispersion contrast,
-###             from which analysis.R refits the shared shift in every replicate.
+###             estimates with their flags. analysis.R fits the shared shift once from replicate 1's observed mid log2 dispersion contrasts.
 ### Stage 2 (one task, gene_boot_shift.sub; after analysis.R has written the shift)
-###   Inputs  : gene_boot_inputs.rda and gene_shift_inputs.rda (DOM.SHIFT: genes x (1 + B), the shared shift Xi at each gene's log2 mu_H from the observed
-###             curve and from each replicate curve)
+###   Inputs  : gene_boot_inputs.rda and gene_shift_inputs.rda (DOM.SHIFT: the shared shift Xi at each gene's log2 mu_H from the observed curve, named by
+###             gene, held fixed in every replicate)
 ###   Output  : gene_boot_shift_output.rda, holding BOOT.CONTRASTS for replicate 1 with every hybrid-allele dispersion divided by 2^Xi: the stage-1 columns
 ###             (unchanged), the shifted contrasts a<quantity>_<mode>_* and the degrees of dominance k_<quantity>_* and kt_<quantity>_*.
 ###
@@ -33,7 +32,7 @@ load("gene_boot_inputs.rda")     # GENES is the inference set (every gene for wh
 SHIFT <- NULL
 if (STAGE == 2) {
   load("gene_shift_inputs.rda")  # DOM.SHIFT
-  stopifnot(identical(sort(rownames(DOM.SHIFT)), sort(GENES)), ncol(DOM.SHIFT) == N.BOOT + 1)
+  stopifnot(is.numeric(DOM.SHIFT), all(names(DOM.SHIFT) %in% GENES), all(is.finite(DOM.SHIFT)))
   SHIFT <- DOM.SHIFT
 }
 
@@ -46,7 +45,6 @@ if (N.ARRAY != length(DRAWS.REPS))
 DRAWS    <- DRAWS.REPS[[ARRAY.ID]]
 OUT.FILE <- if (STAGE == 1) sprintf("gene_boot_output_%dof%d.rda", ARRAY.ID, N.ARRAY) else "gene_boot_shift_output.rda"
 if (file.exists(OUT.FILE)) { cat(sprintf("%s already exists, nothing to do\n", OUT.FILE)); quit(save = "no") }
-KEEP <- if (STAGE == 1 && ARRAY.ID == 1) "disp_mid" else NULL   # the mid log2 dispersion contrast, whose replicates refit the shared shift
 
 NUM.CORES <- as.integer(Sys.getenv("SLURM_CPUS_PER_TASK", unset = detectCores()))
 
@@ -68,7 +66,7 @@ for (k in seq_along(chunks)) {
   ## One gene's paired bootstrap: refits all 18 contrast groups on each pre-drawn resample with the split variances of its cells, forms every contrast per
   ## replicate, and returns the estimate, bootstrap SE, percentile interval and sign-test p-value of every contrast (stage 2: also after the shared shift).
   results[[k]] <- parLapply(cl, chunks[[k]], boot_contrasts_one, expos = CONTRAST.EXPOS, fits = CONTRAST.FITS, mats = CONTRAST.MATS, draws = DRAWS, etas = CONTRAST.ETAS,
-                            gates = GATES, methods = c("NB", "weighted"), keep = KEEP, shift = SHIFT)
+                            gates = GATES, methods = c("NB", "weighted"), shift = SHIFT)
   done <- done + length(chunks[[k]])
   el   <- as.numeric(difftime(Sys.time(), t0, units = "mins"))
   eta  <- if (el > 0) (length(GENES) - done) * (el / done) else NA_real_
@@ -78,12 +76,8 @@ for (k in seq_along(chunks)) {
   flush.console()
 }
 
-## The replicate values the shared shift needs (stage 1, replicate 1 only), one genes x B matrix, taken from each row's attribute before the rows are bound
-rows <- unlist(results, recursive = FALSE)
-BOOT.DOM.DRAWS <- if (!is.null(KEEP)) matrix(t(vapply(rows, function(r) attr(r, "draws")[, KEEP], numeric(N.BOOT))), length(rows), N.BOOT,
-                                             dimnames = list(vapply(rows, `[[`, "", "gene"), NULL)) else NULL
-BOOT.CONTRASTS <- do.call(rbind, rows)
-if (STAGE == 1) save(BOOT.CONTRASTS, BOOT.DOM.DRAWS, file = OUT.FILE) else save(BOOT.CONTRASTS, file = OUT.FILE)
+BOOT.CONTRASTS <- do.call(rbind, unlist(results, recursive = FALSE))
+save(BOOT.CONTRASTS, file = OUT.FILE)
 
 cat(sprintf("bootstrap done: %d genes in %.1f min [replicate %d]\n",
             nrow(BOOT.CONTRASTS),

@@ -70,8 +70,8 @@ ACC <- coexpr_acc_new(choose(nrow(RESID$MIX.SC), 2))
 
 t0 <- Sys.time(); done <- 0
 for (k in seq_along(chunks)) {
-  ## One bootstrap draw per task. A draw (from make_coexpr_draws()) resamples the columns of each RESID dataset; HYB.SC and HYB.SE take the same H draw
-  ## because they are the same cells, and the shared shift of dom is recomputed in every draw on the fixed deciles. Each task returns every contrast at the
+  ## One bootstrap draw per task. A draw (from make_coexpr_draws()) resamples the parental cells and the hybrid cells once, each copy keeping its cis or trans
+  ## membership and the two alleles of a cell sharing one index; the shared shift of dom is the observed one, held fixed. Each task returns every contrast at the
   ## upper-triangle pair positions, folded into the accumulator.
   chunk.results <- parLapply(cl, DRAWS.COEXPR[chunks[[k]]], coexpr_bootstrap_one, resid = RESID)
   ACC <- coexpr_acc_fold(ACC, chunk.results)

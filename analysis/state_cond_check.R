@@ -97,9 +97,12 @@ stopifnot(!isTRUE(all.equal(s_out$MIX.SC, s_in$MIX.SC)), all(abs(vapply(s_in[c("
 ## program in Pc only: the trans and total dispersion contrasts are inflated, and conditioning brings them back with a change interval that excludes zero
 d1 <- designs$pc_only
 cc1 <- do.call(rbind, lapply(genes, cond_contrasts_one, expos = d1$expos, mats = d1$mats, draws = draws, etas = ETAS, state = d1$state))
+## An undefined paired change (a hybrid allele at phi = 0 in both fits of a replicate) counts as -Inf for the lower percentile, so with 60 draws a gene with two
+## such replicates has no finite lower bound on the change; the check counts those genes with the ones whose bound excludes zero.
 for (md in c("total", "trans")) {
   u <- cc1[[paste0("cdisp_", md, "_est")]] + cc1[[paste0("ddisp_", md, "_est")]]
-  stopifnot(all(u > 1), median(abs(cc1[[paste0("cdisp_", md, "_est")]])) < median(u) / 3, mean(cc1[[paste0("ddisp_", md, "_lo")]] > 0) >= 0.75,
+  lo <- cc1[[paste0("ddisp_", md, "_lo")]]
+  stopifnot(all(u > 1), median(abs(cc1[[paste0("cdisp_", md, "_est")]])) < median(u) / 3, mean(lo > 0) >= 0.5, mean(lo > 0 | lo == -Inf) >= 0.75,
             mean(cc1[[paste0("cdisp_", md, "_lo")]] <= 0 & cc1[[paste0("cdisp_", md, "_hi")]] >= 0) >= 0.75)
 }
 ## cis shares the hybrid tube and stays unchanged
@@ -130,4 +133,8 @@ BCs <- data.frame(gene = 1:Gs, mean_total_est = tm + rnorm(Gs, 0, 0.1), mean_tot
 sc <- struct_coupling_row("total", BCs, B = 200)
 stopifnot(sc$disp_bsize_lo <= 0, sc$disp_bsize_hi >= 0, sc$mean_kbal_lo <= 0, sc$mean_kbal_hi >= 0)
 
+## the fixed shared shift: the conditioned shifted contrasts move by -Xi (log2 dispersion of the hybrid against the parents), cis log2 has no shifted column
+cs <- cond_contrasts_one(genes[1], d0$expos, d0$mats, draws, ETAS, d0$state, shift = setNames(0.8, genes[1]))
+stopifnot(abs(cs$cadisp_mid_est - (cs$cdisp_mid_est - 0.8)) < 1e-12, abs(cs$dadisp_mid_est - cs$ddisp_mid_est) < 1e-12, !"cadisp_cis_est" %in% names(cs),
+          "cardisp_cis_est" %in% names(cs))
 cat("state-conditioned checks passed\n")

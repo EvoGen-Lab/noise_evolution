@@ -1035,32 +1035,35 @@ shrink_cor <- function(Z) {
 .COEXPR.PARTS <- c("total", "cis", "trans", "dom", "inh_c", "inh_e")
 
 ## coexpr_decompose: the divergence of every pair's residual correlation, as the contrasts used for single genes on the correlation scale (Methods:
-## Co-expression). resid: residual matrices (genes x cells, one gene order) for MIX.SC, MIX.SE, HYB.SC and HYB.SE. With the shrunken correlations rho of each group,
-##   total = rho_Pc - rho_Pe,   cis = rho_Hc - rho_He,   trans = total - cis,
-##   dom   = (rho_Hc + rho_He) / 2 - (rho_Pc + rho_Pe) / 2  (the average of the two within-genome correlations of the hybrid against the parental average),
-##   inh_c = rho_Hc - rho_Pc,   inh_e = rho_He - rho_Pe     (each genome in the hybrid against its parent; inh = dom -+ trans / 2).
-## bins (one decile of the pair's average log2 mu_H per upper-triangle position, attr(resid, "dom_bins")) sets the shared shift: the median of dom over the pairs
-## of each decile is subtracted from dom and from both inheritance contrasts, so the identities hold after the shift, and a shift shared by both genomes of the
-## hybrid cancels in cis and trans. The decile medians are returned as $shift. Without bins the contrasts are unshifted (the null draws of total, cis and trans).
-coexpr_decompose <- function(resid, bins = attr(resid, "dom_bins")) {
-  Rsc  <- shrink_cor(t(resid$MIX.SC)); Rse  <- shrink_cor(t(resid$MIX.SE))
-  Rhsc <- shrink_cor(t(resid$HYB.SC)); Rhse <- shrink_cor(t(resid$HYB.SE))
-  total <- Rsc - Rse; cis <- Rhsc - Rhse
-  dom <- 0.5 * (Rhsc + Rhse) - 0.5 * (Rsc + Rse); inh_c <- Rhsc - Rsc; inh_e <- Rhse - Rse
-  shift <- NULL
+## Co-expression). resid: residual matrices (genes x cells, one gene order) of the parents (MIX.SC, MIX.SE) and of the two alleles in the cis cells (HYC.SC,
+## HYC.SE) and in the trans cells (HYT.SC, HYT.SE) of the hybrid partition. With the shrunken correlations rho of each group,
+##   total = rho_Pc - rho_Pe,   cis = rho_Hc - rho_He (cis cells),   trans = total - (rho_Hc - rho_He) (trans cells),
+##   dom   = (rho_Hc + rho_He) / 2 - (rho_Pc + rho_Pe) / 2  (trans cells: the average within-genome correlation of the hybrid against the parental average),
+##   inh_c = rho_Hc - rho_Pc,   inh_e = rho_He - rho_Pe     (trans cells; inh = dom -+ trans / 2),
+## so, as for single genes, nothing built on the hybrid alleles shares cells with cis. bins (one decile of the pair's average log2 mu_H per upper-triangle
+## position, attr(resid, "dom_bins")) and shift (the decile medians of the observed dom, attr(resid, "dom_shift")) set the shared shift: shift[bin] is
+## subtracted from dom and from both inheritance contrasts, so the identities hold after it. The shift is computed once, from the observed dom (shift = NULL
+## with bins: the decile medians of this call's dom are computed and subtracted, which is how the observed shift and each draw of the dominance null are
+## adjusted), and held fixed in every bootstrap replicate. Without bins the contrasts are unshifted. The shift used is returned as $shift.
+coexpr_decompose <- function(resid, bins = attr(resid, "dom_bins"), shift = attr(resid, "dom_shift")) {
+  Rpc <- shrink_cor(t(resid$MIX.SC)); Rpe <- shrink_cor(t(resid$MIX.SE))
+  Rcc <- shrink_cor(t(resid$HYC.SC)); Rce <- shrink_cor(t(resid$HYC.SE))
+  Rtc <- shrink_cor(t(resid$HYT.SC)); Rte <- shrink_cor(t(resid$HYT.SE))
+  total <- Rpc - Rpe
+  dom <- 0.5 * (Rtc + Rte) - 0.5 * (Rpc + Rpe); inh_c <- Rtc - Rpc; inh_e <- Rte - Rpe
   if (!is.null(bins)) {
     up <- upper.tri(dom); stopifnot(length(bins) == sum(up))
-    shift <- tapply(dom[up], bins, median)
+    if (is.null(shift)) shift <- tapply(dom[up], bins, median)
     sm <- matrix(0, nrow(dom), ncol(dom)); sm[up] <- shift[as.character(bins)]; sm <- sm + t(sm)
     dom <- dom - sm; inh_c <- inh_c - sm; inh_e <- inh_e - sm
-  }
-  list(total = total, cis = cis, trans = total - cis, dom = dom, inh_c = inh_c, inh_e = inh_e, shift = shift,
-       lambda = c(Sc = attr(Rsc, "lambda"), Se = attr(Rse, "lambda"), HYB.SC = attr(Rhsc, "lambda"), HYB.SE = attr(Rhse, "lambda")))
+  } else shift <- NULL
+  list(total = total, cis = Rcc - Rce, trans = total - (Rtc - Rte), dom = dom, inh_c = inh_c, inh_e = inh_e, shift = shift,
+       lambda = c(Sc = attr(Rpc, "lambda"), Se = attr(Rpe, "lambda"), HYC.SC = attr(Rcc, "lambda"), HYC.SE = attr(Rce, "lambda"),
+                  HYT.SC = attr(Rtc, "lambda"), HYT.SE = attr(Rte, "lambda")))
 }
 
-## Cis/trans split of one axis's eigenvalue. Because total = cis + trans elementwise,
-## v'(total)v = v'(cis)v + v'(trans)v holds exactly for any vector v, so the axis's eigenvalue
-## partitions into cis and trans parts on the same vector.
+## Cis/trans split of one axis's eigenvalue: v'(total)v, v'(cis)v and v'(trans)v on the same vector. cis and trans are measured on disjoint hybrid cells, so
+## total = cis + trans holds in expectation, not exactly: check_sum - total is the difference between the allele contrasts of the trans and the cis cells.
 ## v: a unit eigenvector (e.g. RANK.CHECK$vectors[, k], axis k by |eigenvalue|). PT: the coexpr_decompose() point estimate
 ## (COEXPR.POINT) with $cis/$trans/$total. Returns the three quadratic forms, their cis + trans sum
 ## (check_sum, equal to total) and frac_trans = trans / total.
@@ -1071,16 +1074,18 @@ coexpr_axis_cis_trans <- function(v, PT) {
   c(cis = cis_part, trans = trans_part, total = total_part, check_sum = cis_part + trans_part, frac_trans = trans_part / total_part)
 }
 
-## Cell-resampling draws for the co-expression bootstrap. All B index sets are drawn up front from
-## one seed, so draws are independent of any later RNG use and a cluster job can parallelize over them.
-## SC, SE and H resample the Sc-parent, Se-parent and hybrid cells; HYB.SC and HYB.SE share
-## the one H resample per draw (paired alleles of the same cells), as in make_draws().
-make_coexpr_draws <- function(nSC, nSE, nH, B, seed = 1) {
-  stopifnot(all(c(nSC, nSE, nH) >= 1), is.numeric(B), length(B) == 1, B >= 1)
-  with_local_seed(seed, lapply(seq_len(B), function(b) list(
-    SC = sample.int(nSC, nSC, replace = TRUE),
-    SE = sample.int(nSE, nSE, replace = TRUE),
-    H  = sample.int(nH,  nH,  replace = TRUE))))
+## Cell-resampling draws for the co-expression bootstrap. All B index sets are drawn up front from one seed, so draws are independent of any later RNG use and a
+## cluster job can parallelize over them. SC and SE resample the parental cells. The hybrid cells are resampled once (H, positions among all nH hybrid cells)
+## and each copy keeps the cis or trans membership of the cell it copied (cis: the positions of the cis cells), as in make_draws(): HC indexes the cis-cell
+## residual matrices and HT the trans-cell ones, and the two alleles of a cell share one index.
+make_coexpr_draws <- function(nSC, nSE, nH, B, seed = 1, cis) {
+  stopifnot(all(c(nSC, nSE, nH) >= 1), is.numeric(B), length(B) == 1, B >= 1, all(cis %in% seq_len(nH)), !anyDuplicated(cis))
+  cs <- sort(cis); tr <- setdiff(seq_len(nH), cis)
+  with_local_seed(seed, lapply(seq_len(B), function(b) {
+    h <- sample.int(nH, nH, replace = TRUE)
+    list(SC = sample.int(nSC, nSC, replace = TRUE), SE = sample.int(nSE, nSE, replace = TRUE),
+         HC = { m <- match(h, cs); m[!is.na(m)] }, HT = { m <- match(h, tr); m[!is.na(m)] })
+  }))
 }
 
 ## Per-gene reliability: the fraction of a gene's total NB variance (mu + phi mu^2) that is biological
@@ -3514,15 +3519,16 @@ coexpr_seed_check <- function(mode, cb1, cb2) {
   seed_compare_core(cb1[[mode]]$se, cb2[[mode]]$se, main = sprintf("%s: bootstrap SE, two seeds", mode), count_label = "n_pairs")
 }
 
-## coexpr_perm_draw: one permutation draw for the co-expression null of total and cis: the pooled-cell order
-## (n_tot cells) and the per-cell allele swaps for the nH hybrid cells. b is the draw index and is not used.
-coexpr_perm_draw <- function(b, nH, n_tot) list(
-  idx  = sample(n_tot),
-  swap = sample(c(TRUE, FALSE), nH, replace = TRUE))
+## coexpr_perm_draw: one permutation draw for the co-expression nulls of total, cis and trans: the pooled-cell order (n_tot parental cells) and per-cell
+## allele swaps of the nC cis and the nT trans hybrid cells. b is the draw index and is not used.
+coexpr_perm_draw <- function(b, nC, nT, n_tot) list(
+  idx    = sample(n_tot),
+  swap_c = sample(c(TRUE, FALSE), nC, replace = TRUE),
+  swap_t = sample(c(TRUE, FALSE), nT, replace = TRUE))
 
 ## coexpr_dom_draw: one draw of the dominance null (coexpr_perm_one()): a random order of the pooled Sc cells (the Sc parent's cells, then the Sc residuals of
-## the hybrid cells) and of the pooled Se cells, split back into parental and hybrid groups of the original sizes. b is the draw index and is not used.
-coexpr_dom_draw <- function(b, nSC, nSE, nH) list(c = sample(nSC + nH), e = sample(nSE + nH))
+## the nT trans hybrid cells) and of the pooled Se cells, split back into parental and hybrid groups of the original sizes. b is the draw index and is not used.
+coexpr_dom_draw <- function(b, nSC, nSE, nT) list(c = sample(nSC + nT), e = sample(nSE + nT))
 
 ## axis_mixture_summary: variance explained, effective genes, mixture means and sigmas, and pole sizes of
 ## one candidate axis a.
@@ -3729,18 +3735,20 @@ fit_group_values <- function(fits, g) {
   list(mu = mu, disp = disp)
 }
 
-## .boot_summary: the standard error and the 95% percentile interval of a vector of bootstrap draws. NA and NaN draws (undefined contrasts) are dropped;
-## with inf = TRUE (the log2 quantities and raw theta and kappa) a draw at a zero mean or dispersion arrives as -Inf or +Inf and is kept, so the interval is
-## the 2.5% and 97.5% percentiles (type 1, which does not interpolate across an infinite value) and may be one-sided or unbounded, and the SE is the
-## interquantile range divided by 3.92 (twice the 97.5% normal quantile), infinite when a bound is. With inf = FALSE the SE is the SD of the finite draws.
-## Returns c(se, lo, hi), NA with fewer than three draws.
+## .boot_summary: the standard error and the 95% percentile interval of a vector of bootstrap draws (Methods: Tests of contrasts). With inf = TRUE (the
+## log2 quantities and raw theta and kappa) a draw at a zero mean or dispersion arrives as -Inf or +Inf and is kept, and an undefined draw (NaN or NA: +Inf and
+## -Inf in one contrast) counts as -Inf for the lower percentile and +Inf for the upper, so an interval has no finite bound when its undefined draws outnumber
+## either of its tails. The bounds are the 2.5% and 97.5% percentiles (type 1, which does not interpolate across an infinite value) and may be one-sided or
+## unbounded; the SE is the interquantile range divided by 3.92 (twice the 97.5% normal quantile), infinite when a bound is. With inf = FALSE the draws are
+## finite but for undefined ones, which take the same tail rule, and the SE is the SD of the finite draws. Returns c(se, lo, hi), NA with fewer than three draws.
 .boot_summary <- function(x, inf = TRUE) {
   out <- c(se = NA_real_, lo = NA_real_, hi = NA_real_)
-  x <- x[!is.na(x)]
   if (length(x) < 3) return(out)
-  q <- quantile(x, c(0.025, 0.975), type = 1, names = FALSE)
-  out[c("lo", "hi")] <- q
-  out[["se"]] <- if (inf) { if (all(is.finite(q))) (q[[2]] - q[[1]]) / 3.92 else Inf } else sd(x[is.finite(x)])
+  u <- is.na(x)
+  out[["lo"]] <- quantile(replace(x, u, -Inf), 0.025, type = 1, names = FALSE)
+  out[["hi"]] <- quantile(replace(x, u, Inf), 0.975, type = 1, names = FALSE)
+  fin <- x[is.finite(x)]
+  out[["se"]] <- if (inf) { if (is.finite(out[["lo"]]) && is.finite(out[["hi"]])) (out[["hi"]] - out[["lo"]]) / 3.92 else Inf } else if (length(fin) > 2) sd(fin) else NA_real_
   out
 }
 
@@ -3753,11 +3761,6 @@ fit_group_values <- function(fits, g) {
   base <- list(mean = "mean", disp = "log", rdisp = "raw", rtheta = "log", bsize = "bsize", rbsize = "rbsize", kbal = "kbal", rkbal = "kbal")
   c(base, setNames(base[-1], paste0("w", names(base)[-1])), setNames(base[-1], paste0("a", names(base)[-1])))
 })
-
-## .COND.QUANTITIES: the NB quantities of the state-conditioned layer (cond_contrasts_one()), with the definition flag each needs, as in .QUANTITY.GATE.
-## .COND.GATE maps their output prefixes, c<quantity> (the conditioned estimate) and d<quantity> (unconditioned minus conditioned), to those flags.
-.COND.QUANTITIES <- c(mean = "mean", disp = "log", rdisp = "raw", rtheta = "log", bsize = "bsize", kbal = "kbal", rbsize = "rbsize", rkbal = "kbal")
-.COND.GATE <- as.list(c(setNames(.COND.QUANTITIES, paste0("c", names(.COND.QUANTITIES))), setNames(.COND.QUANTITIES, paste0("d", names(.COND.QUANTITIES)))))
 
 ## apply_gate: sets to NA every output of a gene whose contrast is not defined. out is the list of one gene's columns (boot_contrasts_one() or
 ## cond_contrasts_one()) and gate a named logical vector with one entry per scale_mode (scale one of mean, raw, log, bsize, rbsize, kbal, mode one of
@@ -3821,22 +3824,40 @@ sign_boot_p <- function(x, s, ties = c("null", "split")) {
 ## .ALL.CONTRAST.NAMES: the entries of .all_contrasts(), in order.
 .ALL.CONTRAST.NAMES <- as.vector(t(outer(.OUT_MODES, names(.NB.QUANTITIES), function(md, q) paste0(q, "_", md))))
 
-## .ratio_cdf: the degree of dominance k = 2 Delta_dom / Delta_ref (Methods: Dominance), with Delta_ref the total contrast (k) or the trans contrast (k_trans),
-## from the observed estimates (dom, ref) and their bootstrap replicates (xd, xr). A replicate with Delta_ref = 0 gives k = +-Inf, and an undefined ratio
-## (0 / 0, Inf / Inf, or an undefined contrast) is dropped, as in .boot_summary(). Returns the estimate, the 95% percentile interval, the number of replicates
-## n, and the empirical distribution at the three reference values, F(c) = Pr(k <= c) and G(c) = Pr(k < c) for c = -1 (Pe), 0 (midparent) and 1 (Pc), from
-## which the percentile interval at any level 1 - a is placed against those values: it contains c when F(c) >= a / 2 and G(c) < 1 - a / 2, lies above c when
-## F(c) < a / 2 and below c when G(c) >= 1 - a / 2 (class_inheritance()). This fixes the interval at the false coverage-statement level, which depends on the
-## number of genes selected, after every gene has been bootstrapped.
+## .COND.QUANTITIES: the NB quantities of the state-conditioned layer (cond_contrasts_one()), with the definition flag each needs, as in .QUANTITY.GATE.
+## .COND.GATE maps their output prefixes, c<quantity> (the conditioned estimate) and d<quantity> (unconditioned minus conditioned), to those flags.
+.COND.QUANTITIES <- c(mean = "mean", disp = "log", rdisp = "raw", rtheta = "log", bsize = "bsize", kbal = "kbal", rbsize = "rbsize", rkbal = "kbal")
+.COND.GATE <- local({
+  q <- c(.COND.QUANTITIES, setNames(.COND.QUANTITIES[names(.SHIFT.QUANTITIES)], paste0("a", names(.SHIFT.QUANTITIES))))
+  as.list(c(setNames(q, paste0("c", names(q))), setNames(q, paste0("d", names(q)))))
+})
+
+## .ratio_k: the degree of dominance of each replicate, k = 2 Delta_dom / Delta_ref (Methods: Dominance). A finite Delta_dom over an infinite Delta_ref gives 0,
+## an infinite Delta_dom over a finite Delta_ref an infinite k with the sign of the quotient, and two infinities, a zero denominator or an undefined contrast an
+## undefined replicate (NA).
+.ratio_k <- function(xd, xr) {
+  k <- ifelse(is.finite(xd) & is.infinite(xr), 0, 2 * xd / xr)
+  k[is.na(xd) | is.na(xr) | xr == 0 | (is.infinite(xd) & is.infinite(xr))] <- NA_real_
+  k
+}
+
+## .ratio_cdf: the degree of dominance k = 2 Delta_dom / Delta_ref, with Delta_ref the total contrast (k) or the trans contrast (k_trans), from the observed
+## estimates (dom, ref) and their bootstrap replicates (xd, xr) under the rules of .ratio_k(). An undefined replicate counts as -Inf for the lower percentile and
+## +Inf for the upper, as in .boot_summary(). Returns the estimate, the 95% percentile interval, the number of replicates n, the number undefined n_undef, and
+## at the three reference values c = -1 (Pe), 0 (midparent) and 1 (Pc) F(c) = Pr(k <= c) with undefined replicates counted (the lower tail) and
+## G(c) = Pr(k < c) without them (the upper tail). The percentile interval at any level 1 - a then contains c when F(c) >= a / 2 and G(c) < 1 - a / 2, lies
+## above c when F(c) < a / 2 and below c when G(c) >= 1 - a / 2 (classify_dom()), which fixes the interval at the false coverage-statement level after every gene
+## has been bootstrapped.
 .ratio_cdf <- function(dom, ref, xd, xr) {
-  out <- c(est = NA_real_, lo = NA_real_, hi = NA_real_, n = 0, Fm1 = NA_real_, F0 = NA_real_, F1 = NA_real_, Gm1 = NA_real_, G0 = NA_real_, G1 = NA_real_)
-  if (!is.finite(dom) || !is.finite(ref) || ref == 0) return(out)
-  k <- 2 * xd / xr; k <- k[!is.na(k)]
-  out[["est"]] <- 2 * dom / ref; out[["n"]] <- length(k)
+  out <- c(est = NA_real_, lo = NA_real_, hi = NA_real_, n = 0, n_undef = 0, Fm1 = NA_real_, F0 = NA_real_, F1 = NA_real_, Gm1 = NA_real_, G0 = NA_real_, G1 = NA_real_)
+  k0 <- .ratio_k(dom, ref)
+  if (is.na(k0) || !is.finite(k0)) return(out)
+  k <- .ratio_k(xd, xr); u <- is.na(k)
+  out[["est"]] <- k0; out[["n"]] <- length(k); out[["n_undef"]] <- sum(u)
   if (length(k) < 3) return(out)
-  out[c("lo", "hi")] <- quantile(k, c(0.025, 0.975), type = 1, names = FALSE)
-  out[c("Fm1", "F0", "F1")] <- vapply(c(-1, 0, 1), function(cc) mean(k <= cc), numeric(1))
-  out[c("Gm1", "G0", "G1")] <- vapply(c(-1, 0, 1), function(cc) mean(k < cc), numeric(1))
+  s <- .boot_summary(k, TRUE); out[c("lo", "hi")] <- s[c("lo", "hi")]
+  out[c("Fm1", "F0", "F1")] <- vapply(c(-1, 0, 1), function(cc) mean(u | k <= cc), numeric(1))
+  out[c("Gm1", "G0", "G1")] <- vapply(c(-1, 0, 1), function(cc) mean(!u & k < cc), numeric(1))
   out
 }
 
@@ -3855,20 +3876,19 @@ sign_boot_p <- function(x, s, ties = c("null", "split")) {
 ## w<quantity>_<mode>_flag, TRUE when the moment estimate lies outside the 95% percentile interval of the Cox-Reid estimate (Methods: Appendix C). The mean axis
 ## stays with NB. gates is the genes x contrasts logical matrix of the contrasts the observed fits define (apply_gate()): a failed observed fit leaves no
 ## estimate, interval or p-value on any scale, and a zero observed estimate none on log2 and none for raw theta or kappa.
-## shift (the second stage of the bootstrap, Methods: Shared shift) is a genes x (1 + B) matrix of the shared shift Xi at each gene's log2 mu_H: column 1 from
-## the observed curve, column 1 + b from the curve refitted in replicate b. Each hybrid-allele dispersion is multiplied by 2^-Xi before the contrasts are rebuilt,
+## shift (the second stage of the bootstrap, Methods: Shared shift) is a vector of the shared shift Xi at each gene's log2 mu_H, named by gene, from the curve
+## fitted once on the observed data and held at that value in every replicate. Each hybrid-allele dispersion is multiplied by 2^-Xi before the contrasts are rebuilt,
 ## which subtracts Xi from the log2 dispersion contrasts of the hybrid with the parents (Xi from bsize, 2 Xi added to kbal) and divides each hybrid allele value by
 ## 2^Xi (theta multiplied, kappa by 2^(2 Xi)) on the raw scale. The shifted contrasts are a<quantity>_<mode>_est, _se, _lo, _hi, _p for the modes the shift
 ## moves (.SHIFT.QUANTITIES). With shift, the degrees of dominance k = 2 Delta_dom / Delta_total and k_trans = 2 Delta_dom / Delta_trans of every quantity,
-## from the shifted Delta_dom (and the shifted raw trans contrast), are added as k_<quantity>_* and kt_<quantity>_* (.ratio_cdf()).
-## keep names contrasts of .ALL.CONTRAST.NAMES (unshifted) whose replicate values are returned as the attribute "draws", a B x length(keep) matrix (NA
-## throughout for a contrast the gates leave undefined), for the shared shift, which needs every gene's replicates at once.
-boot_contrasts_one <- function(g, expos, fits, mats, draws, etas, gates = NULL, methods = "NB", keep = NULL, shift = NULL) {
+## from the shifted Delta_dom (and the shifted raw trans contrast), are added as k_<quantity>_* and kt_<quantity>_* (.ratio_cdf()). A gene absent from shift
+## (no finite log2 mu_H) has no shifted contrasts.
+boot_contrasts_one <- function(g, expos, fits, mats, draws, etas, gates = NULL, methods = "NB", shift = NULL) {
   stopifnot(all(methods %in% c("NB", "weighted")), "NB" %in% methods, is.list(etas), all(.CONTRAST.GROUPS %in% names(etas)),
-            all(keep %in% .ALL.CONTRAST.NAMES), is.null(shift) || (is.matrix(shift) && ncol(shift) == length(draws) + 1))
+            is.null(shift) || (is.numeric(shift) && !is.null(names(shift))))
   do_w <- "weighted" %in% methods
   B <- length(draws); grp_all <- .CONTRAST.GROUPS; hyb <- grp_all[startsWith(grp_all, "HY")]; cn <- .ALL.CONTRAST.NAMES
-  xi <- if (is.null(shift)) NULL else if (g %in% rownames(shift)) unname(shift[g, ]) else rep(NA_real_, B + 1)
+  xi <- if (is.null(shift)) NULL else if (g %in% names(shift)) unname(shift[[g]]) else NA_real_
   eta_at <- function(grp, ix) { et <- etas[[grp]]; if (length(et) > 1 && !is.null(ix)) et[ix] else et }
   scale_hyb <- function(gv, x) { gv[hyb] <- lapply(gv[hyb], function(v) v * 2^(-x)); gv }
   D <- matrix(NA_real_, B, length(cn), dimnames = list(NULL, cn)); DW <- D; DA <- D
@@ -3880,7 +3900,7 @@ boot_contrasts_one <- function(g, expos, fits, mats, draws, etas, gates = NULL, 
     gv.mu <- lapply(f, function(x) unname(x[["mu"]]))
     gv.bf <- lapply(f, function(x) { v <- unname(x[["disp"]]); if (is.finite(v)) v else 0 })      # a failed refit counts as a zero dispersion
     D[b, ] <- .all_contrasts(gv.mu, gv.bf)
-    if (!is.null(xi)) DA[b, ] <- .all_contrasts(gv.mu, scale_hyb(gv.bf, xi[[b + 1]]))
+    if (!is.null(xi)) DA[b, ] <- .all_contrasts(gv.mu, scale_hyb(gv.bf, xi))
     if (do_w) {
       gv.w <- lapply(setNames(grp_all, grp_all), function(grp) { ix <- d[[.DRAW.KEY[[grp]]]]
         v <- unname(fit_dispersion(mats[[grp]][g, ix], expos[[grp]][ix], eta_at(grp, ix), "weighted")[["disp"]]); if (is.finite(v)) v else 0 })
@@ -3891,7 +3911,7 @@ boot_contrasts_one <- function(g, expos, fits, mats, draws, etas, gates = NULL, 
   ## rest of the contrast's columns.
   fv <- fit_group_values(fits[grp_all], g)
   o <- .all_contrasts(fv$mu, fv$disp)
-  if (!is.null(xi)) oa <- .all_contrasts(fv$mu, scale_hyb(fv$disp, xi[[1]]))
+  if (!is.null(xi)) oa <- .all_contrasts(fv$mu, scale_hyb(fv$disp, xi))
   if (do_w) {
     fw <- lapply(setNames(grp_all, grp_all), function(grp) unname(fit_dispersion(mats[[grp]][g, ], expos[[grp]], eta_at(grp, NULL), "weighted")[["disp"]]))
     ow <- .all_contrasts(fv$mu, fw)
@@ -3936,9 +3956,7 @@ boot_contrasts_one <- function(g, expos, fits, mats, draws, etas, gates = NULL, 
       for (s in names(kc)) out[[paste0(pre, "_", q, "_", s)]] <- kc[[s]]
     }
   }
-  res <- data.frame(out, row.names = NULL, check.names = FALSE)
-  if (length(keep)) attr(res, "draws") <- vapply(keep, function(k) if (is.na(res[[paste0(k, "_est")]])) rep(NA_real_, B) else D[, k], numeric(B))
-  res
+  data.frame(out, row.names = NULL, check.names = FALSE)
 }
 
 ## ============================================================
@@ -4004,16 +4022,20 @@ state_scores <- function(g, mats, state) {
 ## boot_contrasts_one()), without and with the gene's program score in the mean (state_scores(), fit_dispersion(z = )), and builds every contrast from each set of
 ## fits (.all_contrasts()). Resampled cells keep their scores. For every quantity of .COND.QUANTITIES and every reporting mode the output holds the conditioned
 ## estimate with its SE and 95% percentile interval (c<quantity>_<mode>_est, _se, _lo, _hi) and the paired change, unconditioned minus conditioned, with its
-## interval from the same draws (d<quantity>_<mode>_est, _lo, _hi). A failed refit counts as a zero dispersion, and zeros enter the log2 draws as +-Inf, as in
-## the reported bootstrap. Per group: cslope_<dataset>, the observed log2 change of the gene's mean per log2 unit of program score (tau, Methods Appendix E).
-## gates sets the contrasts the fits do not define to NA (apply_gate() with .COND.GATE). The contrasts are those of the first stage, before the shared shift.
-cond_contrasts_one <- function(g, expos, mats, draws, etas, state, gates = NULL) {
-  stopifnot(is.list(etas), all(.CONTRAST.GROUPS %in% names(etas)), length(draws) >= 3)
-  B <- length(draws); grp_all <- .CONTRAST.GROUPS; cn <- .ALL.CONTRAST.NAMES
+## interval from the same draws (d<quantity>_<mode>_est, _lo, _hi). shift (the observed shared shift Xi named by gene, as in boot_contrasts_one()) adds the same
+## for the shifted contrasts (ca<quantity>_<mode>_*, da<quantity>_<mode>_*, the modes of .SHIFT.QUANTITIES): both fits divide every hybrid-allele dispersion by
+## 2^Xi, so the flags of the shifted calls read the conditioned shifted contrasts. A failed refit counts as a zero dispersion, and zeros enter the log2 draws as
+## +-Inf, as in the reported bootstrap. Per group: cslope_<dataset>, the observed log2 change of the gene's mean per log2 unit of program score (tau, Methods
+## Appendix E). gates sets the contrasts the fits do not define to NA (apply_gate() with .COND.GATE). The conditioned contrasts are estimated, not tested.
+cond_contrasts_one <- function(g, expos, mats, draws, etas, state, gates = NULL, shift = NULL) {
+  stopifnot(is.list(etas), all(.CONTRAST.GROUPS %in% names(etas)), length(draws) >= 3, is.null(shift) || (is.numeric(shift) && !is.null(names(shift))))
+  B <- length(draws); grp_all <- .CONTRAST.GROUPS; cn <- .ALL.CONTRAST.NAMES; hyb <- grp_all[startsWith(grp_all, "HY")]
+  xi <- if (is.null(shift)) NULL else if (g %in% names(shift)) unname(shift[[g]]) else NA_real_
   zs <- state_scores(g, mats, state)
   eta_at <- function(grp, ix) { et <- etas[[grp]]; if (length(et) > 1 && !is.null(ix)) et[ix] else et }
-  D <- list(u = matrix(NA_real_, B, length(cn), dimnames = list(NULL, cn)))
-  D$c <- D$u
+  scale_hyb <- function(gv) { gv[hyb] <- lapply(gv[hyb], function(v) v * 2^(-xi)); gv }
+  empty <- matrix(NA_real_, B, length(cn), dimnames = list(NULL, cn))
+  D <- list(u = empty, c = empty, ua = empty, ca = empty)
   zero_fail <- function(f) lapply(f, function(x) { v <- unname(x[["disp"]]); if (is.finite(v)) v else 0 })      # a failed refit counts as a zero dispersion
   for (b in seq_len(B)) {
     d <- draws[[b]]
@@ -4023,34 +4045,42 @@ cond_contrasts_one <- function(g, expos, mats, draws, etas, state, gates = NULL)
       fu[[grp]] <- .fit_one(y, e, et)
       fc[[grp]] <- fit_dispersion(y, e, et, "NB", z = zs[[grp]][ix])
     }
-    D$u[b, ] <- .all_contrasts(lapply(fu, function(x) unname(x[["mu"]])), zero_fail(fu))
-    D$c[b, ] <- .all_contrasts(lapply(fc, function(x) unname(x[["mu"]])), zero_fail(fc))
+    mu_u <- lapply(fu, function(x) unname(x[["mu"]])); mu_c <- lapply(fc, function(x) unname(x[["mu"]]))
+    D$u[b, ] <- .all_contrasts(mu_u, zero_fail(fu)); D$c[b, ] <- .all_contrasts(mu_c, zero_fail(fc))
+    if (!is.null(xi)) { D$ua[b, ] <- .all_contrasts(mu_u, scale_hyb(zero_fail(fu))); D$ca[b, ] <- .all_contrasts(mu_c, scale_hyb(zero_fail(fc))) }
   }
   ## The observed fits of the full data, without and with the covariate
   ou <- lapply(setNames(grp_all, grp_all), function(grp) .fit_one(mats[[grp]][g, ], expos[[grp]], eta_at(grp, NULL)))
   oc <- lapply(setNames(grp_all, grp_all), function(grp) fit_dispersion(mats[[grp]][g, ], expos[[grp]], eta_at(grp, NULL), "NB", z = zs[[grp]]))
-  obs <- lapply(list(u = ou, c = oc), function(f) .all_contrasts(lapply(f, function(x) unname(x[["mu"]])), lapply(f, function(x) unname(x[["disp"]]))))
+  obs_of <- function(f, a) { ph <- lapply(f, function(x) unname(x[["disp"]])); .all_contrasts(lapply(f, function(x) unname(x[["mu"]])), if (a) scale_hyb(ph) else ph) }
+  obs <- list(u = obs_of(ou, FALSE), c = obs_of(oc, FALSE))
+  if (!is.null(xi)) { obs$ua <- obs_of(ou, TRUE); obs$ca <- obs_of(oc, TRUE) }
   out <- list(gene = g)
   for (grp in grp_all) out[[paste0("cslope_", grp)]] <- unname(oc[[grp]][["beta1"]]) / log(2)
-  for (md in .OUT_MODES) for (q in names(.COND.QUANTITIES)) {
-    nm <- paste0(q, "_", md); inf <- .NB.QUANTITIES[[q]]
-    eu <- obs$u[[nm]]; ec <- obs$c[[nm]]
+  ## put: the conditioned estimate with its bootstrap summary, and the paired change (unconditioned minus conditioned) with its interval
+  put <- function(lab, nm, eu, ec, xu, xc, inf) {
     if (!is.finite(eu)) eu <- NA_real_
     if (!is.finite(ec)) ec <- NA_real_
-    s <- .boot_summary(D$c[, nm], inf); dd <- .boot_summary(D$u[, nm] - D$c[, nm], inf)
-    out[[paste0("c", nm, "_est")]] <- ec; out[[paste0("c", nm, "_se")]] <- unname(s[["se"]])
-    out[[paste0("c", nm, "_lo")]] <- unname(s[["lo"]]); out[[paste0("c", nm, "_hi")]] <- unname(s[["hi"]])
-    out[[paste0("d", nm, "_est")]] <- eu - ec
-    out[[paste0("d", nm, "_lo")]] <- unname(dd[["lo"]]); out[[paste0("d", nm, "_hi")]] <- unname(dd[["hi"]])
+    s <- .boot_summary(xc, inf); dd <- .boot_summary(xu - xc, inf)
+    out[[paste0("c", lab, "_est")]] <<- ec; out[[paste0("c", lab, "_se")]] <<- unname(s[["se"]])
+    out[[paste0("c", lab, "_lo")]] <<- unname(s[["lo"]]); out[[paste0("c", lab, "_hi")]] <<- unname(s[["hi"]])
+    out[[paste0("d", lab, "_est")]] <<- eu - ec
+    out[[paste0("d", lab, "_lo")]] <<- unname(dd[["lo"]]); out[[paste0("d", lab, "_hi")]] <<- unname(dd[["hi"]])
+  }
+  for (md in .OUT_MODES) for (q in names(.COND.QUANTITIES)) {
+    nm <- paste0(q, "_", md); inf <- .NB.QUANTITIES[[q]]
+    put(nm, nm, obs$u[[nm]], obs$c[[nm]], D$u[, nm], D$c[, nm], inf)
+    if (!is.null(xi) && md %in% .SHIFT.QUANTITIES[[q]]) put(paste0("a", nm), nm, obs$ua[[nm]], obs$ca[[nm]], D$ua[, nm], D$ca[, nm], inf)
   }
   data.frame(apply_gate(out, if (is.null(gates)) NULL else gates[g, ], map = .COND.GATE), row.names = NULL, check.names = FALSE)
 }
 
 ## state_flag_vec: for each gene (row of BURST.CONTRASTS), TRUE when any of the given quantity and mode combinations carries a state flag
-## (stateflag_<quantity>_<mode>, set in analysis.R Section 2.5: a significant call whose conditioned interval contains zero and whose change under conditioning
+## (stateflag_<quantity>_<mode>, or stateflag_a<quantity>_<mode> where the shared shift moves the contrast; set in analysis.R Section 2.5: a significant call whose conditioned interval contains zero and whose change under conditioning
 ## excludes zero). Absent columns count as unflagged, so the figures draw without flags when the conditioned layer has not been added.
 state_flag_vec <- function(BURST.CONTRASTS, quantities, modes) {
-  cols <- intersect(as.vector(outer(quantities, modes, function(q, m) paste0("stateflag_", q, "_", m))), names(BURST.CONTRASTS))
+  cols <- intersect(paste0("stateflag_", unlist(lapply(quantities, function(q) vapply(modes, function(m) if (q %in% names(.SHIFT.QUANTITIES)) dom_col(q, m) else paste0(q, "_", m), "")))),
+                    names(BURST.CONTRASTS))     # the shifted contrast where the shared shift moves it, as the scatters draw it
   if (!length(cols)) return(rep(FALSE, nrow(BURST.CONTRASTS)))
   m <- as.matrix(BURST.CONTRASTS[cols])
   rowSums(matrix(m %in% TRUE, nrow(m))) > 0
@@ -4072,23 +4102,25 @@ moment_flag_vec <- function(BURST.CONTRASTS, quantities, modes) {
 }
 
 ## coexpr_bootstrap_one: one bootstrap draw of the co-expression decomposition. draw (from make_coexpr_draws()) resamples the columns of each resid dataset;
-## HYB.SC and HYB.SE take the same H draw because they are the same cells. The shared shift of dom is recomputed from the draw's own pairs with the fixed deciles
-## (attr(resid, "dom_bins")). Returns every part of .COEXPR.PARTS at the upper-triangle pair positions.
+## the two alleles of a hybrid cell take the same index. The shared shift is the observed one (attr(resid, "dom_shift")), held fixed. Returns every part of
+## .COEXPR.PARTS at the upper-triangle pair positions.
 coexpr_bootstrap_one <- function(draw, resid) {
-  d <- coexpr_decompose(list(MIX.SC = resid$MIX.SC[, draw$SC], MIX.SE = resid$MIX.SE[, draw$SE],
-                             HYB.SC = resid$HYB.SC[, draw$H],  HYB.SE = resid$HYB.SE[, draw$H]), bins = attr(resid, "dom_bins"))
+  stopifnot(!is.null(attr(resid, "dom_shift")))
+  d <- coexpr_decompose(list(MIX.SC = resid$MIX.SC[, draw$SC], MIX.SE = resid$MIX.SE[, draw$SE], HYC.SC = resid$HYC.SC[, draw$HC], HYC.SE = resid$HYC.SE[, draw$HC],
+                             HYT.SC = resid$HYT.SC[, draw$HT], HYT.SE = resid$HYT.SE[, draw$HT]), bins = attr(resid, "dom_bins"), shift = attr(resid, "dom_shift"))
   up <- which(upper.tri(d$total))
   lapply(setNames(.COEXPR.PARTS, .COEXPR.PARTS), function(nm) d[[nm]][up])
 }
 
 ## coexpr_acc_new / coexpr_acc_fold: the streaming accumulator of the co-expression bootstrap. Holding every draw costs O(B x pairs) memory, and pairs grow
 ## as p^2, so each chunk of draws is folded in and discarded: per part the running sum and sum of squares (the SD needs only these), and for the degrees of
-## dominance k = 2 dom / total and k_trans = 2 dom / trans the number of defined replicates and the counts at or below and below -1, 0 and 1, which give the
-## empirical distribution that places the k interval against the parents and the midparent (classify_dom(), as .ratio_cdf() does for single genes).
+## dominance k = 2 dom / total and k_trans = 2 dom / trans (.ratio_k()) the number of replicates, the number undefined, and the counts at or below -1, 0 and 1
+## with undefined replicates included (lower tail) and below them without (upper tail), which place the k interval against the parents and the midparent
+## (classify_dom(), as .ratio_cdf() does for single genes).
 coexpr_acc_new <- function(n_pairs) {
   z <- numeric(n_pairs)
   sums <- unlist(lapply(.COEXPR.PARTS, function(nm) setNames(list(z, z), paste0(c("sum_", "sumsq_"), nm))), recursive = FALSE)
-  cnt <- unlist(lapply(c("k", "kt"), function(pre) setNames(rep(list(z), 7), paste0(pre, "_", c("n", "Fm1", "F0", "F1", "Gm1", "G0", "G1")))), recursive = FALSE)
+  cnt <- unlist(lapply(c("k", "kt"), function(pre) setNames(rep(list(z), 8), paste0(pre, "_", c("n", "undef", "Fm1", "F0", "F1", "Gm1", "G0", "G1")))), recursive = FALSE)
   c(list(n = 0L), sums, cnt)
 }
 coexpr_acc_fold <- function(acc, draws) {
@@ -4099,11 +4131,12 @@ coexpr_acc_fold <- function(acc, draws) {
   }
   dm <- do.call(rbind, lapply(draws, `[[`, "dom"))
   for (pre in c("k", "kt")) {
-    k <- 2 * dm / do.call(rbind, lapply(draws, `[[`, if (pre == "k") "total" else "trans")); ok <- !is.na(k)
-    acc[[paste0(pre, "_n")]] <- acc[[paste0(pre, "_n")]] + colSums(ok)
+    rf <- do.call(rbind, lapply(draws, `[[`, if (pre == "k") "total" else "trans"))
+    k <- matrix(.ratio_k(dm, rf), nrow(dm)); u <- is.na(k)
+    acc[[paste0(pre, "_n")]] <- acc[[paste0(pre, "_n")]] + nrow(k); acc[[paste0(pre, "_undef")]] <- acc[[paste0(pre, "_undef")]] + colSums(u)
     for (cc in c(-1, 0, 1)) { lab <- c("m1", "0", "1")[match(cc, c(-1, 0, 1))]
-      acc[[paste0(pre, "_F", lab)]] <- acc[[paste0(pre, "_F", lab)]] + colSums(ok & k <= cc)
-      acc[[paste0(pre, "_G", lab)]] <- acc[[paste0(pre, "_G", lab)]] + colSums(ok & k < cc) }
+      acc[[paste0(pre, "_F", lab)]] <- acc[[paste0(pre, "_F", lab)]] + colSums(u | k <= cc)          # undefined replicates in the lower tail
+      acc[[paste0(pre, "_G", lab)]] <- acc[[paste0(pre, "_G", lab)]] + colSums(!u & k < cc) }      # and out of the upper tail
   }
   acc
 }
@@ -4118,11 +4151,12 @@ coexpr_part_table <- function(nm, point, acc, base) {
 }
 
 ## coexpr_k_table: the degree of dominance of every pair (pre "k": 2 dom / total; "kt": 2 dom / trans) from the point estimates, with the number of defined
-## bootstrap replicates and the empirical distribution at -1, 0 and 1 (Fm1, F0, F1 = Pr(k <= c); Gm1, G0, G1 = Pr(k < c)) from the accumulator.
+## bootstrap replicates, the number undefined and the empirical distribution at -1, 0 and 1 (Fm1, F0, F1 = Pr(k <= c), undefined counted; Gm1, G0, G1 =
+## Pr(k < c), undefined not counted) from the accumulator.
 coexpr_k_table <- function(pre, point, acc, base) {
   up <- which(upper.tri(point$dom)); ref <- point[[if (pre == "k") "total" else "trans"]][up]
   n <- acc[[paste0(pre, "_n")]]; fr <- function(x) ifelse(n > 0, x / n, NA_real_)
-  data.frame(base, est = ifelse(ref != 0, 2 * point$dom[up] / ref, NA_real_), n = n,
+  data.frame(base, est = .ratio_k(point$dom[up], ref), n = n, n_undef = acc[[paste0(pre, "_undef")]],
              Fm1 = fr(acc[[paste0(pre, "_Fm1")]]), F0 = fr(acc[[paste0(pre, "_F0")]]), F1 = fr(acc[[paste0(pre, "_F1")]]),
              Gm1 = fr(acc[[paste0(pre, "_Gm1")]]), G0 = fr(acc[[paste0(pre, "_G0")]]), G1 = fr(acc[[paste0(pre, "_G1")]]))
 }
@@ -4136,22 +4170,23 @@ top_sq_eigen <- function(m, n_keep) {
 
 ## coexpr_perm_one: one draw of the four null spectra, for rank-matched testing of every candidate axis (Methods: Co-expression, Axes of divergence). draw:
 ## list(perm = element of DRAWS.PERM.COEXPR, dom = element of DRAWS.DOM.COEXPR). resid: the RESID list, with the decile of every pair (attr "dom_bins"). nSC:
-## Sc-parent cell count. total and cis are permutation nulls (pooled parents reassigned to groups of the original sizes; per-cell allele swaps) and trans is their
-## difference. The dominance null works within each genome: the Sc parent's cells are pooled with the Sc residuals of the hybrid cells and the Se parent's with
-## the Se residuals, each pool is reassigned to parental and hybrid groups of the original sizes, and dom is recomputed with the same shared-shift adjustment as the
-## observed matrix (coexpr_decompose(bins)). Returns the top n_keep squared eigenvalues by magnitude, descending, for each.
+## Sc-parent cell count. The total null reassigns the pooled parental cells to groups of the original sizes; the cis null swaps the two alleles' residuals in a
+## random subset of cis cells; the trans null is the total null minus the allele contrast of the trans cells with their own random swaps. The dominance null
+## works within each genome: the Sc parent's cells are pooled with the Sc residuals of the trans cells and the Se parent's with the Se residuals, each pool is
+## reassigned to parental and hybrid groups of the original sizes, and dom is recomputed with the shared-shift adjustment applied to the draw (the decile medians
+## of the draw's own dom: under the null the hybrid and parental cells are exchangeable, so the observed shift is not subtracted). Returns the top n_keep squared
+## eigenvalues by magnitude, descending, for each.
 coexpr_perm_one <- function(draw, n_keep, nSC, resid) {
-  pooled   <- cbind(resid$MIX.SC, resid$MIX.SE)
-  perm.sc  <- pooled[, draw$perm$idx[seq_len(nSC)]]
-  perm.se  <- pooled[, draw$perm$idx[-seq_len(nSC)]]
-  perm.hsc <- resid$HYB.SC; perm.hse <- resid$HYB.SE
-  perm.hsc[, draw$perm$swap] <- resid$HYB.SE[, draw$perm$swap]
-  perm.hse[, draw$perm$swap] <- resid$HYB.SC[, draw$perm$swap]
-  d <- coexpr_decompose(list(MIX.SC = perm.sc, MIX.SE = perm.se, HYB.SC = perm.hsc, HYB.SE = perm.hse), bins = NULL)
-  pc <- cbind(resid$MIX.SC, resid$HYB.SC)[, draw$dom$c]; pe <- cbind(resid$MIX.SE, resid$HYB.SE)[, draw$dom$e]
+  pooled <- cbind(resid$MIX.SC, resid$MIX.SE)
+  sw <- function(a, b, s) { a[, s] <- b[, s]; a }
+  hcc <- sw(resid$HYC.SC, resid$HYC.SE, draw$perm$swap_c); hce <- sw(resid$HYC.SE, resid$HYC.SC, draw$perm$swap_c)
+  htc <- sw(resid$HYT.SC, resid$HYT.SE, draw$perm$swap_t); hte <- sw(resid$HYT.SE, resid$HYT.SC, draw$perm$swap_t)
+  d <- coexpr_decompose(list(MIX.SC = pooled[, draw$perm$idx[seq_len(nSC)]], MIX.SE = pooled[, draw$perm$idx[-seq_len(nSC)]],
+                             HYC.SC = hcc, HYC.SE = hce, HYT.SC = htc, HYT.SE = hte), bins = NULL)
+  pc <- cbind(resid$MIX.SC, resid$HYT.SC)[, draw$dom$c]; pe <- cbind(resid$MIX.SE, resid$HYT.SE)[, draw$dom$e]
   nSE <- ncol(resid$MIX.SE)
-  dd <- coexpr_decompose(list(MIX.SC = pc[, seq_len(nSC)], HYB.SC = pc[, -seq_len(nSC)], MIX.SE = pe[, seq_len(nSE)], HYB.SE = pe[, -seq_len(nSE)]),
-                         bins = attr(resid, "dom_bins"))
+  dd <- coexpr_decompose(list(MIX.SC = pc[, seq_len(nSC)], HYT.SC = pc[, -seq_len(nSC)], MIX.SE = pe[, seq_len(nSE)], HYT.SE = pe[, -seq_len(nSE)],
+                              HYC.SC = resid$HYC.SC, HYC.SE = resid$HYC.SE), bins = attr(resid, "dom_bins"), shift = NULL)
   list(total = top_sq_eigen(d$total, n_keep), cis = top_sq_eigen(d$cis, n_keep), trans = top_sq_eigen(d$trans, n_keep), dom = top_sq_eigen(dd$dom, n_keep))
 }
 

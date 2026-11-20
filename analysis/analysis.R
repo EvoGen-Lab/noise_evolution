@@ -783,7 +783,6 @@ colnames(GATES) <- sub("_valid$", "", colnames(GATES)); rownames(GATES) <- GENES
 ## cells, and every hybrid dataset is assembled from the same resampled cell IDs, each copy keeping the partition memberships of the cell it copied
 ## (make_draws()), so the contrasts of the four partitions share their cells.
 ## Every p-value is the bootstrap sign test on these replicates (sign_boot_p(), Methods: Tests of contrasts), computed in the job beside each estimate and interval.
-## Replicate 1 also keeps the replicate values of the mid log2 dispersion contrast (BOOT.DOM.DRAWS), from which the shared shift is refitted in every replicate.
 DRAW.SPLITS <- list(HYC = SPLIT.IDX.MEAN$c, HYC.N = SPLIT.IDX.DISP$c, HYC.K = SPLIT.IDX.KBAL$c, HYC.Z = SPLIT.IDX.BSIZE$c)
 DRAWS.REPS <- lapply(SEED.BOOT + seq_len(N.BOOT.REP) - 1, function(seed) make_draws(NCELLS, N.BOOT, seed, splits = DRAW.SPLITS))
 ## The cluster scripts read the objects under their plain names, with GENES the genes to run, so the inputs are saved from an environment that
@@ -792,16 +791,15 @@ JOB.INPUTS <- list2env(list(CONTRAST.MATS = CONTRAST.MATS.INFER, CONTRAST.EXPOS 
                             DRAWS.REPS = DRAWS.REPS, N.BOOT = N.BOOT, CONTRAST.ETAS = CONTRAST.ETAS, GATES = GATES))
 save(list = c("CONTRAST.MATS", "CONTRAST.EXPOS", "CONTRAST.FITS", "GENES", "DRAWS.REPS", "N.BOOT", "CONTRAST.ETAS", "GATES"), envir = JOB.INPUTS, file = file.path(INPUT.DIR, "gene_boot_inputs.rda"))
 BOOT.CONTRASTS.REPS.INFER <- load_replicates("gene_boot", "BOOT.CONTRASTS", N.BOOT.REP, expected = length(GENES.INFER))
-BOOT.DOM.DRAWS <- load_replicates("gene_boot", "BOOT.DOM.DRAWS", 1, expected = length(GENES.INFER), size = nrow)[[1]]   # replicate 1 holds them
-stopifnot(identical(sort(BOOT.CONTRASTS.REPS.INFER[[1]]$gene), sort(GENES.INFER)), identical(rownames(BOOT.DOM.DRAWS), BOOT.CONTRASTS.REPS.INFER[[1]]$gene))
+stopifnot(identical(sort(BOOT.CONTRASTS.REPS.INFER[[1]]$gene), sort(GENES.INFER)))
 ## ---- end cluster round trip 1 ----
 
 ## Shared shift (Methods: Shared shift). Both hybrid alleles are noisier than the parents by an amount that falls with expression (checks MID1 to MID5). Xi is
 ## one robust loess (span DOM.ADJ.SPAN) of the mid log2 dispersion contrast Delta_dom on log2 mu_H, the geometric per-genome hybrid mean of the allele fits on
 ## all hybrid cells, over calibrator genes (DOM.ADJ.CAL: trans and total log2 dispersion contrasts with q >= DOM.ADJ.SIG in the first-stage BH families, which
-## the second stage leaves unchanged), whose Delta_dom should sit near zero but for the shared shift. The calibrator set is fixed; the curve is refitted in every
-## bootstrap replicate from the calibrators' replicate values (BOOT.DOM.DRAWS). DOM.SHIFT holds each gene's Xi from the observed curve (column 1) and from each
-## replicate curve, and the second stage of gene_boot.R divides every hybrid-allele dispersion by 2^Xi in the observed data and in every replicate.
+## the second stage leaves unchanged), whose Delta_dom should sit near zero but for the shared shift. The calibrator set and the curve are both fixed from the
+## observed data: DOM.SHIFT holds each gene's Xi from the observed curve, and the second stage of gene_boot.R divides every hybrid-allele dispersion by 2^Xi with
+## the same Xi in the observed data and in every replicate, so the tests and intervals treat Xi as known.
 DOM.ADJ.SIG  <- 0.05      # q threshold of the calibrator genes (trans and total log2 dispersion contrasts both at or above it)
 DOM.ADJ.SPAN <- 0.3       # loess span of the shared shift on log2 mu_H
 BOOT.STAGE1 <- BOOT.CONTRASTS.REPS.INFER[[1]]
@@ -811,14 +809,13 @@ DOM.ADJ.X <- local({
   setNames(l, rownames(CONTRAST.FITS.INFER$HYB.SC))[BOOT.STAGE1$gene]
 })
 DOM.ADJ.CAL <- (STAGE1.Q$trans >= DOM.ADJ.SIG) %in% TRUE & (STAGE1.Q$total >= DOM.ADJ.SIG) %in% TRUE & is.finite(DOM.ADJ.X)
-DOM.SHIFT <- cbind(obs = dom_shift_curve(BOOT.STAGE1$disp_mid_est, DOM.ADJ.X, DOM.ADJ.CAL, DOM.ADJ.SPAN),
-                   vapply(seq_len(ncol(BOOT.DOM.DRAWS)), function(b) dom_shift_curve(BOOT.DOM.DRAWS[, b], DOM.ADJ.X, DOM.ADJ.CAL, DOM.ADJ.SPAN), numeric(nrow(BOOT.STAGE1))))
-rownames(DOM.SHIFT) <- BOOT.STAGE1$gene
+DOM.SHIFT <- setNames(dom_shift_curve(BOOT.STAGE1$disp_mid_est, DOM.ADJ.X, DOM.ADJ.CAL, DOM.ADJ.SPAN), BOOT.STAGE1$gene)
+DOM.SHIFT <- DOM.SHIFT[is.finite(DOM.SHIFT)]      # a gene without a finite log2 mu_H has no shift and no shifted contrasts
 cat(sprintf("Shared shift: %d calibrator genes of %d\n", sum(DOM.ADJ.CAL), nrow(BOOT.STAGE1)))
 
 ## ---- Cluster round trip 2: Rscript gene_boot.R with GENE_BOOT_STAGE=2 (one task) ----
 ## The second stage reads gene_boot_inputs.rda and gene_shift_inputs.rda (DOM.SHIFT), reruns replicate 1 on its own draws with every hybrid-allele dispersion
-## divided by 2^Xi, and writes gene_boot_shift_output.rda (BOOT.CONTRASTS: every first-stage column, the shifted contrasts a<quantity>_<mode>_* and the degrees
+## divided by the gene's fixed 2^Xi, and writes gene_boot_shift_output.rda (BOOT.CONTRASTS: every first-stage column, the shifted contrasts a<quantity>_<mode>_* and the degrees
 ## of dominance k_<quantity>_* and kt_<quantity>_*). Its unshifted columns repeat replicate 1 of the first stage exactly, which is checked below.
 save(DOM.SHIFT, file = file.path(INPUT.DIR, "gene_shift_inputs.rda"))
 load_cluster_output(file.path(OUTPUT.DIR, "gene_boot_shift_output.rda"), "gene_boot.R (stage 2)")
@@ -876,7 +873,7 @@ write.csv(GENE.SET.SIZES,         file.path(TABLE.DIR, "gene_set_sizes.csv"),   
 ## PR holds the p-values with their BH q-values (Methods: Multiple testing): one family per p column, every contrast (the parental and inheritance contrasts
 ## included) and every quantity, before and after the shared shift, each adjusted over the genes that have a p-value in it.
 BURST.CONTRASTS.INFER <- cbind(BOOT.CONTRASTS.INFER, log2_mu_H = unname(DOM.ADJ.X[BOOT.CONTRASTS.INFER$gene]), dom_calibrator = DOM.ADJ.CAL[match(BOOT.CONTRASTS.INFER$gene, BOOT.STAGE1$gene)],
-                               dom_shift = unname(DOM.SHIFT[BOOT.CONTRASTS.INFER$gene, "obs"]))
+                               dom_shift = unname(DOM.SHIFT[BOOT.CONTRASTS.INFER$gene]))
 PR.INFER <- local({
   df <- BURST.CONTRASTS.INFER[, c("gene", grep("_p$", names(BURST.CONTRASTS.INFER), value = TRUE))]
   for (nm in setdiff(names(df), "gene")) df[[sub("_p$", "_q", nm)]] <- p.adjust(df[[nm]], method = "BH")
@@ -1005,9 +1002,9 @@ cat("Program score per tube (log2, centred at the tube median):\n"); print(STATE
 ## bootstrap replicate 1 (DRAWS.REPS[[1]]), so its unconditioned estimates are those of BURST.CONTRASTS and the paired changes compare the two fits on the same
 ## cells. COND.KEY fingerprints the inputs.
 COND.KEY <- list(genes = GENES.INFER, n_draws = length(DRAWS.REPS[[1]]), members = STATE.MEMBERS, totals = vapply(STATE.COND$cells, function(x) sum(x$total), numeric(1)),
-                 blocks = N.COND.ARRAY)
+                 blocks = N.COND.ARRAY, shift = DOM.SHIFT)
 JOB.INPUTS <- list2env(list(CONTRAST.MATS = CONTRAST.MATS.INFER, CONTRAST.EXPOS = CONTRAST.EXPOS, GENES = GENES.INFER, DRAWS = DRAWS.REPS[[1]], CONTRAST.ETAS = CONTRAST.ETAS,
-                            GATES = GATES, STATE.COND = STATE.COND, COND.KEY = COND.KEY, N.COND.ARRAY = N.COND.ARRAY))
+                            GATES = GATES, STATE.COND = STATE.COND, COND.KEY = COND.KEY, N.COND.ARRAY = N.COND.ARRAY, DOM.SHIFT = DOM.SHIFT))
 save(list = ls(JOB.INPUTS), envir = JOB.INPUTS, file = file.path(INPUT.DIR, "gene_cond_inputs.rda"))
 COND.CONTRASTS <- local({
   out <- list()
@@ -1032,10 +1029,12 @@ local({
 
 ## Flags. For every tested quantity (the log2 mean, the log2 and raw dispersion, the raw burst frequency, the log2 and raw burst size and kinetic balance) and
 ## mode: a significant unconditioned call (BH q below STATE.FLAG.SIG) whose conditioned 95% bootstrap interval contains zero and whose paired change excludes zero.
-STATE.FLAG.QUANTITIES <- c("mean", "disp", "rdisp", "rtheta", "bsize", "rbsize", "kbal", "rkbal")
+## The shifted contrasts (a<quantity>, the modes the shared shift moves) are flagged from their own conditioned fits, which carry the same fixed shift.
+STATE.FLAG.QUANTITIES <- c("mean", "disp", "rdisp", "rtheta", "bsize", "rbsize", "kbal", "rkbal", paste0("a", names(.SHIFT.QUANTITIES)))
 BURST.CONTRASTS <- local({
   bc <- BURST.CONTRASTS
   for (q in STATE.FLAG.QUANTITIES) for (md in .OUT_MODES) {
+    if (!paste0(q, "_", md, "_q") %in% names(PR)) next      # a shifted quantity in a mode the shift leaves unchanged
     sig   <- PR[[paste0(q, "_", md, "_q")]] < STATE.FLAG.SIG
     cover <- COND.CONTRASTS[[paste0("c", q, "_", md, "_lo")]] <= 0 & COND.CONTRASTS[[paste0("c", q, "_", md, "_hi")]] >= 0
     moved <- COND.CONTRASTS[[paste0("d", q, "_", md, "_lo")]] > 0 | COND.CONTRASTS[[paste0("d", q, "_", md, "_hi")]] < 0
@@ -1048,6 +1047,7 @@ BURST.CONTRASTS <- local({
 STATE.FLAG.TABLES <- local({
   STATE.FLAG.SUMMARY <- list(); STATE.FLAGGED <- list()
   for (q in STATE.FLAG.QUANTITIES) for (md in .OUT_MODES) {
+    if (!paste0(q, "_", md, "_q") %in% names(PR)) next
     sig <- (PR[[paste0(q, "_", md, "_q")]] < STATE.FLAG.SIG) %in% TRUE
     lo <- COND.CONTRASTS[[paste0("c", q, "_", md, "_lo")]]; hi <- COND.CONTRASTS[[paste0("c", q, "_", md, "_hi")]]
     fl <- BURST.CONTRASTS[[paste0("stateflag_", q, "_", md)]]
@@ -1072,8 +1072,8 @@ write.csv(STATE.FLAG.SUMMARY, file.path(TABLE.DIR, "state_flag_summary.csv"),   
 write.csv(STATE.FLAGGED,      file.path(TABLE.DIR, "state_flagged_calls.csv"),         row.names = FALSE)
 
 ## Conditioned against unconditioned estimates of the noise contrasts, flagged calls as open triangles.
-fig_pdf("extra/S_state_conditioned_disp.pdf", 12, 8)
-par(mfrow = c(2, 3), mar = c(4.5, 4.5, 3, 1), pty = "s")
+fig_pdf("extra/S_state_conditioned_disp.pdf", 16, 8)
+par(mfrow = c(2, 4), mar = c(4.5, 4.5, 3, 1), pty = "s")
 local(for (md in .OUT_MODES) {
   x <- BURST.CONTRASTS[[paste0("disp_", md, "_est")]]; y <- COND.CONTRASTS[[paste0("cdisp_", md, "_est")]]; fl <- BURST.CONTRASTS[[paste0("stateflag_disp_", md)]]
   ok <- is.finite(x) & is.finite(y); lim <- range(c(x[ok], y[ok]))
@@ -1479,19 +1479,23 @@ RHO.ALL <- gene_reliability(CONTRAST.FITS[c("MIX.SC", "MIX.SE", "HYB.SC", "HYB.S
 CO.GENES <- union(GENES[order(CONTRAST.FITS$MIX.SC$MU, decreasing = TRUE)][1:250], names(RHO.ALL)[RHO.ALL > 0.3])
 length(CO.GENES)
 
-# Pearson residuals of the four groups (Methods: Co-expression), each from its offset NB fit: the parents with their library offsets and each hybrid allele
-# with its own library offset and its split-corrected dispersion.
+# Pearson residuals (Methods: Co-expression), each from its offset NB fit: the parents with their library offsets and each hybrid allele with its own library
+# offset and its split-corrected dispersion. Pairs take the cis and trans partition of the dispersion (noise) axis, as single genes do (SPLIT.IDX.DISP): the cis
+# contrast compares the two alleles in the cis cells, and trans, dom and the inheritance contrasts use the trans cells, each fitted on its own cells
+# (HYC.SC.N / HYC.SE.N, HYT.SC.N / HYT.SE.N), so no contrast built on the hybrid alleles shares cells with cis.
 RESID <- list(
   MIX.SC = nb_residuals(MIX.SC[CO.GENES, ], EXPO.MIX.SC, CONTRAST.FITS$MIX.SC[CO.GENES, ]),
   MIX.SE = nb_residuals(MIX.SE[CO.GENES, ], EXPO.MIX.SE, CONTRAST.FITS$MIX.SE[CO.GENES, ]),
-  HYB.SC = nb_residuals(HYB.SC[CO.GENES, ], EXPO.HYB.SC, CONTRAST.FITS$HYB.SC[CO.GENES, ]),
-  HYB.SE = nb_residuals(HYB.SE[CO.GENES, ], EXPO.HYB.SE, CONTRAST.FITS$HYB.SE[CO.GENES, ]))
+  HYC.SC = nb_residuals(CONTRAST.MATS$HYC.SC.N[CO.GENES, ], CONTRAST.EXPOS$HYC.SC.N, CONTRAST.FITS$HYC.SC.N[CO.GENES, ]),
+  HYC.SE = nb_residuals(CONTRAST.MATS$HYC.SE.N[CO.GENES, ], CONTRAST.EXPOS$HYC.SE.N, CONTRAST.FITS$HYC.SE.N[CO.GENES, ]),
+  HYT.SC = nb_residuals(CONTRAST.MATS$HYT.SC.N[CO.GENES, ], CONTRAST.EXPOS$HYT.SC.N, CONTRAST.FITS$HYT.SC.N[CO.GENES, ]),
+  HYT.SE = nb_residuals(CONTRAST.MATS$HYT.SE.N[CO.GENES, ], CONTRAST.EXPOS$HYT.SE.N, CONTRAST.FITS$HYT.SE.N[CO.GENES, ]))
+stopifnot(identical(ncol(RESID$HYC.SC), length(SPLIT.IDX.DISP$c)), identical(ncol(RESID$HYT.SC), length(SPLIT.IDX.DISP$t)))
 
 # Shared shift of the pair dominance contrast. The hybrid is noisier, so its within-genome correlations can differ from the parental ones by a shift shared by
 # most pairs. Pairs are grouped into equal-count deciles of the average observed log2 mu_H of their two genes (log2 mu_H the geometric per-genome hybrid mean of
-# the allele fits on all hybrid cells), and coexpr_decompose() subtracts from dom (and from both inheritance contrasts) the median dom of the pairs of each decile,
-# recomputed in every bootstrap replicate and every null draw. The deciles are fixed from the observed data. A pair's dom uses all hybrid cells: pairs have no
-# cis and trans partition.
+# the allele fits on all hybrid cells), and the median dom of the pairs of each decile is the shift, computed once from the observed data (COEXPR.DOM.SHIFT) and
+# subtracted unchanged from dom and from both inheritance contrasts in the observed matrices and in every bootstrap replicate (coexpr_decompose()).
 COEXPR.DOM.BINS <- local({
   lmu <- 0.5 * (log2(CONTRAST.FITS$HYB.SC[CO.GENES, "MU"]) + log2(CONTRAST.FITS$HYB.SE[CO.GENES, "MU"]))
   stopifnot(all(is.finite(lmu)))
@@ -1501,11 +1505,14 @@ COEXPR.DOM.BINS <- local({
 })
 attr(RESID, "dom_bins") <- COEXPR.DOM.BINS
 
-# COEXPR.POINT is the point estimate of the pairwise residual correlation matrices, decomposed into total (parents), cis (the two genomes within the hybrid
-# cells), trans (the remainder), dom (the hybrid's average within-genome correlation against the parental average, after the shared shift) and the inheritance
-# contrasts inh_c and inh_e (each genome in the hybrid against its parent), with the decile shifts ($shift).
-COEXPR.POINT <- coexpr_decompose(RESID)
-cat("Shared shift of the pair dominance contrast by decile of the pairs' log2 mu_H:\n"); print(round(COEXPR.POINT$shift, 4))
+# COEXPR.POINT is the point estimate of the pairwise residual correlation matrices, decomposed into total (parents), cis (the two genomes in the cis cells),
+# trans (the parental difference minus the allele difference of the trans cells), dom (the hybrid's average within-genome correlation in the trans cells against
+# the parental average, after the shared shift) and the inheritance contrasts inh_c and inh_e (each genome in the hybrid against its parent), with the decile
+# shifts ($shift), which every replicate then reuses (attr(RESID, "dom_shift")).
+COEXPR.POINT <- coexpr_decompose(RESID, shift = NULL)
+COEXPR.DOM.SHIFT <- COEXPR.POINT$shift
+attr(RESID, "dom_shift") <- COEXPR.DOM.SHIFT
+cat("Shared shift of the pair dominance contrast by decile of the pairs' log2 mu_H:\n"); print(round(COEXPR.DOM.SHIFT, 4))
 
 # Asks if the total correlation matrix is well described by a single shared
 # factor or is pair-specific with no such structure? The rank-1 component is the
@@ -1523,7 +1530,7 @@ RANK.CHECK$r2
 ## for replicate k, resampled with DRAWS.COEXPR.REPS[[k]] (seed SEED.COEXPR + k - 1). Each CB must hold one row per
 ## pair of CO.GENES.
 DRAWS.COEXPR.REPS <- lapply(SEED.COEXPR + seq_len(N.BOOT.REP) - 1, function(seed)
-  make_coexpr_draws(ncol(RESID$MIX.SC), ncol(RESID$MIX.SE), ncol(RESID$HYB.SC), N.COEXPR, seed))
+  make_coexpr_draws(ncol(RESID$MIX.SC), ncol(RESID$MIX.SE), ncol(HYB.SC), N.COEXPR, seed, cis = SPLIT.IDX.DISP$c))
 save(RESID, COEXPR.POINT, DRAWS.COEXPR.REPS, file = file.path(INPUT.DIR, "coexpr_boot_inputs.rda"))
 CB.REPS <- load_replicates("coexpr_boot", "CB", N.BOOT.REP, expected = choose(length(CO.GENES), 2), size = function(cb) nrow(cb$total))
 CB <- CB.REPS[[1]]
@@ -1612,18 +1619,20 @@ table(factor(CB.TDOM.CLASS$class, levels = c(DOM.CLASS, "Ambiguous")))
 
 ## Draws for the joint null of the total, cis, trans and dom spectra (rank-matched axis testing); one draw yields all four null spectra (coexpr_perm_one()).
 ## The total null re-splits the pooled parent cells into pseudo-Sc and pseudo-Se groups of the original sizes; the cis null swaps the two alleles' residuals in a
-## random subset of hybrid cells (an independent coin flip per cell); trans null = total null - cis null. The dominance null pools the Sc parent's cells with the
-## Sc residuals of the hybrid cells and the Se parent's cells with the Se residuals, reassigns each pool to parental and hybrid groups of the original sizes, and
-## recomputes dom with the shared-shift adjustment of the observed matrix. The draws are pre-drawn from their own seed streams.
+## random subset of cis cells (an independent coin flip per cell); the trans null is the total null minus the allele contrast of the trans cells with their own
+## random swaps. The dominance null pools the Sc parent's cells with the Sc residuals of the trans cells and the Se parent's cells with the Se residuals, reassigns
+## each pool to parental and hybrid groups of the original sizes, and recomputes dom with the decile-median adjustment applied to the draw itself (under the null
+## the pooled cells are exchangeable, so the observed shift is not subtracted). The draws are pre-drawn from their own seed streams.
 N.SC  <- ncol(RESID$MIX.SC)
 N.SE  <- ncol(RESID$MIX.SE)
-N.HYB <- ncol(RESID$HYB.SC)
+N.HYC <- ncol(RESID$HYC.SC)
+N.HYT <- ncol(RESID$HYT.SC)
 N.KEEP        <- 15
 N.PERM.COEXPR <- 10000
 SEED.COEXPR.PERM <- 2     # permutation draws (total, cis)
 SEED.COEXPR.NULL <- 3     # within-genome reassignments of the dominance null
-DRAWS.PERM.COEXPR <- with_local_seed(SEED.COEXPR.PERM, lapply(seq_len(N.PERM.COEXPR), coexpr_perm_draw, nH = N.HYB, n_tot = N.SC + N.SE))
-DRAWS.DOM.COEXPR  <- with_local_seed(SEED.COEXPR.NULL, lapply(seq_len(N.PERM.COEXPR), coexpr_dom_draw, nSC = N.SC, nSE = N.SE, nH = N.HYB))
+DRAWS.PERM.COEXPR <- with_local_seed(SEED.COEXPR.PERM, lapply(seq_len(N.PERM.COEXPR), coexpr_perm_draw, nC = N.HYC, nT = N.HYT, n_tot = N.SC + N.SE))
+DRAWS.DOM.COEXPR  <- with_local_seed(SEED.COEXPR.NULL, lapply(seq_len(N.PERM.COEXPR), coexpr_dom_draw, nSC = N.SC, nSE = N.SE, nT = N.HYT))
 ## ---- Cluster round trip: Rscript coexpr_perm.R ----
 ## Reads coexpr_perm_inputs.rda (saved below), writes coexpr_perm_output.rda (NULL.TOTAL.RANKS, NULL.CIS.RANKS, NULL.TRANS.RANKS, NULL.DOM.RANKS)
 save(RESID, N.SC, N.SE, N.KEEP, DRAWS.PERM.COEXPR, DRAWS.DOM.COEXPR, file = file.path(INPUT.DIR, "coexpr_perm_inputs.rda"))
@@ -1939,7 +1948,7 @@ for (ax_mode in c("cis", "trans")) {
 }
 
 # Checkpoint
-save(RESID, COEXPR.DOM.BINS, COEXPR.POINT, CB, CB2, CB.Q, CB.CLASS, CB.DOM.CLASS, CB.TDOM.CLASS,
+save(RESID, COEXPR.DOM.BINS, COEXPR.DOM.SHIFT, COEXPR.POINT, CB, CB2, CB.Q, CB.CLASS, CB.DOM.CLASS, CB.TDOM.CLASS,
      RANK.CHECK.LIST, CANDIDATE.LIST, EXTRA.AXES.LIST, VALIDATED.LIST,
      AXIS1.CT, AXIS2.CT, DISP.BSIZE.OVERLAP.CO, AXIS1.ENRICH, NEG.TAIL.ENRICH,
      file = ckpt_path(4))

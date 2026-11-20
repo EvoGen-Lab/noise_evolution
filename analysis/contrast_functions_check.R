@@ -114,10 +114,9 @@ bt <- vapply(draws, function(d) { a <- .fit_one(M$MIX.SC["g1", d$MIX.SC], E$MIX.
   f0 <- function(v) if (is.finite(v)) v else 0
   .disp_contrasts("total", list(MIX.SC = f0(a[["disp"]]), MIX.SE = f0(b[["disp"]])), zero_inf = TRUE)[["log"]] }, numeric(1))
 stopifnot(abs(bo$disp_total_p[1] - sign_boot_p(bt, sign(bo$disp_total_est[1]))) < 1e-12)
-## kept replicate values (boot_contrasts_one(keep = )): one column per kept contrast, the replicates the sign test reads
-bk <- boot_contrasts_one("g1", E, FITS, M, draws, ET, gates = GATES, keep = c("disp_mid", "disp_par_sc"))
-kd <- attr(bk, "draws")
-stopifnot(identical(dim(kd), c(length(draws), 2L)), abs(sign_boot_p(kd[, "disp_mid"], sign(bk$disp_mid_est)) - bk$disp_mid_p) < 1e-12)
+## percentile intervals: an undefined replicate counts as -Inf for the lower percentile and +Inf for the upper
+bs <- .boot_summary(c(NaN, NaN, 1:38)); bs2 <- .boot_summary(c(rep(NaN, 2), 1:118))
+stopifnot(bs[["lo"]] == -Inf, bs[["hi"]] == Inf, bs[["se"]] == Inf, bs2[["lo"]] == 1, bs2[["hi"]] == 117)
 
 ## ---- the shared shift ----
 ## the curve: a planted rise 2 - 0.25 x on calibrators is recovered and extrapolated flat beyond their range
@@ -125,9 +124,9 @@ set.seed(3); ng <- 600; xs <- runif(ng, -1, 8); calg <- runif(ng) < 0.5 & xs < 7
 dmid <- 2 - 0.25 * xs + rnorm(ng, 0, 0.3); cf <- dom_shift_curve(dmid, xs, calg, 0.3)
 stopifnot(max(abs((cf - (2 - 0.25 * pmin(xs, max(xs[calg]))))[calg])) < 0.25, abs(median(dmid[calg] - cf[calg])) < 0.05,
           isTRUE(all.equal(cf[xs > max(xs[calg])], rep(cf[which.max(replace(xs, !calg, -Inf))], sum(xs > max(xs[calg]))))))
-## the second stage: every hybrid-allele dispersion divided by 2^Xi. The log2 contrasts of the hybrid with the parents move by -Xi (disp, bsize) and +2 Xi
-## (kbal), in the estimate and in every replicate; cis and trans log2 do not move; the raw hybrid values are divided by 2^Xi
-XI <- 0.8; SH <- matrix(XI, G, length(draws) + 1, dimnames = list(gn, NULL))
+## the second stage: every hybrid-allele dispersion divided by 2^Xi, with Xi fixed at its observed value. The log2 contrasts of the hybrid with the parents move
+## by -Xi (disp, bsize) and +2 Xi (kbal), in the estimate and in every replicate; cis and trans log2 do not move; the raw hybrid values are divided by 2^Xi
+XI <- 0.8; SH <- setNames(rep(XI, G), gn)
 ba <- boot_contrasts_one("g1", E, FITS, M, draws, ET, gates = GATES, shift = SH)
 b0 <- boot_contrasts_one("g1", E, FITS, M, draws, ET, gates = GATES)
 for (md in .DOM.MODES) stopifnot(abs(ba[[paste0("adisp_", md, "_est")]] - (b0[[paste0("disp_", md, "_est")]] - XI)) < 1e-12,
@@ -142,8 +141,12 @@ stopifnot(abs(ba$ardisp_cis_est - .contrast_raw("cis_n", fvn)) < 1e-12, abs(ba$a
 ## the degree of dominance k = 2 Delta_dom / Delta_total from the shifted Delta_dom, with its distribution at -1, 0 and 1
 stopifnot(abs(ba$k_disp_est - 2 * ba$adisp_mid_est / ba$disp_total_est) < 1e-12, abs(ba$kt_disp_est - 2 * ba$adisp_mid_est / ba$disp_trans_est) < 1e-12,
           abs(ba$k_mean_est - 2 * ba$mean_mid_est / ba$mean_total_est) < 1e-12, ba$k_disp_F0 >= ba$k_disp_G0, ba$k_disp_F1 >= ba$k_disp_F0)
-rc <- .ratio_cdf(1, 2, c(1, 2, -1, 0, 3, NaN), c(2, 1, 1, 1, 0, 1))      # k = 1, 4, -2, 0, Inf; NaN dropped
-stopifnot(rc[["est"]] == 1, rc[["n"]] == 5, rc[["F1"]] == 3 / 5, rc[["G1"]] == 2 / 5, rc[["F0"]] == 2 / 5, rc[["G0"]] == 1 / 5, rc[["Fm1"]] == 1 / 5)
+## the ratio rules: finite over infinite gives 0, infinite over finite an infinite k by the sign of the quotient, two infinities, a zero denominator or an
+## undefined contrast an undefined replicate, counted in the lower tail (F) and not in the upper (G)
+stopifnot(identical(.ratio_k(c(1, Inf, -Inf, Inf, 1, 0, NaN, 1), c(Inf, 2, 2, -Inf, 0, 0, 1, 2)), c(0, Inf, -Inf, NA, NA, NA, NA, 1)))
+rc <- .ratio_cdf(1, 2, c(1, 2, -1, 0, 3, NaN), c(2, 1, 1, 1, 0, 1))      # k = 1, 4, -2, 0, undefined, undefined
+stopifnot(rc[["est"]] == 1, rc[["n"]] == 6, rc[["n_undef"]] == 2, rc[["F1"]] == 5 / 6, rc[["G1"]] == 2 / 6, rc[["F0"]] == 4 / 6, rc[["G0"]] == 1 / 6,
+          rc[["Fm1"]] == 3 / 6, rc[["Gm1"]] == 1 / 6, is.na(.ratio_cdf(1, 0, 1:5, 1:5)[["est"]]))
 
 ## ---- inheritance classes ----
 ## a family of 100 genes with 20 selected by both tests sets the interval level 1 - 0.05 * 20 / 100, so a = 0.01, a / 2 = 0.005
@@ -166,24 +169,33 @@ stopifnot(abs(attr(cls, "fcr_level") - 0.05 * 20 / 100) < 1e-15,
 cls2 <- classify_dom(replace(qr, 1, NA), qd, ed, kc); stopifnot(is.na(cls2[1]))
 
 ## ---- co-expression (Methods: Co-expression) ----
-## the contrasts of a pair's correlation obey the identities of single genes; the shared shift is the decile median of dom, subtracted from dom and from both
-## inheritance contrasts; the accumulator and the k tables match a direct computation; the null draws return four spectra
+## the contrasts of a pair's correlation follow the definitions on the cis and trans cells; the shared shift is the decile median of the observed dom, subtracted
+## from dom and from both inheritance contrasts and held fixed in the replicates; the accumulator and the k tables match a direct computation; the bootstrap keeps
+## each hybrid cell's partition and pairs its alleles; the null draws return four spectra
 set.seed(5); pg <- 12; mk <- function(n, r) { f <- rnorm(n); z <- matrix(rnorm(pg * n), pg); z[1:4, ] <- z[1:4, ] + r * rep(f, each = 4); dimnames(z) <- list(paste0("g", 1:pg), NULL); z }
-RZ <- list(MIX.SC = mk(150, 0.8), MIX.SE = mk(170, 0.3), HYB.SC = mk(200, 1), HYB.SE = mk(200, 1))
+nH <- 200; cisz <- sort(sample(nH, 90)); trz <- setdiff(seq_len(nH), cisz); Hc <- mk(nH, 1); He <- mk(nH, 1)
+RZ <- list(MIX.SC = mk(150, 0.8), MIX.SE = mk(170, 0.3), HYC.SC = Hc[, cisz], HYC.SE = He[, cisz], HYT.SC = Hc[, trz], HYT.SE = He[, trz])
 upz <- which(upper.tri(diag(pg))); binz <- rep(1:3, length.out = length(upz)); attr(RZ, "dom_bins") <- binz
-cd <- coexpr_decompose(RZ); c0 <- coexpr_decompose(RZ, bins = NULL)
-stopifnot(max(abs(cd$trans - (cd$total - cd$cis))) < 1e-12, max(abs((cd$inh_c - (cd$dom - cd$trans / 2))[upz])) < 1e-12,
-          max(abs((cd$inh_e - (cd$dom + cd$trans / 2))[upz])) < 1e-12, all(abs(tapply(cd$dom[upz], binz, median)) < 1e-12),
-          max(abs((c0$dom - cd$dom)[upz] - cd$shift[binz])) < 1e-12, isSymmetric(cd$dom))
-dz <- make_coexpr_draws(150, 170, 200, 6, 1)
+cd <- coexpr_decompose(RZ, shift = NULL); c0 <- coexpr_decompose(RZ, bins = NULL); attr(RZ, "dom_shift") <- cd$shift
+R_ <- function(x) shrink_cor(t(x))
+stopifnot(max(abs(cd$cis - (R_(RZ$HYC.SC) - R_(RZ$HYC.SE)))) < 1e-12, max(abs(cd$trans - (cd$total - (R_(RZ$HYT.SC) - R_(RZ$HYT.SE))))) < 1e-12,
+          max(abs((cd$inh_c - (cd$dom - cd$trans / 2))[upz])) < 1e-12, max(abs((cd$inh_e - (cd$dom + cd$trans / 2))[upz])) < 1e-12,
+          all(abs(tapply(cd$dom[upz], binz, median)) < 1e-12), max(abs((c0$dom - cd$dom)[upz] - cd$shift[binz])) < 1e-12, isSymmetric(cd$dom))
+## the fixed shift: a decomposition with the observed shift equals the observed one, and a replicate subtracts the same shift
+stopifnot(max(abs(coexpr_decompose(RZ)$dom - cd$dom)) < 1e-12)
+dz <- make_coexpr_draws(150, 170, nH, 6, 1, cis = cisz)
+stopifnot(all(vapply(dz, function(d) length(d$HC) + length(d$HT) == nH && all(d$HC <= length(cisz)) && all(d$HT <= length(trz)), logical(1))))
 bz <- lapply(dz, coexpr_bootstrap_one, resid = RZ)
+d1 <- dz[[1]]; r1 <- coexpr_decompose(list(MIX.SC = RZ$MIX.SC[, d1$SC], MIX.SE = RZ$MIX.SE[, d1$SE], HYC.SC = RZ$HYC.SC[, d1$HC], HYC.SE = RZ$HYC.SE[, d1$HC],
+                                           HYT.SC = RZ$HYT.SC[, d1$HT], HYT.SE = RZ$HYT.SE[, d1$HT]), bins = NULL)
+stopifnot(max(abs(bz[[1]]$dom - (r1$dom[upz] - cd$shift[binz]))) < 1e-12)
 acc <- coexpr_acc_fold(coexpr_acc_fold(coexpr_acc_new(length(upz)), bz[1:3]), bz[4:6])
 basez <- data.frame(gene_i = 1:length(upz))
 pt <- coexpr_part_table("dom", cd, acc, basez); kt <- coexpr_k_table("k", cd, acc, basez)
-kd <- sapply(bz, function(b) 2 * b$dom / b$total)
+kd <- sapply(bz, function(b) .ratio_k(b$dom, b$total)); ud <- is.na(kd)
 stopifnot(acc$n == 6, max(abs(pt$se - apply(sapply(bz, `[[`, "dom"), 1, sd))) < 1e-10, all(kt$n == 6),
-          max(abs(kt$F0 - rowMeans(kd <= 0))) < 1e-12, max(abs(kt$G1 - rowMeans(kd < 1))) < 1e-12, max(abs(kt$est - 2 * cd$dom[upz] / cd$total[upz])) < 1e-12)
-nz <- coexpr_perm_one(list(perm = coexpr_perm_draw(1, 200, 320), dom = coexpr_dom_draw(1, 150, 170, 200)), 3, 150, RZ)
+          max(abs(kt$F0 - rowMeans(ud | kd <= 0))) < 1e-12, max(abs(kt$G1 - rowMeans(!ud & kd < 1))) < 1e-12, max(abs(kt$est - .ratio_k(cd$dom[upz], cd$total[upz]))) < 1e-12)
+nz <- coexpr_perm_one(list(perm = coexpr_perm_draw(1, length(cisz), length(trz), 320), dom = coexpr_dom_draw(1, 150, 170, length(trz))), 3, 150, RZ)
 stopifnot(identical(names(nz), c("total", "cis", "trans", "dom")), all(lengths(nz) == 3))
 
 ## ---- the gate NAs a contrast's estimates, intervals and p-values ----

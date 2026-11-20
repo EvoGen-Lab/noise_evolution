@@ -5,9 +5,9 @@
 ### divergence). Each draw's result is a handful of numbers (4 x N.KEEP), collected directly and stacked into matrices at the end.
 ###
 ### The total null pools the parental cells and reassigns them to two groups of the original sizes, the cis null swaps the residuals of the two alleles in a
-### random subset of hybrid cells, and the trans null is their difference. The dominance null works within each genome: the Sc parent's cells are pooled with
-### the Sc residuals of the hybrid cells and the Se parent's with the Se residuals, each pool is reassigned to parental and hybrid groups of the original sizes,
-### and dom is recomputed with the same shared-shift adjustment as the observed matrix.
+### random subset of cis cells, and the trans null is the total null minus the trans cells' allele contrast with their own random swaps. The dominance null
+### works within each genome: the Sc parent's cells are pooled with the Sc residuals of the trans cells and the Se parent's with the Se residuals, each pool is
+### reassigned to parental and hybrid groups of the original sizes, and dom is recomputed with the decile-median adjustment applied to the draw itself.
 ###
 ### Inputs  : coexpr_perm_inputs.rda  (RESID with its pair deciles attr "dom_bins", N.SC, N.SE, N.KEEP, DRAWS.PERM.COEXPR, DRAWS.DOM.COEXPR)
 ### Output  : coexpr_perm_output.rda  (NULL.TOTAL.RANKS, NULL.CIS.RANKS, NULL.TRANS.RANKS, NULL.DOM.RANKS: B x N.KEEP matrices, column k = the draw's
