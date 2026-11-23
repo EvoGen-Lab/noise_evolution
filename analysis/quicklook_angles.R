@@ -118,7 +118,11 @@ QL.PANELS <- lapply(names(QL.SCHEMES), function(sc) {
     labs(title = QL.TITLE[[sc]], x = "theta (degrees)", y = "magnitude (log2)") + theme_bw(base_size = 8) +
     theme(legend.position = "bottom", legend.key.size = unit(0.3, "cm")) + guides(colour = guide_legend(ncol = 2, override.aes = list(size = 1.5, alpha = 1)))
 })
-ggsave(file.path(QL.OUT.DIR, "quicklook_angles.pdf"), wrap_plots(QL.PANELS, nrow = 1), width = 14, height = 13, useDingbats = FALSE)
+QL.FIGURE <- wrap_plots(QL.PANELS, nrow = 1)
+ggsave(file.path(QL.OUT.DIR, "quicklook_angles.pdf"), QL.FIGURE, width = 14, height = 13, useDingbats = FALSE)
+cat(sprintf("Figure written to %s\n", normalizePath(file.path(QL.OUT.DIR, "quicklook_angles.pdf"), winslash = "/")))
+## In an interactive session the figure is also drawn on the current device (the RStudio Plots pane); enlarge the pane or use Zoom, since the grid holds 15 panels.
+if (interactive()) print(QL.FIGURE)
 
 ## ---- What was used ----
 QL.INPUTS <- c(sprintf("Section 1 checkpoint: %s", ckpt_path(1)),
