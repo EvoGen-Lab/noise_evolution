@@ -777,29 +777,43 @@ PLOIDY.SHIFT.INFER <- setNames(PLOIDY.COMP$Lambda, rownames(PLOIDY.COMP))[GENES.
 GATES <- as.matrix(GENE.TABLE[match(GENES.INFER, GENE.TABLE$gene), grep("^(mean|raw|log|bsize|rbsize|kbal)_.*_valid$", names(GENE.TABLE))])
 colnames(GATES) <- sub("_valid$", "", colnames(GATES)); rownames(GATES) <- GENES.INFER
 
-## ---- Cluster round trip 1: Rscript gene_boot.R, stage 1 (job array, one task per replicate) ----
-## gene_boot.R reads gene_boot_inputs.rda and writes gene_boot_output_<k>of<K>.rda (BOOT.CONTRASTS) for replicate k.
-## Each replicate resamples with its own pre-drawn indices (DRAWS.REPS[[k]], seed SEED.BOOT + k - 1). Each draw resamples the parents and the undivided hybrid
-## cells, and every hybrid dataset is assembled from the same resampled cell IDs, each copy keeping the partition memberships of the cell it copied
-## (make_draws()), so the contrasts of the four partitions share their cells.
-## Every p-value is the bootstrap sign test on these replicates (sign_boot_p(), Methods: Tests of contrasts), computed in the job beside each estimate and interval.
+## ---- The staged bootstrap (Methods: Bootstrap tests of significance) ----
+## Replicates are drawn in stages. Every gene gets N.BOOT.STAGE[1] replicates; a family (the mean contrasts, or those that need a dispersion fit) whose tested
+## contrasts all have n0 >= STAGE.N0[1] stops, and the rest get N.BOOT.STAGE[2] fresh replicates; after them a family with n0 >= STAGE.N0[2] in every contrast
+## stops and the rest get N.BOOT.STAGE[3] fresh replicates. The p-value and interval of each contrast come from its gene's final stage, the mean and the
+## dispersion family staged separately, so a mean contrast that needs more replicates forces no dispersion refits. Each stage's draws come from its own draw
+## plan (make_draw_plan(): parents and undivided hybrid cells resampled, each copy keeping its partition memberships, draw b seeded from the plan's seed and b),
+## so the jobs draw their own indices and later stages are fresh. Stage 1 runs N.BOOT.REP seed replicates; replicate 1 is the first stage and the others
+## check seed adequacy.
+N.BOOT.STAGE <- c(N.BOOT, 10000, 100000)    # replicates of the three stages
+STAGE.N0     <- c(40, 50)                   # a family continues while some tested contrast has n0 below this (p about 0.08 at 1,000, 0.01 at 10,000)
+N.STAGE.ARRAY <- 20                         # gene blocks of stages 3 to 5, one array task each (gene_boot_stage.sub --array=1-20)
 DRAW.SPLITS <- list(HYC = SPLIT.IDX.MEAN$c, HYC.N = SPLIT.IDX.DISP$c, HYC.K = SPLIT.IDX.KBAL$c, HYC.Z = SPLIT.IDX.BSIZE$c)
-DRAWS.REPS <- lapply(SEED.BOOT + seq_len(N.BOOT.REP) - 1, function(seed) make_draws(NCELLS, N.BOOT, seed, splits = DRAW.SPLITS))
+BOOT.PLANS <- list(rep = lapply(SEED.BOOT + seq_len(N.BOOT.REP) - 1, function(seed) make_draw_plan(NCELLS, N.BOOT.STAGE[1], seed, splits = DRAW.SPLITS)),
+                   stage3 = make_draw_plan(NCELLS, N.BOOT.STAGE[2], SEED.BOOT + 1000, splits = DRAW.SPLITS),
+                   stage4 = make_draw_plan(NCELLS, N.BOOT.STAGE[3], SEED.BOOT + 2000, splits = DRAW.SPLITS))
+## The first-stage draws as index lists, for gene_cond.R, which conditions on exactly these replicates (plan_draw() gives the same draws in gene_boot.R).
+DRAWS.STAGE1 <- make_draws(NCELLS, N.BOOT.STAGE[1], SEED.BOOT, splits = DRAW.SPLITS)
+
+## ---- Cluster round trip 1: Rscript gene_boot.R, stage 1 (job array, one task per seed replicate) ----
+## gene_boot.R reads gene_boot_inputs.rda and writes gene_boot_output_<k>of<K>.rda (BOOT.CONTRASTS) for seed replicate k, unshifted.
+## Every p-value is the bootstrap sign test on these replicates (sign_boot_p(), Methods: Tests of contrasts), computed in the job beside each estimate and interval,
+## with each replicate's side of zero read from products of its fitted values (.all_signs()).
 ## The cluster scripts read the objects under their plain names, with GENES the genes to run, so the inputs are saved from an environment that
 ## holds the inference-set objects under those names.
 JOB.INPUTS <- list2env(list(CONTRAST.MATS = CONTRAST.MATS.INFER, CONTRAST.EXPOS = CONTRAST.EXPOS, CONTRAST.FITS = CONTRAST.FITS.INFER, GENES = GENES.INFER,
-                            DRAWS.REPS = DRAWS.REPS, N.BOOT = N.BOOT, CONTRAST.ETAS = CONTRAST.ETAS, GATES = GATES))
-save(list = c("CONTRAST.MATS", "CONTRAST.EXPOS", "CONTRAST.FITS", "GENES", "DRAWS.REPS", "N.BOOT", "CONTRAST.ETAS", "GATES"), envir = JOB.INPUTS, file = file.path(INPUT.DIR, "gene_boot_inputs.rda"))
+                            BOOT.PLANS = BOOT.PLANS, N.BOOT = N.BOOT, CONTRAST.ETAS = CONTRAST.ETAS, GATES = GATES))
+save(list = c("CONTRAST.MATS", "CONTRAST.EXPOS", "CONTRAST.FITS", "GENES", "BOOT.PLANS", "N.BOOT", "CONTRAST.ETAS", "GATES"), envir = JOB.INPUTS, file = file.path(INPUT.DIR, "gene_boot_inputs.rda"))
 BOOT.CONTRASTS.REPS.INFER <- load_replicates("gene_boot", "BOOT.CONTRASTS", N.BOOT.REP, expected = length(GENES.INFER))
 stopifnot(identical(sort(BOOT.CONTRASTS.REPS.INFER[[1]]$gene), sort(GENES.INFER)))
 ## ---- end cluster round trip 1 ----
 
-## Shared shift (Methods: Shared shift). Both hybrid alleles are noisier than the parents by an amount that falls with expression (checks MID1 to MID5). Xi is
-## one robust loess (span DOM.ADJ.SPAN) of the mid log2 dispersion contrast Delta_dom on log2 mu_H, the geometric per-genome hybrid mean of the allele fits on
-## all hybrid cells, over calibrator genes (DOM.ADJ.CAL: trans and total log2 dispersion contrasts with q >= DOM.ADJ.SIG in the first-stage BH families, which
-## the second stage leaves unchanged), whose Delta_dom should sit near zero but for the shared shift. The calibrator set and the curve are both fixed from the
-## observed data: DOM.SHIFT holds each gene's Xi from the observed curve, and the second stage of gene_boot.R divides every hybrid-allele dispersion by 2^Xi with
-## the same Xi in the observed data and in every replicate, so the tests and intervals treat Xi as known.
+## Shared shift (Methods: Hybrid noise shift). Both hybrid alleles are noisier than the parents by an amount that falls with expression (checks MID1 to MID5). Xi
+## is one robust loess (span DOM.ADJ.SPAN) of the mid log2 dispersion contrast Delta_dom on log2 mu_H, the geometric per-genome hybrid mean of the allele fits on
+## all hybrid cells, over calibrator genes (DOM.ADJ.CAL: trans and total log2 dispersion contrasts with q >= DOM.ADJ.SIG in the BH families of the first stage,
+## and a finite observed Delta_dom, so no zero dispersion in any group), whose Delta_dom should sit near zero but for the shared shift. The calibrator set and the
+## curve are both fixed from the observed data, Xi is evaluated at each gene's log2 mu_H within the calibrators' range and held at its end value beyond it, and
+## DOM.SHIFT holds each gene's Xi: every later stage applies the same Xi in the observed data and in every replicate, so the tests and intervals treat Xi as known.
 DOM.ADJ.SIG  <- 0.05      # q threshold of the calibrator genes (trans and total log2 dispersion contrasts both at or above it)
 DOM.ADJ.SPAN <- 0.3       # loess span of the shared shift on log2 mu_H
 BOOT.STAGE1 <- BOOT.CONTRASTS.REPS.INFER[[1]]
@@ -808,22 +822,49 @@ DOM.ADJ.X <- local({
   l <- 0.5 * (log2(CONTRAST.FITS.INFER$HYB.SC$MU) + log2(CONTRAST.FITS.INFER$HYB.SE$MU)); l[!is.finite(l)] <- NA
   setNames(l, rownames(CONTRAST.FITS.INFER$HYB.SC))[BOOT.STAGE1$gene]
 })
-DOM.ADJ.CAL <- (STAGE1.Q$trans >= DOM.ADJ.SIG) %in% TRUE & (STAGE1.Q$total >= DOM.ADJ.SIG) %in% TRUE & is.finite(DOM.ADJ.X)
+DOM.ADJ.CAL <- (STAGE1.Q$trans >= DOM.ADJ.SIG) %in% TRUE & (STAGE1.Q$total >= DOM.ADJ.SIG) %in% TRUE & is.finite(DOM.ADJ.X) & is.finite(BOOT.STAGE1$disp_mid_est)
 DOM.SHIFT <- setNames(dom_shift_curve(BOOT.STAGE1$disp_mid_est, DOM.ADJ.X, DOM.ADJ.CAL, DOM.ADJ.SPAN), BOOT.STAGE1$gene)
 DOM.SHIFT <- DOM.SHIFT[is.finite(DOM.SHIFT)]      # a gene without a finite log2 mu_H has no shift and no shifted contrasts
 cat(sprintf("Shared shift: %d calibrator genes of %d\n", sum(DOM.ADJ.CAL), nrow(BOOT.STAGE1)))
 
 ## ---- Cluster round trip 2: Rscript gene_boot.R with GENE_BOOT_STAGE=2 (one task) ----
-## The second stage reads gene_boot_inputs.rda and gene_shift_inputs.rda (DOM.SHIFT), reruns replicate 1 on its own draws with every hybrid-allele dispersion
-## divided by the gene's fixed 2^Xi, and writes gene_boot_shift_output.rda (BOOT.CONTRASTS: every first-stage column, the shifted contrasts a<quantity>_<mode>_* and the degrees
-## of dominance k_<quantity>_* and kt_<quantity>_*). Its unshifted columns repeat replicate 1 of the first stage exactly, which is checked below.
+## The second stage reads gene_boot_inputs.rda and gene_shift_inputs.rda (DOM.SHIFT), reruns the first-stage draws with the fixed shift, and writes
+## gene_boot_shift_output.rda (BOOT.CONTRASTS: every first-stage column, the shifted contrasts a<quantity>_<mode>_* and the degrees of dominance k_<quantity>_*
+## and kt_<quantity>_*). Its unshifted columns repeat replicate 1 of the first stage exactly, which is checked below.
 save(DOM.SHIFT, file = file.path(INPUT.DIR, "gene_shift_inputs.rda"))
 load_cluster_output(file.path(OUTPUT.DIR, "gene_boot_shift_output.rda"), "gene_boot.R (stage 2)")
 BOOT.SHIFT.INFER <- BOOT.CONTRASTS; rm(BOOT.CONTRASTS)
 stopifnot(identical(BOOT.SHIFT.INFER$gene, BOOT.STAGE1$gene),
           isTRUE(all.equal(BOOT.SHIFT.INFER[names(BOOT.STAGE1)], BOOT.STAGE1, check.attributes = FALSE)))
+BOOT.SHIFT.INFER$n_boot_mean <- BOOT.SHIFT.INFER$n_boot_disp <- BOOT.SHIFT.INFER$n_boot
 ## ---- end cluster round trip 2 ----
-BOOT.CONTRASTS.INFER <- BOOT.SHIFT.INFER
+
+## ---- Cluster round trips 3 and 4: Rscript gene_boot.R with GENE_BOOT_STAGE=3, then 4 (job arrays over gene blocks, gene_boot_stage.sub) ----
+## Each stage reads gene_stage<s>_inputs.rda (STAGE.JOBS: the genes of each family that continue, STAGE.PLAN, STAGE.KEY, N.STAGE.ARRAY) and writes one
+## gene_boot_stage<s>_output_<k>of<K>.rda per block (BOOT.MEAN, BOOT.DISP). The later stage's SE, interval and p-value replace those of the earlier one for the
+## genes that reached it (merge_boot_stage()); the estimates are the observed contrasts and stay as they are. A stage continues only the genes of the stage
+## before it (stage_genes(B_only = )).
+BOOT.STAGED.INFER <- BOOT.SHIFT.INFER
+STAGE.GENES <- list()
+for (st in 3:4) {
+  STAGE.JOBS <- lapply(setNames(names(.BOOT.FAMILIES), names(.BOOT.FAMILIES)), function(fam) stage_genes(BOOT.STAGED.INFER, fam, STAGE.N0[st - 2], N.BOOT.STAGE[st - 2]))
+  STAGE.PLAN <- paste0("stage", st)
+  STAGE.KEY  <- list(stage = st, jobs = STAGE.JOBS, plan = BOOT.PLANS[[STAGE.PLAN]][c("seed", "B")], shift = DOM.SHIFT)
+  STAGE.GENES[[STAGE.PLAN]] <- STAGE.JOBS
+  cat(sprintf("Bootstrap stage %d: %d genes continue for the mean, %d for the dispersion family (%d replicates)\n", st, length(STAGE.JOBS$mean), length(STAGE.JOBS$disp), N.BOOT.STAGE[st - 1]))
+  save(STAGE.JOBS, STAGE.PLAN, STAGE.KEY, N.STAGE.ARRAY, file = file.path(INPUT.DIR, sprintf("gene_stage%d_inputs.rda", st)))
+  STAGE.OUT <- load_stage_blocks(st, N.STAGE.ARRAY, STAGE.KEY, c("BOOT.MEAN", "BOOT.DISP"))
+  stopifnot(setequal(STAGE.OUT$BOOT.MEAN$gene, STAGE.JOBS$mean), setequal(STAGE.OUT$BOOT.DISP$gene, STAGE.JOBS$disp))
+  BOOT.STAGED.INFER <- merge_boot_stage(merge_boot_stage(BOOT.STAGED.INFER, STAGE.OUT$BOOT.MEAN, "mean"), STAGE.OUT$BOOT.DISP, "disp")
+}
+rm(STAGE.OUT, STAGE.JOBS, STAGE.PLAN, STAGE.KEY)
+## ---- end cluster round trips 3 and 4 ----
+BOOT.STAGE.COUNTS <- data.frame(family = names(.BOOT.FAMILIES),
+                                t(vapply(names(.BOOT.FAMILIES), function(fam) table(factor(BOOT.STAGED.INFER[[paste0("n_boot_", fam)]], levels = N.BOOT.STAGE)), integer(3))),
+                                row.names = NULL, check.names = FALSE)
+cat("Genes by the final stage of each family (columns: replicates):\n"); print(BOOT.STAGE.COUNTS, row.names = FALSE)
+write.csv(BOOT.STAGE.COUNTS, file.path(TABLE.DIR, "bootstrap_stage_counts.csv"), row.names = FALSE)
+BOOT.CONTRASTS.INFER <- BOOT.STAGED.INFER
 
 ## CV2 and Fano factor of every gene in each full dataset and in the per-genome hybrid, reported only: they enter no contrast and no test (Methods: Negative
 ## binomial model). Both are model values at the reference depth (offset 1), from the per-genome mean rate mu (each allele offset by its own library) and the
@@ -870,6 +911,10 @@ write.csv(GENE.SET.SIZES,         file.path(TABLE.DIR, "gene_set_sizes.csv"),   
 ## shared shift (DOM.SHIFT), in the modes it moves (.SHIFT.QUANTITIES); k_<quantity>_* and kt_<quantity>_* the degrees of dominance from them. The w* columns
 ## repeat the dispersion quantities with the weighted method of moments (Methods Appendix C) on the same resamples, estimates and intervals only, and
 ## w<quantity>_<mode>_flag marks a moment estimate outside the Cox-Reid percentile interval. A contrast the observed fits do not define (GATES) is NA throughout.
+## The SE, interval and p-value of each contrast come from its gene's final bootstrap stage, the mean family and the dispersion family staged separately
+## (n_boot_mean, n_boot_disp: 1,000, 10,000 or 100,000 replicates); the moment columns and the mean-dispersion correlations come from the first stage. The k
+## columns of a gene classed by k_P or k_T come from stage 5 (n_boot_k), with the interval at the false coverage-statement level (_flo, _fhi); fs_<dataset>_*
+## count the fitted, boundary and failed refits of the final stage.
 ## PR holds the p-values with their BH q-values (Methods: Multiple testing): one family per p column, every contrast (the parental and inheritance contrasts
 ## included) and every quantity, before and after the shared shift, each adjusted over the genes that have a p-value in it.
 BURST.CONTRASTS.INFER <- cbind(BOOT.CONTRASTS.INFER, log2_mu_H = unname(DOM.ADJ.X[BOOT.CONTRASTS.INFER$gene]), dom_calibrator = DOM.ADJ.CAL[match(BOOT.CONTRASTS.INFER$gene, BOOT.STAGE1$gene)],
@@ -879,6 +924,55 @@ PR.INFER <- local({
   for (nm in setdiff(names(df), "gene")) df[[sub("_p$", "_q", nm)]] <- p.adjust(df[[nm]], method = "BH")
   df
 })
+
+## ---- Cluster round trip 5: Rscript gene_boot.R with GENE_BOOT_STAGE=5 (job array over gene blocks, gene_boot_stage.sub) ----
+## The degrees of dominance place the genes that both tests select (the reference contrast, total or trans, and the shifted Delta_dom) by the percentile interval
+## of k_P or k_T at level 1 - a, a = 0.05 N_sel / N_test, the false coverage-statement rate of the family (Benjamini and Yekutieli 2005,
+## https://doi.org/10.1198/016214504000001907; classify_dom()). This level leaves few replicates in each tail, so every selected gene gets the k distribution of the
+## 100,000 draws of the stage-4 plan: fresh replicates for a gene whose dispersion family stopped before the last stage, and the very replicates of its stage 4
+## for a gene that reached it (checked below). K.LEVEL holds a for each k family (k_<quantity>, kt_<quantity>); the stage adds the interval at that level
+## (_flo, _fhi). The p-values stay as they are.
+K.LEVEL <- numeric(0); K.SELECT <- list()
+for (q in names(.NB.QUANTITIES)) for (ref in c("total", "trans")) {
+  qr <- PR.INFER[[paste0(dom_col(q, ref), "_q")]]; qd <- PR.INFER[[paste0(dom_col(q, "mid"), "_q")]]
+  tested <- !is.na(qr) & !is.na(qd); both <- tested & qr < 0.05 & qd < 0.05
+  nm <- paste0(if (ref == "total") "k_" else "kt_", q)
+  K.LEVEL[[nm]] <- if (any(both)) 0.05 * sum(both) / sum(tested) else NA_real_
+  K.SELECT[[nm]] <- PR.INFER$gene[both]
+}
+K.GENES <- PR.INFER$gene[PR.INFER$gene %in% unlist(K.SELECT)]
+local({
+  STAGE.JOBS <- list(disp = K.GENES); STAGE.PLAN <- "stage4"; K.LEVEL <- K.LEVEL[is.finite(K.LEVEL)]
+  STAGE.KEY <- list(stage = 5, jobs = STAGE.JOBS, plan = BOOT.PLANS$stage4[c("seed", "B")], shift = DOM.SHIFT, level = K.LEVEL)
+  save(STAGE.JOBS, STAGE.PLAN, STAGE.KEY, N.STAGE.ARRAY, K.LEVEL, file = file.path(INPUT.DIR, "gene_stage5_inputs.rda"))
+  BOOT.K <<- load_stage_blocks(5, N.STAGE.ARRAY, STAGE.KEY, "BOOT.K")$BOOT.K
+})
+stopifnot(setequal(BOOT.K$gene, K.GENES))
+## ---- end cluster round trip 5 ----
+## A gene whose dispersion family reached stage 4 has the same k replicates in stage 5, so its k distribution must repeat exactly.
+local({
+  i <- match(BOOT.K$gene, BURST.CONTRASTS.INFER$gene); same <- BURST.CONTRASTS.INFER$n_boot_disp[i] == N.BOOT.STAGE[3]
+  cols <- intersect(grep("^kt?_.*_(F|G)(m1|0|1)$", names(BOOT.K), value = TRUE), names(BURST.CONTRASTS.INFER))
+  if (any(same)) stopifnot("stage 5 does not repeat the stage-4 k replicates" = isTRUE(all.equal(BOOT.K[same, cols], BURST.CONTRASTS.INFER[i[same], cols], check.attributes = FALSE)))
+})
+BURST.CONTRASTS.INFER <- local({
+  bc <- BURST.CONTRASTS.INFER; i <- match(BOOT.K$gene, bc$gene)
+  for (k in setdiff(names(BOOT.K), c("gene", "n_boot"))) { if (!k %in% names(bc)) bc[[k]] <- NA_real_; bc[[k]][i] <- BOOT.K[[k]] }
+  bc$n_boot_k <- NA_real_; bc$n_boot_k[i] <- BOOT.K$n_boot
+  bc
+})
+cat("Miscoverage level a of the k intervals by family, and genes selected:\n"); print(data.frame(family = names(K.LEVEL), a = K.LEVEL, selected = lengths(K.SELECT)[names(K.LEVEL)], row.names = NULL), digits = 3)
+
+## Fit status of every contrast dataset: the observed fits and the bootstrap refits of the final stage of the dispersion family, each fitted (phi > 0), on the
+## boundary (phi = 0, from the zero rule or from truncation after the split correction) or failed (no finite phi; a failed refit counts as zero).
+FIT.STATUS.COUNTS <- do.call(rbind, lapply(.CONTRAST.GROUPS, function(grp) {
+  ph <- CONTRAST.FITS.INFER[[grp]]$DISP
+  data.frame(dataset = grp, obs_fitted = sum(ph > 0, na.rm = TRUE), obs_boundary = sum(ph == 0, na.rm = TRUE), obs_failed = sum(!is.finite(ph)),
+             boot_fitted = sum(BURST.CONTRASTS.INFER[[paste0("fs_", grp, "_fit")]], na.rm = TRUE), boot_boundary = sum(BURST.CONTRASTS.INFER[[paste0("fs_", grp, "_bnd")]], na.rm = TRUE),
+             boot_failed = sum(BURST.CONTRASTS.INFER[[paste0("fs_", grp, "_fail")]], na.rm = TRUE), row.names = NULL)
+}))
+cat("Fit status by dataset (observed genes; bootstrap refits summed over genes and replicates):\n"); print(FIT.STATUS.COUNTS, row.names = FALSE)
+write.csv(FIT.STATUS.COUNTS, file.path(TABLE.DIR, "fit_status_counts.csv"), row.names = FALSE)
 
 ## The shared shift reported by its median within equal-count deciles of log2 mu_H (all genes with a finite log2 mu_H), with the calibrator count and the median
 ## Delta_dom(log2 phi) of the calibrators before and after the shift in each decile; and per mode the median Delta_dom and the significant calls before and after.
@@ -999,11 +1093,11 @@ cat("Program score per tube (log2, centred at the tube median):\n"); print(STATE
 
 ## ---- Cluster round trip: Rscript gene_cond.R (job array over gene blocks) ----
 ## gene_cond.R reads gene_cond_inputs.rda and writes gene_cond_output_<k>of<K>.rda (COND.CONTRASTS for gene block k, and COND.KEY). It uses the draws of
-## bootstrap replicate 1 (DRAWS.REPS[[1]]), so its unconditioned estimates are those of BURST.CONTRASTS and the paired changes compare the two fits on the same
+## the first bootstrap stage (DRAWS.STAGE1, seed replicate 1), so its unconditioned estimates are those of BURST.CONTRASTS and the paired changes compare the two fits on the same
 ## cells. COND.KEY fingerprints the inputs.
-COND.KEY <- list(genes = GENES.INFER, n_draws = length(DRAWS.REPS[[1]]), members = STATE.MEMBERS, totals = vapply(STATE.COND$cells, function(x) sum(x$total), numeric(1)),
+COND.KEY <- list(genes = GENES.INFER, n_draws = length(DRAWS.STAGE1), members = STATE.MEMBERS, totals = vapply(STATE.COND$cells, function(x) sum(x$total), numeric(1)),
                  blocks = N.COND.ARRAY, shift = DOM.SHIFT)
-JOB.INPUTS <- list2env(list(CONTRAST.MATS = CONTRAST.MATS.INFER, CONTRAST.EXPOS = CONTRAST.EXPOS, GENES = GENES.INFER, DRAWS = DRAWS.REPS[[1]], CONTRAST.ETAS = CONTRAST.ETAS,
+JOB.INPUTS <- list2env(list(CONTRAST.MATS = CONTRAST.MATS.INFER, CONTRAST.EXPOS = CONTRAST.EXPOS, GENES = GENES.INFER, DRAWS = DRAWS.STAGE1, CONTRAST.ETAS = CONTRAST.ETAS,
                             GATES = GATES, STATE.COND = STATE.COND, COND.KEY = COND.KEY, N.COND.ARRAY = N.COND.ARRAY, DOM.SHIFT = DOM.SHIFT))
 save(list = ls(JOB.INPUTS), envir = JOB.INPUTS, file = file.path(INPUT.DIR, "gene_cond_inputs.rda"))
 COND.CONTRASTS <- local({
@@ -1180,6 +1274,7 @@ save(GENES, GENES.INFER, GENE.TABLE, SPLIT.FITS.W, CONTRAST.FITS.INFER, PLOIDY.S
      SPLIT.IDX.MEAN, SPLIT.IDX.DISP, SPLIT.IDX.KBAL, SPLIT.IDX.BSIZE, SPLIT.FRAC, PILOT.RESOLVED, PARTITION.REPORT, PILOT.LOGPHI.SE, APPENDIX.D, ROUTE.CHECK, PHI.MU.COR,
      STATE.PROGRAM, STATE.MEMBERS, STATE.COND, STATE.SCORE.SUMMARY, COND.CONTRASTS, STATE.FLAG.SUMMARY, STATE.FLAGGED, STATE.FLAG.SIG,
      PILOT.PRECISION, DROPOUT.AIC, DOM.ADJ.SUMMARY, DOM.ADJ.SIG, DOM.ADJ.SPAN, DOM.ADJ.CAL, DOM.SHIFT, DOM.SHIFT.DECILES, BOOT.STAGE1,
+     N.BOOT.STAGE, STAGE.N0, STAGE.GENES, BOOT.STAGE.COUNTS, K.LEVEL, K.SELECT, FIT.STATUS.COUNTS,
      file = ckpt_path(2))
 
 console_start(3)
@@ -1245,9 +1340,21 @@ CLASSIFIED.COUNTS <- data.frame(quantity = QUANTITIES,
 cat("Genes classified per quantity (regulatory and dominance):\n"); print(CLASSIFIED.COUNTS, row.names = FALSE)
 write.csv(CLASSIFIED.COUNTS, file.path(TABLE.DIR, "classified_gene_counts.csv"), row.names = FALSE)
 CLASS.VEC <- list(REG = REG.VEC, DOM = DOM.VEC)
-TDOM.TABLE <- sapply(TDOM.VEC, function(v) table(factor(v, levels = c(DOM.CLASS, "Ambiguous"))))
+TDOM.TABLE <- sapply(TDOM.VEC, function(v) table(factor(v, levels = c(DOM.CLASS, "Unclassed", "Ambiguous"))))
 cat("Trans dominance classes per quantity:\n"); print(TDOM.TABLE)
 write.csv(TDOM.TABLE, file.path(TABLE.DIR, "trans_dominance_classes.csv"))
+# Unclassed genes: both tests significant, but the interval of k at the coverage level holds 0 and the value of one parent (two rules of the Methods apply,
+# that parent dominant and partially dominant toward it) or holds 0 and neither parent (no rule applies). They stay unclassed and are reported with the interval
+# until the rules are settled.
+DOM.UNCLASSED <- do.call(rbind, lapply(c("k", "kt"), function(pre) do.call(rbind, lapply(QUANTITIES, function(q) {
+  v <- (if (pre == "k") DOM.VEC else TDOM.VEC)[[q]]; i <- which(v %in% "Unclassed")
+  if (!length(i)) return(NULL)
+  data.frame(gene = BURST.CONTRASTS$gene[i], quantity = q, ratio = if (pre == "k") "k_P" else "k_T", level = 1 - attr(v, "fcr_level"),
+             k_est = BURST.CONTRASTS[[paste0(pre, "_", q, "_est")]][i], k_lo = BURST.CONTRASTS[[paste0(pre, "_", q, "_flo")]][i],
+             k_hi = BURST.CONTRASTS[[paste0(pre, "_", q, "_fhi")]][i], row.names = NULL)
+}))))
+cat(sprintf("Unclassed genes (k interval holding 0 with one or neither parent): %d gene-quantity pairs\n", if (is.null(DOM.UNCLASSED)) 0L else nrow(DOM.UNCLASSED)))
+if (!is.null(DOM.UNCLASSED)) write.csv(DOM.UNCLASSED, file.path(TABLE.DIR, "dominance_unclassed.csv"), row.names = FALSE)
 
 # The ploidy shift of the summed counts (Methods Appendix D) is reported only: the dominance calls compare the per-genome hybrid with the parents. PLOIDY.CHECK gives
 # its median and that of the par dispersion contrasts.
@@ -1447,7 +1554,7 @@ for (ov in list(list(ov = REG.OVERLAP.MEAN.DISP,  lab = "mean vs dispersion"),
 dev.off()
 
 # Checkpoint
-save(REG.VEC, DOM.VEC,
+save(REG.VEC, DOM.VEC, TDOM.VEC, DOM.UNCLASSED,
      REG.OVERLAP.MEAN.DISP, REG.OVERLAP.MEAN.BSIZE, REG.OVERLAP.DISP.BSIZE, REG.OVERLAP.MEAN.KBAL,
      STRUCT.DISP.BSIZE, STRUCT.MEAN.KBAL, STRUCT.COUPLING, REG.OVERLAP.SUMMARY,
      file = ckpt_path(3))

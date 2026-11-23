@@ -1,9 +1,9 @@
 #!/bin/sh -l
 # FILENAME:  gene_boot_shift.sbatch
 #
-# Second stage of the bootstrap (Methods: Shared shift): replicate 1 rerun with every hybrid-allele dispersion divided by
-# 2^Xi from gene_shift_inputs.rda, written to gene_boot_shift_output.rda. Submit after analysis.R Section 2.3 has written
-# gene_shift_inputs.rda from the stage-1 output.
+# Second stage of the bootstrap (Methods: Hybrid noise shift): the stage-1 draws of replicate 1 rerun with every hybrid-allele
+# dispersion divided by 2^Xi from gene_shift_inputs.rda when the shifted contrasts are formed, written to gene_boot_shift_output.rda.
+# Submit after analysis.R Section 2.3 has written gene_shift_inputs.rda from the stage-1 output.
 
 #SBATCH --account=bphm
 #SBATCH --nodes=1

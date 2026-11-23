@@ -33,7 +33,9 @@
 ###   2. GENE FILTER (marginal information only; never on a contrast)
 ###     qc_gene_keep() - Cross-dataset gene QC with one relative abundance floor anchored to the shallowest dataset and an absolute detection floor, and sets the pilot gene pool.
 ###   3. PAIRED PER-GENE BOOTSTRAP OF CONTRASTS
-###     make_draws() - Builds the bootstrap index draws: parents resampled whole, the undivided hybrid cells resampled once, each copy keeping its memberships in the mean, dispersion, kinetic balance and burst size partitions.
+###     make_draw_plan() / plan_draw() / make_draws() - The bootstrap draws: parents resampled whole, the undivided hybrid cells resampled once, each copy keeping its memberships in the mean, dispersion, kinetic balance and burst size partitions; draw b of a plan seeded from the plan's seed and b.
+###     .prod_sign() / .all_signs() - The side of zero of each replicate's contrasts from products of the fitted values, defined at a zero fit.
+###     stage_genes() / merge_boot_stage() / load_stage_blocks() - The staged bootstrap: the genes a family continues, the merge of a later stage's columns, the block outputs.
 ###     sign_boot_p() / .ratio_cdf() - The bootstrap sign test: p = min(1, 2 (1 + n0) / (1 + B)); the degree of dominance k with its bootstrap distribution at -1, 0 and 1.
 ###     .mode_contrasts() - Every contrast (mean, log2 disp with zero mapped to -Inf, raw disp) of every mode from per-group fits: the one definition for the observed fits and each bootstrap draw.
 ###     .boot_summary() / apply_gate() - Percentile interval and interquantile-range SE of bootstrap draws (infinite draws kept); sets the contrasts the observed fits do not define to NA (.QUANTITY.GATE).
@@ -291,8 +293,8 @@ console_stop <- function() {
 # Offset NB fit for one gene. Counts follow y ~ NB(mean = exposure * mu, size = theta), so mu is a per-unit-exposure rate, disp is the dispersion
 # phi = 1/theta (the noise; larger = noisier) and theta is the NB size, the quantity that behaves as burst frequency. The point estimates come from
 # .fit_one(): mu = sum(y)/sum(exposure) is the ratio estimate, free of phi, and phi maximizes the Cox-Reid adjusted profile likelihood with every cell mean
-# held at its fitted value (disp = 0, theta = Inf when the adjusted slope at zero is not positive, i.e. no detectable overdispersion). Every bootstrap,
-# permutation and power-grid replicate fits with this same estimator, so an observed value and the distribution it is compared against are measured
+# held at its fitted value (disp = 0, theta = Inf when the adjusted slope at zero is not positive and no interior value beats phi = 0, i.e. no detectable
+# overdispersion). Every bootstrap and power-grid replicate fits with this same estimator, so an observed value and the distribution it is compared against are measured
 # identically. glm.nb supplies only the asymptotic log-scale SEs; the log-scale SE of theta is the log-scale SE of phi.
 # eta is the split variance of each cell of a hybrid allele (see fit_dispersion()), 0 for a group without a library split.
 # Returns c(disp, mu, disp_logse, mu_logse, theta, disp_app, hit_range).
@@ -324,6 +326,8 @@ neg_binom_fit_offset <- function(y, exposure, eta = 0) {
 # Bounds of the dispersion search. The Cox-Reid fit maximizes over log(phi)
 # in -rev(LOG.THETA.RANGE), phi from about 3e-7 to 55; a maximum within 1e-3 of either end is recorded (hit_range).
 LOG.THETA.RANGE   <- c(-4, 15)
+CR.RESTART.LOGPHI <- c(-6, -2, 1)   # log(phi) starting values of the restarts of a Cox-Reid search that returned no finite maximum (phi about 0.0025, 0.14, 2.7)
+CR.INTERIOR.TOL   <- 1e-8          # relative margin by which an interior maximum must exceed the adjusted likelihood at phi = 0 to replace the boundary
 WEIGHTED.MAXIT    <- 100     # iteration limit and relative tolerance of the Appendix C moment estimator (fit_dispersion(method = "weighted"))
 WEIGHTED.TOL      <- 1e-8
 
@@ -398,7 +402,8 @@ zero_fail_frac <- function(x) if (length(x)) mean(!is.finite(x) | x == 0) else N
 
 # fit_dispersion: the shared dispersion-fitting interface. Both methods take the same exposure-weighted mean,
 # mu = sum(y) / sum(exposure), then estimate the dispersion phi of Var(y_i) = M_i + phi M_i^2 with M_i = mu * exposure_i.
-#   "NB": the maximizer of the Cox-Reid adjusted profile likelihood of phi (.fit_one()), with the boundary rule above.
+#   "NB": the maximizer of the Cox-Reid adjusted profile likelihood of phi (.fit_one()), with the boundary rule above confirmed by an interior check and a
+#     restarted search when the first returns no finite maximum (Methods: Estimating phi).
 #   "weighted": the weighted method of moments of Methods Appendix C, which uses only the first two moments of the counts. With p_i = O_i / sum(O),
 #     r_i = y_i - M_i, A_i = M_i (1 - p_i), B_i = M_i^2 (1 - 2 p_i) + p_i^2 sum(M^2) and h = sum(p^2), E[r_i^2] = A_i + phi B_i when mu is estimated from
 #     the same counts. The intermediate estimate phi-check = sum(w_i (r_i^2 - A_i)) / sum(w_i B_i) uses the plug-in B_i, whose expectation is
@@ -413,8 +418,11 @@ zero_fail_frac <- function(x) if (length(x)) mean(!is.finite(x) | x == 0) else N
 #   mu, disp (the corrected phi, 0 at the boundary), theta = 1 / disp (Inf at 0),
 #   disp_app (the fitted phi* before the split correction, 0 when the fit sits on the boundary), split_bias (the subtracted term, 0 without eta),
 #   disp_raw (the corrected phi before the truncation at zero, signed),
-#   boundary (1 when disp = 0, a valid Poisson-limit estimate), converged (NB: 1 unless the fit failed; weighted: 1 when the iteration met WEIGHTED.TOL), iter (weighted only) and
-#   hit_range (1 when the NB maximum lies within 1e-3 of either end of the search range, NB only).
+#   boundary (1 when disp = 0, a valid Poisson-limit estimate), converged (NB: 1 unless the fit failed; weighted: 1 when the iteration met WEIGHTED.TOL), iter (weighted only),
+#   hit_range (1 when the NB maximum lies within 1e-3 of either end of the search range, NB only), interior (NB, set when the adjusted slope at zero is not
+#   positive: 1 when the interior check found a larger interior maximum, 0 when phi = 0 is the global maximum) and restarted (NB: 1 when the search was restarted).
+# The fit status of a group is failed (NA disp with counts present, or no counts), boundary (disp = 0, a zero from the rule or from truncation after the split
+# correction) or fitted (disp > 0).
 # NA mu and disp mean too few cells; mu = 0 and NA disp mean no counts; mu with NA disp is a failed fit.
 #
 # z (NB only) conditions the fit on cell state: one value per cell, or a cells x covariates matrix (Methods Appendix E: State-conditioned estimates). The mean is
@@ -430,7 +438,7 @@ fit_dispersion <- function(counts, expo, eta = 0, method = c("NB", "weighted"), 
     stopifnot(is.numeric(z), nrow(z) == length(counts), all(is.finite(z)))
   }
   out <- c(mu = NA_real_, disp = NA_real_, theta = NA_real_, disp_app = NA_real_, split_bias = NA_real_, disp_raw = NA_real_,
-           boundary = NA_real_, converged = NA_real_, iter = NA_real_, hit_range = NA_real_)
+           boundary = NA_real_, converged = NA_real_, iter = NA_real_, hit_range = NA_real_, interior = NA_real_, restarted = NA_real_)
   if (!is.null(z)) out <- c(out, setNames(rep(NA_real_, ncol(z)), paste0("beta", seq_len(ncol(z)))), mean_converged = NA_real_)
   keep <- is.finite(counts) & is.finite(expo) & expo > 0
   y <- counts[keep]; e <- expo[keep]; et <- if (length(eta) == 1) rep(eta, length(y)) else eta[keep]
@@ -451,16 +459,36 @@ fit_dispersion <- function(counts, expo, eta = 0, method = c("NB", "weighted"), 
   if (method == "NB") {
     slope0 <- if (is.null(X)) sum((y - mu_i)^2) - sum(mu_i) + sum(mu_i^2) / sum(mu_i)       # twice the adjusted slope at phi = 0
               else sum((y - mu_i)^2) - sum(mu_i) + sum(diag(solve(crossprod(X, mu_i * X), crossprod(X, mu_i^2 * X))))
-    out[["converged"]] <- 1
+    ## The adjusted likelihood is maximized over log(phi) on the search range. When the search returns no finite maximum, it is restarted by bounded
+    ## quasi-Newton steps from CR.RESTART.LOGPHI and from the moment estimate of Appendix C, and the best finite maximum is kept; a fit is failed only when
+    ## every restart fails too. A non-positive adjusted slope at zero makes phi = 0 a local maximum; the interior check keeps it only when no interior value
+    ## of the adjusted likelihood exceeds its value at zero (the Poisson log-likelihood minus 0.5 log sum M, .cr_loglik(0)), so phi = 0 is the global maximum.
+    lrange <- -rev(LOG.THETA.RANGE)
+    ll <- .cr_loglik(y, mu_i, X)
+    f_lp <- function(lp) ll(exp(lp))
+    opt <- tryCatch(optimize(f_lp, lrange, maximum = TRUE), error = function(e) NULL)
+    if (!is.null(opt) && is.finite(opt$objective)) opt <- list(par = opt$maximum, value = opt$objective)
+    else {
+      out[["restarted"]] <- 1
+      mom <- tryCatch(fit_dispersion(y, e, 0, "weighted")[["disp_app"]], error = function(e) NA_real_)
+      starts <- unique(c(CR.RESTART.LOGPHI, if (is.finite(mom) && mom > 0) min(max(log(mom), lrange[1]), lrange[2])))
+      fits <- lapply(starts, function(s) tryCatch(optim(s, f_lp, method = "L-BFGS-B", lower = lrange[1], upper = lrange[2], control = list(fnscale = -1)),
+                                                  error = function(e) NULL))
+      fits <- Filter(function(o) !is.null(o) && o$convergence == 0 && is.finite(o$value), fits)
+      opt <- if (length(fits)) fits[[which.max(vapply(fits, `[[`, numeric(1), "value"))]] else NULL
+    }
+    l0 <- ll(0)
     if (slope0 <= 0) {
-      phi_app <- 0; out[["hit_range"]] <- 0                                 # the maximum sits on the boundary
+      interior <- !is.null(opt) && opt$value > l0 + CR.INTERIOR.TOL * max(1, abs(l0))
+      out[["interior"]] <- as.numeric(interior)
+    } else interior <- TRUE
+    if (interior && is.null(opt)) { out[["converged"]] <- 0; return(out) }       # a positive slope at zero and no finite maximum: a failed fit
+    out[["converged"]] <- 1
+    if (interior) {
+      phi_app <- exp(opt$par)
+      out[["hit_range"]] <- as.numeric(any(abs(opt$par - lrange) < 1e-3))
     } else {
-      lrange <- -rev(LOG.THETA.RANGE)
-      ll <- .cr_loglik(y, mu_i, X)
-      opt <- tryCatch(optimize(function(lp) ll(exp(lp)), lrange, maximum = TRUE), error = function(e) NULL)
-      if (is.null(opt)) { out[["converged"]] <- 0; return(out) }
-      phi_app <- exp(opt$maximum)
-      out[["hit_range"]] <- as.numeric(any(abs(opt$maximum - lrange) < 1e-3))
+      phi_app <- 0; out[["hit_range"]] <- 0                                   # the global maximum sits on the boundary
     }
     est <- phi_app
   } else {
@@ -610,32 +638,53 @@ qc_gene_keep <- function(mats, lambda0 = 0.20, cell_frac = 0.10, rule = c("any",
 ## 3. PAIRED PER-GENE BOOTSTRAP OF CONTRASTS
 ## ============================================================
 
-## Draws all B sets of resampling indices up front, from one seeded stream, so the replicates are independent of any RNG use inside the fitting code. The
-## same draws serve the bootstrap and its sign tests (gene_boot.R) and the state-conditioned layer (gene_cond.R). Each draw resamples the cells of each parent with replacement
-## (MIX.SC, MIX.SE) and the undivided hybrid cells once (HYB), and each resampled hybrid cell keeps the cis and trans membership of the cell it copied in every
-## partition (Methods: Tests of contrasts). Every hybrid dataset of a draw is therefore built from the same resampled cell IDs: the cis side of a partition
-## holds the copies of its cis cells, the trans side the copies of the rest. The SC and SE alleles of a cell stay paired (one index vector serves both), the
-## overlaps between the partitions are kept, and the size of each side varies from draw to draw as it would in a new sample of hybrid cells.
+## Bootstrap draws. Every replicate is one draw: it resamples the cells of each parent with replacement (MIX.SC, MIX.SE) and the undivided hybrid cells once
+## (HYB), and each resampled hybrid cell keeps the cis and trans membership of the cell it copied in every partition (Methods: Tests of contrasts). Every hybrid
+## dataset of a draw is therefore built from the same resampled cell IDs: the cis side of a partition holds the copies of its cis cells, the trans side the
+## copies of the rest. The SC and SE alleles of a cell stay paired (one index vector serves both), the overlaps between the partitions are kept, and the size of
+## each side varies from draw to draw as it would in a new sample of hybrid cells.
+##
+## A draw plan (make_draw_plan()) holds the cell counts, the partition memberships, a base seed and the number of draws B. Draw b of a plan (plan_draw()) is
+## drawn from its own seed, base * DRAW.SEED.STRIDE + b, so it depends only on (base, b): the same draw serves every gene and every job that reads the plan,
+## a job draws its indices itself before it fits anything, and a staged bootstrap of 100,000 replicates needs no pre-drawn index file. Each seed opens its own
+## stream through with_local_seed(), so draws are independent of any RNG use inside the fitting code. Plans with different base seeds give fresh replicates:
+## for B below DRAW.SEED.STRIDE no two (base, b) pairs share a seed.
 ##
 ## splits is a named list of the hybrid-cell positions (columns of HYB.SC) of the cis side of each partition: HYC (mean, f_mean), HYC.N (dispersion, f_disp),
 ## HYC.K (kinetic balance, f_kbal) and HYC.Z (burst size, f_bsize). Each returned hybrid index vector gives positions within its own dataset's columns (the
 ## cis cells in increasing position, as split_indices_by_depth() returns them, and the trans cells likewise), the layout boot_contrasts_one() expects; HYB
 ## indexes the full hybrid column order.
-make_draws <- function(ncells, B, seed = 1, splits) {
+DRAW.SEED.STRIDE <- 100003     # larger than any B, and base * stride + B stays below 2^31 for base seeds up to about 21,000
+make_draw_plan <- function(ncells, B, seed, splits) {
   n_h <- ncells[["HYB.COMB"]]
-  stopifnot(is.numeric(B), length(B) == 1, B >= 1, is.list(splits), length(splits) >= 1, all(startsWith(names(splits), "HYC")),
+  stopifnot(is.numeric(B), length(B) == 1, B >= 1, B < DRAW.SEED.STRIDE, is.numeric(seed), length(seed) == 1, seed >= 0,
+            (seed + 1) * DRAW.SEED.STRIDE < 2^31 - 1, is.list(splits), length(splits) >= 1, all(startsWith(names(splits), "HYC")),
             all(vapply(splits, function(x) is.numeric(x) && !anyDuplicated(x) && all(x %in% seq_len(n_h)) && length(x) < n_h, logical(1))))
   ## Group membership in the dataset's own column order (the order the splits were cut in)
   members <- list()
   for (k in names(splits)) { members[[k]] <- sort(splits[[k]]); members[[sub("^HYC", "HYT", k)]] <- setdiff(seq_len(n_h), splits[[k]]) }
-  with_local_seed(seed, lapply(seq_len(B), function(b) {
+  structure(list(ncells = ncells[c("MIX.SC", "MIX.SE", "HYB.COMB")], members = members, seed = seed, B = as.integer(B)), class = "draw_plan")
+}
+
+## plan_draw: draw b of a draw plan (see above), a list of index vectors named by draw key (.DRAW.KEY).
+plan_draw <- function(plan, b) {
+  stopifnot(inherits(plan, "draw_plan"), length(b) == 1, b >= 1, b <= plan$B)
+  n_h <- plan$ncells[["HYB.COMB"]]
+  with_local_seed(plan$seed * DRAW.SEED.STRIDE + b, {
     hi <- sample.int(n_h, n_h, replace = TRUE)
-    d <- list(MIX.SC = sample.int(ncells[["MIX.SC"]], ncells[["MIX.SC"]], replace = TRUE),
-              MIX.SE = sample.int(ncells[["MIX.SE"]], ncells[["MIX.SE"]], replace = TRUE))
-    for (k in names(members)) { m <- match(hi, members[[k]]); d[[k]] <- m[!is.na(m)] }
+    d <- list(MIX.SC = sample.int(plan$ncells[["MIX.SC"]], plan$ncells[["MIX.SC"]], replace = TRUE),
+              MIX.SE = sample.int(plan$ncells[["MIX.SE"]], plan$ncells[["MIX.SE"]], replace = TRUE))
+    for (k in names(plan$members)) { m <- match(hi, plan$members[[k]]); d[[k]] <- m[!is.na(m)] }
     d$HYB <- hi
     d
-  }))
+  })
+}
+
+## make_draws: every draw of a plan as a list, for the jobs that read pre-drawn indices (gene_cond.R, the checks). The draws equal those of plan_draw() on the
+## same plan, so gene_cond.R conditions on exactly the replicates of the first bootstrap stage.
+make_draws <- function(ncells, B, seed = 1, splits) {
+  plan <- make_draw_plan(ncells, B, seed, splits)
+  lapply(seq_len(B), plan_draw, plan = plan)
 }
 
 ## Contrast definitions (Methods: Contrasts, Contrasts between groups, Derived comparisons). Every contrast is a weighted sum over the groups it uses, with
@@ -682,7 +731,7 @@ make_draws <- function(ncells, B, seed = 1, splits) {
 ## The reported modes, the columns of BURST.CONTRASTS; the suffixed modes are sources only.
 .OUT_MODES <- c("total", "cis", "trans", "mid", "par_sc", "par_se", "inh_c", "inh_e")
 
-## The modes that compare the hybrid with the parents (Methods: Dominance, Shared shift), whose dispersion contrasts the shared shift moves.
+## The modes that compare the hybrid with the parents (Methods: Dominance, Hybrid noise shift), whose dispersion contrasts the shared shift moves.
 .DOM.MODES <- c("mid", "par_sc", "par_se", "inh_c", "inh_e")
 
 ## Which mode supplies the dispersion (noise axis) value of each reported mode: the dispersion partition for every mode on the hybrid alleles. mean_* uses the
@@ -1311,9 +1360,11 @@ classify_reg <- function(p_cis, p_trans, est_cis, est_trans, sig = 0.05, colors 
 ##   both                       placed by the percentile interval of k at level 1 - sig N_sel / N_test, the false coverage-statement level for intervals
 ##                              built on the N_sel genes both tests select among the N_test genes tested in the family (Benjamini and Yekutieli 2005,
 ##                              https://doi.org/10.1198/016214504000001907), in this order: contains 1 and -1, Over/Underdominant by the sign of Delta_dom;
-##                              contains 0 and 1, Sc.Partial; contains 0 and -1, Se.Partial; contains 1, Sc.Dominant; contains -1, Se.Dominant; entirely
+##                              contains 0 (with one of +-1, or with neither), Unclassed; contains 1, Sc.Dominant; contains -1, Se.Dominant; entirely
 ##                              beyond 1 or -1, Over/Underdominant by the sign of Delta_dom; entirely between 0 and 1, Sc.Partial; entirely between -1 and 0,
-##                              Se.Partial; within (-1, 1) and containing 0 only, Additive.
+##                              Se.Partial. An interval holding 0 and one parent's value meets two rules of the Methods (that parent dominant, and partially
+##                              dominant toward it), and one holding 0 but neither +-1 meets none, so such genes stay Unclassed and are reported with their
+##                              interval until the rules are settled.
 ## k = 1 is the Sc parent (Pc), k = -1 the Se parent (Pe) and k = 0 the midparent. The interval [lo, hi] at level 1 - a contains c when F(c) >= a / 2 and
 ## G(c) < 1 - a / 2; it lies above c when F(c) < a / 2 and below c when G(c) >= 1 - a / 2 (type 1 percentiles). A gene without both q-values is NA (not
 ## classified, distinct from Ambiguous); a selected gene whose k distribution or sign of Delta_dom is undefined is Ambiguous. Returns the class vector with the
@@ -1336,8 +1387,8 @@ classify_dom <- function(q_ref, q_dom, est_dom, kcdf, sig = 0.05) {
     beyond <- k$F1 < a / 2 | k$Gm1 >= 1 - a / 2
     in_c <- k$F0 < a / 2 & k$G1 >= 1 - a / 2; in_e <- k$Fm1 < a / 2 & k$G0 >= 1 - a / 2
     ob <- od[both]
-    r <- ifelse(c1 & cm1, ob, ifelse(c0 & c1, "Sc.Partial", ifelse(c0 & cm1, "Se.Partial", ifelse(c1, "Sc.Dominant", ifelse(cm1, "Se.Dominant",
-         ifelse(beyond, ob, ifelse(in_c, "Sc.Partial", ifelse(in_e, "Se.Partial", ifelse(c0, "Additive", NA_character_)))))))))
+    r <- ifelse(c1 & cm1, ob, ifelse(c0, "Unclassed", ifelse(c1, "Sc.Dominant", ifelse(cm1, "Se.Dominant",
+         ifelse(beyond, ob, ifelse(in_c, "Sc.Partial", ifelse(in_e, "Se.Partial", NA_character_)))))))
     r[is.na(r)] <- "Ambiguous"
     cls[both] <- r
   }
@@ -3741,12 +3792,16 @@ fit_group_values <- function(fits, g) {
 ## either of its tails. The bounds are the 2.5% and 97.5% percentiles (type 1, which does not interpolate across an infinite value) and may be one-sided or
 ## unbounded; the SE is the interquantile range divided by 3.92 (twice the 97.5% normal quantile), infinite when a bound is. With inf = FALSE the draws are
 ## finite but for undefined ones, which take the same tail rule, and the SE is the SD of the finite draws. Returns c(se, lo, hi), NA with fewer than three draws.
-.boot_summary <- function(x, inf = TRUE) {
+## tail sets the probability in each tail of the interval (0.025 by default, a 95% interval; the degrees of dominance use half the false coverage-statement
+## rate); the SE belongs to the 95% interval and is NA for any other tail.
+.boot_summary <- function(x, inf = TRUE, tail = 0.025) {
+  stopifnot(is.numeric(tail), length(tail) == 1, tail > 0, tail < 0.5)
   out <- c(se = NA_real_, lo = NA_real_, hi = NA_real_)
   if (length(x) < 3) return(out)
   u <- is.na(x)
-  out[["lo"]] <- quantile(replace(x, u, -Inf), 0.025, type = 1, names = FALSE)
-  out[["hi"]] <- quantile(replace(x, u, Inf), 0.975, type = 1, names = FALSE)
+  out[["lo"]] <- quantile(replace(x, u, -Inf), tail, type = 1, names = FALSE)
+  out[["hi"]] <- quantile(replace(x, u, Inf), 1 - tail, type = 1, names = FALSE)
+  if (tail != 0.025) return(out)
   fin <- x[is.finite(x)]
   out[["se"]] <- if (inf) { if (is.finite(out[["lo"]]) && is.finite(out[["hi"]])) (out[["hi"]] - out[["lo"]]) / 3.92 else Inf } else if (length(fin) > 2) sd(fin) else NA_real_
   out
@@ -3847,9 +3902,10 @@ sign_boot_p <- function(x, s, ties = c("null", "split")) {
 ## at the three reference values c = -1 (Pe), 0 (midparent) and 1 (Pc) F(c) = Pr(k <= c) with undefined replicates counted (the lower tail) and
 ## G(c) = Pr(k < c) without them (the upper tail). The percentile interval at any level 1 - a then contains c when F(c) >= a / 2 and G(c) < 1 - a / 2, lies
 ## above c when F(c) < a / 2 and below c when G(c) >= 1 - a / 2 (classify_dom()), which fixes the interval at the false coverage-statement level after every gene
-## has been bootstrapped.
-.ratio_cdf <- function(dom, ref, xd, xr) {
+## has been bootstrapped. a (optional) adds the percentile interval at level 1 - a as flo and fhi, with the same tail rule.
+.ratio_cdf <- function(dom, ref, xd, xr, a = NULL) {
   out <- c(est = NA_real_, lo = NA_real_, hi = NA_real_, n = 0, n_undef = 0, Fm1 = NA_real_, F0 = NA_real_, F1 = NA_real_, Gm1 = NA_real_, G0 = NA_real_, G1 = NA_real_)
+  if (!is.null(a)) out[c("flo", "fhi")] <- NA_real_
   k0 <- .ratio_k(dom, ref)
   if (is.na(k0) || !is.finite(k0)) return(out)
   k <- .ratio_k(xd, xr); u <- is.na(k)
@@ -3858,49 +3914,167 @@ sign_boot_p <- function(x, s, ties = c("null", "split")) {
   s <- .boot_summary(k, TRUE); out[c("lo", "hi")] <- s[c("lo", "hi")]
   out[c("Fm1", "F0", "F1")] <- vapply(c(-1, 0, 1), function(cc) mean(u | k <= cc), numeric(1))
   out[c("Gm1", "G0", "G1")] <- vapply(c(-1, 0, 1), function(cc) mean(!u & k < cc), numeric(1))
+  if (!is.null(a)) out[c("flo", "fhi")] <- .boot_summary(k, TRUE, a / 2)[c("lo", "hi")]
   out
 }
 
-## boot_contrasts_one: one gene's bootstrap contrasts and sign-test p-values across all modes (the unit of work a cluster worker does). draws holds every
-## resample index set (make_draws()), drawn before any fit so replicates are independent: each replicate resamples each parent's cells and the undivided hybrid
-## cells once, every hybrid cell keeping its cis, trans and partition memberships. etas gives the split variance of every cell of every contrast dataset (a vector
-## in the dataset's column order for a hybrid allele, eta_Hc or eta_He of split_eta(), and 0 for a parent), so a resampled cell carries its own split variance and
-## each replicate's split correction is computed on its resampled cells (fit_dispersion(eta)). Every replicate refits every group with the observed estimators and
-## corrections and rebuilds every contrast from them (.all_contrasts()). A failed refit counts as a zero dispersion. On the log2 scale a zero mean or dispersion
-## is -Inf in its group, so the contrast is +-Inf with the side set by the group's weight lambda_r, and NaN (undefined) when both signs meet; raw theta = 1 / phi
-## and kappa = 1 / (mu phi^2) are infinite at phi = 0. Every replicate stays in the draws: the intervals are percentile intervals, one-sided or unbounded where
-## infinite replicates reach a tail (.boot_summary()), and the p-value is the bootstrap sign test (sign_boot_p()), which counts undefined replicates on the null
-## side. Quantities: mean (log2), disp (log2 phi), rdisp (raw phi), rtheta (raw theta), bsize and rbsize (burst size beta = mu phi), kbal and rkbal (kinetic
-## balance kappa); log2 theta = -log2 phi, so its estimate, interval and p-value follow from disp. methods "NB" is the pipeline estimator; adding "weighted"
-## refits every resample with the moment estimator (Methods Appendix C) on the same cells and adds the w* columns, estimates and intervals only, and the flag
-## w<quantity>_<mode>_flag, TRUE when the moment estimate lies outside the 95% percentile interval of the Cox-Reid estimate (Methods: Appendix C). The mean axis
-## stays with NB. gates is the genes x contrasts logical matrix of the contrasts the observed fits define (apply_gate()): a failed observed fit leaves no
-## estimate, interval or p-value on any scale, and a zero observed estimate none on log2 and none for raw theta or kappa.
-## shift (the second stage of the bootstrap, Methods: Shared shift) is a vector of the shared shift Xi at each gene's log2 mu_H, named by gene, from the curve
-## fitted once on the observed data and held at that value in every replicate. Each hybrid-allele dispersion is multiplied by 2^-Xi before the contrasts are rebuilt,
-## which subtracts Xi from the log2 dispersion contrasts of the hybrid with the parents (Xi from bsize, 2 Xi added to kbal) and divides each hybrid allele value by
-## 2^Xi (theta multiplied, kappa by 2^(2 Xi)) on the raw scale. The shifted contrasts are a<quantity>_<mode>_est, _se, _lo, _hi, _p for the modes the shift
-## moves (.SHIFT.QUANTITIES). With shift, the degrees of dominance k = 2 Delta_dom / Delta_total and k_trans = 2 Delta_dom / Delta_trans of every quantity,
-## from the shifted Delta_dom (and the shifted raw trans contrast), are added as k_<quantity>_* and kt_<quantity>_* (.ratio_cdf()). A gene absent from shift
-## (no finite log2 mu_H) has no shifted contrasts.
-boot_contrasts_one <- function(g, expos, fits, mats, draws, etas, gates = NULL, methods = "NB", shift = NULL) {
+## .ratio_mean: the ratio estimate of a group's mean rate, sum(y) / sum(O) over the cells with a positive offset, as fit_dispersion() computes it (NA with fewer
+## than two cells, 0 when every count is zero). The mean family of the staged bootstrap refits means alone with it, since the mean needs no dispersion fit.
+.ratio_mean <- function(y, e) { k <- is.finite(y) & is.finite(e) & e > 0; if (sum(k) < 2) NA_real_ else sum(y[k]) / sum(e[k]) }
+
+## .prod_sign: the side of zero of one log2 contrast, read from products of the fitted group values (Methods: Failed and zero refits). A log2 contrast is a
+## weighted sum sum_r lambda_r log2 x_r with weights of +-1 or +-1/2; doubling the weights clears the halves, so the contrast is positive exactly when
+## prod_{lambda_r > 0} x_r^(2 lambda_r) > prod_{lambda_r < 0} x_r^(-2 lambda_r). The comparison stays defined when a group is zero: a zero factor makes its side
+## zero, and the contrast takes the sign of the other side; when both sides are zero the replicate is undefined (NA). Each side is formed as the sum of the
+## logarithms of its factors (-Inf for a zero factor), the same comparison of products without underflow. The shared shift enters through the group values
+## (the hybrid allele values are divided by 2 raised to the shift of their quantity before the call), so the shifted comparison is the product form with
+## 2^(2 Xi) on the parental side (Delta_dom of phi: phi_Hc phi_He > 2^(2 Xi) phi_Pc phi_Pe). x holds the group values in the order of .MODES[[mode]]; a value
+## that is missing or negative leaves the sign undefined.
+.prod_sign <- function(mode, x) {
+  w <- .MODE.WEIGHTS[[mode]]
+  if (anyNA(x) || any(x < 0)) return(NA_real_)
+  lx <- ifelse(x == 0, -Inf, log(x))
+  lp <- sum(2 * w[w > 0] * lx[w > 0]); ln <- sum(-2 * w[w < 0] * lx[w < 0])
+  if (lp == -Inf && ln == -Inf) NA_real_ else sign(lp - ln)
+}
+
+## .all_signs: the side of zero of every contrast of .all_contrasts() (vals), as -1, 0, 1 or NA (undefined), from the same group values. The log2 quantities
+## take the product form (.prod_sign()) on the group values of their source partition: the mean on mu, the dispersion on phi, the burst size on beta = mu phi,
+## and the kinetic balance on u = mu phi^2 with the sign reversed, since kappa = 1 / u (u stays finite where kappa is infinite). Log2 theta is the dispersion
+## with its sign reversed and is not tested separately. The raw quantities are differences of the group values, whose sign is read directly (+-Inf for theta
+## and kappa at phi = 0, NaN undefined).
+.all_signs <- function(gv_mu, gv_phi, vals) {
+  sg <- setNames(sign(vals), names(vals)); sg[is.nan(vals) | is.na(vals)] <- NA_real_
+  gx <- function(mode, f) vapply(.MODES[[mode]], function(k) f(gv_mu[[k]], gv_phi[[k]]), numeric(1))
+  for (md in .OUT_MODES) {
+    smd <- .DISP_SOURCE[[md]]; kmd <- .KBAL_SOURCE[[md]]; zmd <- .BSIZE_SOURCE[[md]]
+    sg[[paste0("mean_", md)]]  <- .prod_sign(md, gx(md, function(m, p) m))
+    sg[[paste0("disp_", md)]]  <- .prod_sign(smd, gx(smd, function(m, p) p))
+    sg[[paste0("bsize_", md)]] <- .prod_sign(zmd, gx(zmd, function(m, p) m * p))
+    sg[[paste0("kbal_", md)]]  <- -.prod_sign(kmd, gx(kmd, function(m, p) m * p^2))
+  }
+  sg
+}
+
+## .BOOT.FAMILIES: the column families of the staged bootstrap (Methods: Bootstrap tests of significance). The mean contrasts and the contrasts that need a
+## dispersion fit (phi, theta, beta and kappa, before and after the shared shift, with the degrees of dominance) are staged separately, so a mean contrast that
+## needs more replicates forces no dispersion refits. boot_family_cols() picks a family's bootstrap columns (SE, interval, p-value, and for the dispersion family
+## the degrees of dominance and the fit-status counts) from a table of boot_contrasts_one() output; the estimates are the observed contrasts and stay as they are.
+.BOOT.FAMILIES <- list(mean = "mean", disp = setdiff(names(.NB.QUANTITIES), "mean"))
+boot_family_cols <- function(nm, family = names(.BOOT.FAMILIES)) {
+  family <- match.arg(family)
+  q <- .BOOT.FAMILIES[[family]]
+  pat <- sprintf("^a?(%s)_(%s)_(se|lo|hi|p)$", paste(q, collapse = "|"), paste(.OUT_MODES, collapse = "|"))
+  keep <- grepl(pat, nm)
+  if (family == "disp") keep <- keep | grepl("^kt?_", nm) | grepl("^fs_", nm)
+  nm[keep]
+}
+
+## stage_genes: the genes of table bc (boot_contrasts_one() rows) whose family continues to the next stage of the bootstrap: some tested contrast of the family
+## has n0 < n0_min. n0 is read back from the p-value, p = 2 (1 + n0) / (1 + B) with B the family's replicates (n_boot_<family>), so n0 = p (1 + B) / 2 - 1;
+## p = 1 means n0 >= (B - 1) / 2, above every threshold of the stages. only (optional) restricts the result to the genes whose family ran B_only replicates,
+## so a stage continues only the genes that reached the stage before it.
+stage_genes <- function(bc, family, n0_min, B_only = NULL) {
+  nb <- bc[[paste0("n_boot_", family)]]
+  stopifnot(!is.null(nb), is.numeric(n0_min), length(n0_min) == 1)
+  pc <- grep("_p$", boot_family_cols(names(bc), family), value = TRUE)
+  n0 <- round(as.matrix(bc[pc]) * (1 + nb) / 2 - 1)
+  hit <- rowSums(n0 < n0_min, na.rm = TRUE) > 0
+  if (!is.null(B_only)) hit <- hit & nb == B_only
+  bc$gene[hit]
+}
+
+## merge_boot_stage: replaces the bootstrap columns of one family (boot_family_cols(): SE, interval, p-value, and for the dispersion family the degrees of
+## dominance and the fit-status counts) in base with those of a later stage (later, rows for the genes that reached it) and records the family's replicate count
+## in n_boot_<family>. The estimates come from the observed fits and are the same at every stage, which is checked.
+merge_boot_stage <- function(base, later, family) {
+  if (is.null(later) || !nrow(later)) return(base)
+  cols <- boot_family_cols(names(later), family)
+  stopifnot(all(cols %in% names(base)), !anyDuplicated(later$gene), all(later$gene %in% base$gene))
+  i <- match(later$gene, base$gene)
+  est <- intersect(grep("_est$", names(later), value = TRUE), names(base))
+  if (!isTRUE(all.equal(unlist(base[i, est, drop = FALSE]), unlist(later[est]), check.attributes = FALSE)))
+    stop(sprintf("the %s estimates of a later bootstrap stage differ from the first stage; rerun the stage with the current inputs", family), call. = FALSE)
+  base[i, cols] <- later[cols]
+  base[[paste0("n_boot_", family)]][i] <- later$n_boot
+  base
+}
+
+## load_stage_blocks: the outputs of one later stage of gene_boot.R, one file gene_boot_stage<s>_output_<k>of<K>.rda per gene block, with each object of objects
+## bound over the blocks. Every block must carry the STAGE.KEY of the inputs just packaged (check_cluster_key()), so a stale output stops here.
+load_stage_blocks <- function(stage, n_array, key, objects, dir = OUTPUT.DIR) {
+  out <- setNames(vector("list", length(objects)), objects)
+  for (k in seq_len(n_array)) {
+    file <- sprintf("gene_boot_stage%d_output_%dof%d.rda", stage, k, n_array); env <- new.env()
+    load_cluster_output(file.path(dir, file), sprintf("gene_boot.R (stage %d)", stage), envir = env)
+    check_cluster_key(env$STAGE.KEY, key, file, sprintf("gene_boot.R (stage %d)", stage))
+    for (o in objects) out[[o]] <- rbind(out[[o]], env[[o]])
+  }
+  out
+}
+
+## boot_contrasts_one: one gene's bootstrap contrasts and sign-test p-values across all modes (the unit of work a cluster worker does). draws is a draw plan
+## (make_draw_plan(): draw b is drawn from its own seed when it is used) or a list of pre-drawn index sets (make_draws()); either way the indices of a replicate
+## are fixed before any fit, so replicates are independent: each replicate resamples each parent's cells and the undivided hybrid cells once, every hybrid cell
+## keeping its cis, trans and partition memberships. etas gives the split variance of every cell of every contrast dataset (a vector in the dataset's column
+## order for a hybrid allele, eta_Hc or eta_He of split_eta(), and 0 for a parent), so a resampled cell carries its own split variance and each replicate's
+## split correction is computed on its resampled cells (fit_dispersion(eta)). Every replicate refits every group with the observed estimators and corrections
+## and rebuilds every contrast from them (.all_contrasts()). A failed refit counts as a zero dispersion, because fits fail mainly where counts are low and the
+## noise is near the Poisson limit. A zero mean or dispersion is -Inf on the log2 scale in its group, so a log2 replicate is +-Inf with the side set by the
+## group's weight lambda_r, and NaN (undefined) when both signs meet; raw theta = 1 / phi and kappa = 1 / (mu phi^2) are infinite at phi = 0. Every replicate
+## stays in the draws: the intervals are percentile intervals of the log2 or raw replicate values, one-sided or unbounded where infinite replicates reach a tail
+## (.boot_summary()). The p-value is the bootstrap sign test (sign_boot_p()) on the side of zero of each replicate, read from products of the fitted values
+## (.all_signs()), which stays defined at a zero fit; an undefined replicate and an exact tie count on the null side. Quantities: mean (log2), disp (log2
+## phi), rdisp (raw phi), rtheta (raw theta), bsize and rbsize (burst size beta = mu phi), kbal and rkbal (kinetic balance kappa); log2 theta = -log2 phi, so
+## its estimate, interval and p-value follow from disp. methods "NB" is the pipeline estimator; adding "weighted" refits every resample with the moment
+## estimator (Methods Appendix C) on the same cells and adds the w* columns, estimates and intervals only, and the flag w<quantity>_<mode>_flag, TRUE when the
+## moment estimate lies outside the 95% percentile interval of the Cox-Reid estimate (Methods: Appendix C). The mean axis stays with NB. gates is the genes x
+## contrasts logical matrix of the contrasts the observed fits define (apply_gate()): a failed observed fit leaves no estimate, interval or p-value on any
+## scale, and a zero observed estimate none on log2 and none for raw theta or kappa.
+## fs_<dataset>_fit, _bnd and _fail count the replicates whose dispersion refit of that dataset was fitted (phi > 0), on the boundary (phi = 0, from the zero
+## rule or from truncation after the split correction) or failed (no finite phi; counted as zero in the contrasts).
+## shift is a vector of the shared shift Xi at each gene's log2 mu_H, named by gene, from the curve fitted once on the observed data and held at that value in
+## every replicate (Methods: Hybrid noise shift). The adjustment acts on contrasts: each hybrid-allele dispersion is multiplied by 2^-Xi when the shifted
+## contrasts are formed, and the stored group estimates are unchanged. This subtracts Xi from the log2 dispersion and burst size contrasts of the hybrid with the
+## parents and adds Xi to theta and 2 Xi to kappa, and divides each hybrid allele value by its quantity's factor on the raw scale (2^Xi for phi and beta,
+## 2^-Xi for theta, 2^-2Xi for kappa), in every raw contrast that uses the hybrid. The shifted contrasts are a<quantity>_<mode>_est, _se, _lo, _hi, _p for the
+## modes the shift moves (.SHIFT.QUANTITIES). With shift, the degrees of dominance k_P = 2 Delta_dom / Delta_total and k_T = 2 Delta_dom / Delta_trans of every
+## quantity, from the shifted Delta_dom in each replicate (and the shifted raw trans contrast), are added as k_<quantity>_* and kt_<quantity>_* (.ratio_cdf());
+## Delta_total is the parental contrast. k_level (named by <k or kt>_<quantity>, each 1 - the level of the interval, from the false coverage-statement rate)
+## adds the percentile interval of k at that level as _flo and _fhi. A gene absent from shift (no finite log2 mu_H) has no shifted contrasts.
+## family (the staged bootstrap) picks the columns returned: "all" every column, "mean" the mean contrasts alone (refitting the means only, with the ratio
+## estimate), "disp" the dispersion family (boot_family_cols()); n_boot records the number of replicates.
+boot_contrasts_one <- function(g, expos, fits, mats, draws, etas, gates = NULL, methods = "NB", shift = NULL, family = c("all", "mean", "disp"), k_level = NULL) {
+  family <- match.arg(family)
   stopifnot(all(methods %in% c("NB", "weighted")), "NB" %in% methods, is.list(etas), all(.CONTRAST.GROUPS %in% names(etas)),
-            is.null(shift) || (is.numeric(shift) && !is.null(names(shift))))
-  do_w <- "weighted" %in% methods
-  B <- length(draws); grp_all <- .CONTRAST.GROUPS; hyb <- grp_all[startsWith(grp_all, "HY")]; cn <- .ALL.CONTRAST.NAMES
+            is.null(shift) || (is.numeric(shift) && !is.null(names(shift))),
+            is.null(k_level) || (is.numeric(k_level) && !is.null(names(k_level)) && all(k_level > 0 & k_level < 1) && !is.null(shift)),
+            inherits(draws, "draw_plan") || is.list(draws), !("weighted" %in% methods && family != "all"))
+  do_w <- "weighted" %in% methods; fit_disp <- family != "mean"
+  B <- if (inherits(draws, "draw_plan")) draws$B else length(draws)
+  grp_all <- .CONTRAST.GROUPS; hyb <- grp_all[startsWith(grp_all, "HY")]; cn <- .ALL.CONTRAST.NAMES
   xi <- if (is.null(shift)) NULL else if (g %in% names(shift)) unname(shift[[g]]) else NA_real_
   eta_at <- function(grp, ix) { et <- etas[[grp]]; if (length(et) > 1 && !is.null(ix)) et[ix] else et }
   scale_hyb <- function(gv, x) { gv[hyb] <- lapply(gv[hyb], function(v) v * 2^(-x)); gv }
-  D <- matrix(NA_real_, B, length(cn), dimnames = list(NULL, cn)); DW <- D; DA <- D
+  D <- matrix(NA_real_, B, length(cn), dimnames = list(NULL, cn)); SG <- D; DW <- if (do_w) D; DA <- if (!is.null(xi)) D; SA <- DA
+  fs <- matrix(0L, length(grp_all), 3, dimnames = list(grp_all, c("fit", "bnd", "fail")))
+  nas <- setNames(as.list(rep(NA_real_, length(grp_all))), grp_all)
   for (b in seq_len(B)) {
-    d <- draws[[b]]
+    d <- if (inherits(draws, "draw_plan")) plan_draw(draws, b) else draws[[b]]
     ## Every dataset refit on the resample of its draw key (.DRAW.KEY) with its own offsets and split variances, so the two alleles of a resampled cell stay
     ## paired and each replicate's split correction comes from its resampled cells.
-    f <- lapply(setNames(grp_all, grp_all), function(grp) { ix <- d[[.DRAW.KEY[[grp]]]]; .fit_one(mats[[grp]][g, ix], expos[[grp]][ix], eta_at(grp, ix)) })
-    gv.mu <- lapply(f, function(x) unname(x[["mu"]]))
-    gv.bf <- lapply(f, function(x) { v <- unname(x[["disp"]]); if (is.finite(v)) v else 0 })      # a failed refit counts as a zero dispersion
-    D[b, ] <- .all_contrasts(gv.mu, gv.bf)
-    if (!is.null(xi)) DA[b, ] <- .all_contrasts(gv.mu, scale_hyb(gv.bf, xi))
+    if (fit_disp) {
+      f <- lapply(setNames(grp_all, grp_all), function(grp) { ix <- d[[.DRAW.KEY[[grp]]]]; .fit_one(mats[[grp]][g, ix], expos[[grp]][ix], eta_at(grp, ix)) })
+      gv.mu <- lapply(f, function(x) unname(x[["mu"]]))
+      ph <- vapply(f, function(x) unname(x[["disp"]]), numeric(1))
+      fs[, "fit"] <- fs[, "fit"] + (ph > 0 & is.finite(ph)); fs[, "bnd"] <- fs[, "bnd"] + (ph == 0 & is.finite(ph)); fs[, "fail"] <- fs[, "fail"] + !is.finite(ph)
+      gv.bf <- as.list(ifelse(is.finite(ph), ph, 0))                    # a failed refit counts as a zero dispersion
+    } else {
+      gv.mu <- lapply(setNames(grp_all, grp_all), function(grp) { ix <- d[[.DRAW.KEY[[grp]]]]; .ratio_mean(mats[[grp]][g, ix], expos[[grp]][ix]) })
+      gv.bf <- nas
+    }
+    D[b, ] <- .all_contrasts(gv.mu, gv.bf); SG[b, ] <- .all_signs(gv.mu, gv.bf, D[b, ])
+    if (!is.null(xi)) { sb <- scale_hyb(gv.bf, xi); DA[b, ] <- .all_contrasts(gv.mu, sb); SA[b, ] <- .all_signs(gv.mu, sb, DA[b, ]) }
     if (do_w) {
       gv.w <- lapply(setNames(grp_all, grp_all), function(grp) { ix <- d[[.DRAW.KEY[[grp]]]]
         v <- unname(fit_dispersion(mats[[grp]][g, ix], expos[[grp]][ix], eta_at(grp, ix), "weighted")[["disp"]]); if (is.finite(v)) v else 0 })
@@ -3916,21 +4090,22 @@ boot_contrasts_one <- function(g, expos, fits, mats, draws, etas, gates = NULL, 
     fw <- lapply(setNames(grp_all, grp_all), function(grp) unname(fit_dispersion(mats[[grp]][g, ], expos[[grp]], eta_at(grp, NULL), "weighted")[["disp"]]))
     ow <- .all_contrasts(fv$mu, fw)
   }
-  out <- list(gene = g)
-  ## put: one estimate with its bootstrap SE and 95% percentile interval, and with test = TRUE the sign-test p-value from the sign of the estimate
-  put <- function(nm, est, x, inf = FALSE, test = FALSE) {
+  out <- list(gene = g, n_boot = B)
+  ## put: one estimate with its bootstrap SE and 95% percentile interval of the replicate values x, and with test = TRUE the sign-test p-value from the sign of
+  ## the estimate and the replicates' sides of zero sx
+  put <- function(nm, est, x, inf = FALSE, sx = NULL) {
     if (!is.finite(est)) est <- NA_real_
     s <- .boot_summary(x, inf)
     out[[paste0(nm, "_est")]] <<- est; out[[paste0(nm, "_se")]] <<- unname(s[["se"]])
     out[[paste0(nm, "_lo")]] <<- unname(s[["lo"]]); out[[paste0(nm, "_hi")]] <<- unname(s[["hi"]])
-    if (test) out[[paste0(nm, "_p")]] <<- if (is.na(est)) NA_real_ else sign_boot_p(x, sign(est))
+    if (!is.null(sx)) out[[paste0(nm, "_p")]] <<- if (is.na(est)) NA_real_ else sign_boot_p(sx, sign(est))
   }
   cor_fin <- function(x, y) { ok <- is.finite(x) & is.finite(y); if (sum(ok) > 2) cor(x[ok], y[ok]) else NA_real_ }
   for (md in .OUT_MODES) {
     for (q in names(.NB.QUANTITIES)) {
       nm <- paste0(q, "_", md); inf <- .NB.QUANTITIES[[q]]
-      put(nm, o[[nm]], D[, nm], inf, TRUE)
-      if (!is.null(xi) && md %in% .SHIFT.QUANTITIES[[q]]) put(paste0("a", nm), oa[[nm]], DA[, nm], inf, TRUE)
+      put(nm, o[[nm]], D[, nm], inf, SG[, nm])
+      if (!is.null(xi) && md %in% .SHIFT.QUANTITIES[[q]]) put(paste0("a", nm), oa[[nm]], DA[, nm], inf, SA[, nm])
       if (do_w && q != "mean") {
         put(paste0("w", nm), ow[[nm]], DW[, nm], inf)
         lo <- out[[paste0(nm, "_lo")]]; hi <- out[[paste0(nm, "_hi")]]; we <- out[[paste0("w", nm, "_est")]]
@@ -3945,34 +4120,40 @@ boot_contrasts_one <- function(g, expos, fits, mats, draws, etas, gates = NULL, 
   }
   out$cor_par_mean <- cor_fin(D[, "mean_par_sc"], D[, "mean_par_se"])
   out$cor_par_disp <- cor_fin(D[, "disp_par_sc"], D[, "disp_par_se"])
+  if (fit_disp) for (grp in grp_all) for (s in colnames(fs)) out[[paste0("fs_", grp, "_", s)]] <- fs[grp, s]
   out <- apply_gate(out, if (is.null(gates)) NULL else gates[g, ])
   ## The degrees of dominance from the gated estimates: a quantity whose dominance or reference contrast is undefined has no k.
-  if (!is.null(xi)) for (q in names(.NB.QUANTITIES)) {
+  if (!is.null(xi) && fit_disp) for (q in names(.NB.QUANTITIES)) {
     pick <- function(md) { a <- md %in% .SHIFT.QUANTITIES[[q]]; nm <- paste0(q, "_", md)
       list(est = out[[paste0(if (a) "a" else "", nm, "_est")]], x = if (a) DA[, nm] else D[, nm]) }
     dm <- pick("mid")
     for (pre in c("k", "kt")) {
-      r <- pick(if (pre == "k") "total" else "trans"); kc <- .ratio_cdf(dm$est, r$est, dm$x, r$x)
+      lv <- if (is.null(k_level)) NULL else k_level[paste0(pre, "_", q)]
+      r <- pick(if (pre == "k") "total" else "trans"); kc <- .ratio_cdf(dm$est, r$est, dm$x, r$x, if (is.null(lv) || is.na(lv)) NULL else unname(lv))
       for (s in names(kc)) out[[paste0(pre, "_", q, "_", s)]] <- kc[[s]]
     }
   }
-  data.frame(out, row.names = NULL, check.names = FALSE)
+  keep <- switch(family, all = names(out), mean = c("gene", "n_boot", grep("^mean_", names(out), value = TRUE)),
+                 disp = c("gene", "n_boot", setdiff(grep("^(a?(disp|rdisp|rtheta|bsize|rbsize|kbal|rkbal)_|kt?_|fs_)", names(out), value = TRUE), character(0))))
+  if (!is.null(k_level)) keep <- c("gene", "n_boot", grep("^kt?_", names(out), value = TRUE))
+  data.frame(out[keep], row.names = NULL, check.names = FALSE)
 }
 
 ## ============================================================
-## SHARED SHIFT (Methods: Shared shift)
+## SHARED SHIFT (Methods: Hybrid noise shift)
 ## ============================================================
 ## Both hybrid alleles are noisier than the parents by an amount that falls with expression (checks MID1 to MID5). The shift Xi(log2 mu_H) is one curve: a
 ## robust loess of Delta_dom(log2 phi) (the mid contrast) on log2 mu_H (the geometric per-genome hybrid mean of the allele fits on all hybrid cells) over calibrator
-## genes, whose trans and total dispersion contrasts are not significant, so their Delta_dom should sit near zero but for the shared shift. The calibrator set is
-## fixed from the observed data and the curve is refitted in every bootstrap replicate on the calibrators' replicate values (analysis.R Section 2.3, from the
-## first stage of gene_boot.R), and the second stage (boot_contrasts_one(shift = )) divides every hybrid-allele dispersion by 2^Xi, which removes Xi from every
-## contrast of the hybrid with the parents on the log2 scale (-Xi for theta, Xi for beta, -2 Xi for kappa through the identities) and scales the hybrid allele
-## values of every raw contrast that uses the hybrid.
+## genes, whose trans and total log2 dispersion contrasts are not significant at the first bootstrap stage and whose observed Delta_dom is finite, so their
+## Delta_dom should sit near zero but for the shared shift. The calibrator set and the curve are fixed from the observed data (analysis.R Section 2.3), each
+## gene's Xi is stored, and every later stage (boot_contrasts_one(shift = )) divides every hybrid-allele dispersion by 2^Xi when it forms the shifted contrasts,
+## in the observed data and in every replicate, which removes Xi from every contrast of the hybrid with the parents on the log2 scale (-Xi for theta, Xi for
+## beta, -2 Xi for kappa through the identities) and scales the hybrid allele values of every raw contrast that uses the hybrid. Nothing refits Xi or
+## reselects calibrators inside the bootstrap.
 
 ## dom_shift_curve: the shared rise at every gene's log2 mu_H (x), from a robust loess (family "symmetric", span) of d on x over the calibrator genes
 ## (cal) with finite d and x. Genes outside the calibrators' range of x take the value at the nearest end. Returns one value per gene (NA where x is NA).
-## Applied to the observed mid contrasts and to each bootstrap replicate of them (analysis.R Section 2.3).
+## Applied once, to the observed mid contrasts (analysis.R Section 2.3).
 dom_shift_curve <- function(d, x, cal, span = 0.3) {
   ok <- cal & is.finite(d) & is.finite(x)
   stopifnot("too few calibrator genes with finite values for the loess" = sum(ok) >= 20)

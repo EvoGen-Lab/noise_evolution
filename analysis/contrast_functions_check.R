@@ -154,17 +154,17 @@ cdf <- function(Fm1, F0, F1) data.frame(Fm1 = Fm1, F0 = F0, F1 = F1, Gm1 = Fm1, 
 n <- 100; qr <- rep(0.5, n); qd <- rep(0.5, n); ed <- rep(1, n); kc <- cdf(rep(0.5, n), rep(0.5, n), rep(0.5, n))
 qr[1:30] <- 0.001; qd[c(1:20, 31:35)] <- 0.001; ed[31] <- -1
 set_k <- function(i, Fm1, F0, F1) { kc[i, ] <<- cdf(Fm1, F0, F1) }
-set_k(1, 0.001, 0.2, 0.6)   # contains 0 and 1, not -1: Sc.Partial
+set_k(1, 0.001, 0.2, 0.6)   # contains 0 and 1, not -1: two rules of the Methods apply, Unclassed
 set_k(2, 0.001, 0.002, 0.6) # contains 1 only: Sc.Dominant
-set_k(3, 0.3, 0.9, 0.999)   # contains -1 and 0: Se.Partial
+set_k(3, 0.3, 0.9, 0.999)   # contains -1 and 0: two rules apply, Unclassed
 set_k(4, 0.3, 0.999, 0.9999) # contains -1 only: Se.Dominant
 set_k(5, 0, 0, 0.001)       # entirely beyond 1: Overdominant (Delta_dom > 0)
 set_k(6, 0, 0.001, 0.999)   # entirely between 0 and 1: Sc.Partial
 set_k(7, 0.4, 0.5, 0.6)     # contains -1, 0 and 1: by the sign of Delta_dom
-set_k(8, 0.001, 0.5, 0.999) # contains 0 only, within (-1, 1): Additive
+set_k(8, 0.001, 0.5, 0.999) # contains 0 only, within (-1, 1): no rule applies, Unclassed
 cls <- classify_dom(qr, qd, ed, kc)
 stopifnot(abs(attr(cls, "fcr_level") - 0.05 * 20 / 100) < 1e-15,
-          identical(cls[1:8], c("Sc.Partial", "Sc.Dominant", "Se.Partial", "Se.Dominant", "Overdominant", "Sc.Partial", "Overdominant", "Additive")),
+          identical(cls[1:8], c("Unclassed", "Sc.Dominant", "Unclassed", "Se.Dominant", "Overdominant", "Sc.Partial", "Overdominant", "Unclassed")),
           all(cls[21:30] == "Additive"), cls[31] == "Underdominant", all(cls[32:35] == "Overdominant"), all(cls[36:100] == "Conserved"))
 cls2 <- classify_dom(replace(qr, 1, NA), qd, ed, kc); stopifnot(is.na(cls2[1]))
 
