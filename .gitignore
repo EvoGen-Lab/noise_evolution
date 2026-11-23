@@ -52,3 +52,6 @@ rsconnect/
 .posit/assistant
 *.rda
 *.rds
+
+# Quick-look outputs (analysis/quicklook_angles.R)
+analysis/output/
