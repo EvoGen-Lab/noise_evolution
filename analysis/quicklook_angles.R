@@ -6,7 +6,7 @@
 ###   Quantities  mean mu, dispersion phi, burst frequency alpha = 1 / phi, burst size beta = mu phi, kinetic balance kappa = alpha / beta, all on log2.
 ###   Schemes     cis/trans (theta_R), inheritance (theta_P) and trans inheritance (theta_T): each gene is a point (h, v) in an oriented plane, classed by the
 ###               angle theta = atan2(v, h) of that point and its delta-method interval against the landmark lines.
-### Needs   : the Section 1 checkpoint (MIX.SC, MIX.SE, HYB.SC, HYB.SE, SPLIT.ETA). The shared shift Xi (DOM.SHIFT) is read from the Section 2 checkpoint when
+### Needs   : the Section 1 checkpoint (MIX.SC, MIX.SE, HYB.SC, HYB.SE; the split variances are computed from them). The shared shift Xi (DOM.SHIFT) is read from the Section 2 checkpoint when
 ###           that exists and QL.USE.XI is TRUE; otherwise the script runs without it and says so.
 ### Writes  : analysis/output/quicklook_angles.csv (gene x quantity x scheme), quicklook_class_counts.csv, quicklook_angles.pdf and quicklook_inputs.txt.
 ### Changes nothing in the pipeline; its functions are in R/functions_quicklook.R. Runs locally in minutes.
@@ -23,9 +23,14 @@ if (!exists("QL.USE.XI"))    QL.USE.XI    <- TRUE    # divide the hybrid allele 
 
 ## ---- Inputs: the observed counts of the four groups and the split variances of the hybrid cells ----
 stopifnot("quicklook_angles.R needs the Section 1 checkpoint" = file.exists(ckpt_path(1)))
-load(ckpt_path(1))      # MIX.SC, MIX.SE, HYB.SC, HYB.SE, SPLIT.ETA
+load(ckpt_path(1))      # MIX.SC, MIX.SE, HYB.SC, HYB.SE
 stopifnot(identical(rownames(MIX.SC), rownames(HYB.SC)), identical(rownames(MIX.SE), rownames(MIX.SC)), identical(rownames(HYB.SE), rownames(HYB.SC)),
-          identical(dim(HYB.SC), dim(HYB.SE)), length(SPLIT.ETA$Hc) == ncol(HYB.SC), length(SPLIT.ETA$He) == ncol(HYB.SE))
+          identical(dim(HYB.SC), dim(HYB.SE)))
+## The split variance of each hybrid cell follows from its counts alone, as in Section 1.2: the observed share s = L_Hc / L_H and the library L_H give
+## eta_Hc = (1 - s) / (s L_H) and eta_He = s / ((1 - s) L_H) (split_eta()). Computing it here from the loaded matrices keeps it aligned with their columns and
+## serves checkpoints saved before SPLIT.ETA was added to them.
+QL.LIB.H  <- colSums(HYB.SC) + colSums(HYB.SE)
+SPLIT.ETA <- split_eta(colSums(HYB.SC) / QL.LIB.H, QL.LIB.H)
 
 ## Offsets as in Section 2 (Methods: Library split correction): a parent's offset is its library over the median parental library D, and each hybrid allele is
 ## offset by the library of its own genome, L_Hc / D and L_He / D, so every mean is a per-genome rate on the parents' scale. The split variance of each hybrid
@@ -118,7 +123,7 @@ ggsave(file.path(QL.OUT.DIR, "quicklook_angles.pdf"), wrap_plots(QL.PANELS, nrow
 ## ---- What was used ----
 QL.INPUTS <- c(sprintf("Section 1 checkpoint: %s", ckpt_path(1)),
                "Counts: MIX.SC (Pc), MIX.SE (Pe), HYB.SC (Hc), HYB.SE (He), all hybrid cells for every contrast",
-               sprintf("Offsets: library / D, D = %.1f (median parental library); alleles on their own genome's library; split variances SPLIT.ETA", QL.D),
+               sprintf("Offsets: library / D, D = %.1f (median parental library); alleles on their own genome's library; split variances from the hybrid counts (split_eta())", QL.D),
                "Fits: fit_dispersion(method = 'NB'): ratio mean, Cox-Reid phi with the boundary rule and interior check, split-corrected for Hc and He",
                sprintf("Genes: %d (mean count per cell >= %g in every group)", length(QL.GENES), QL.MIN.COUNT),
                QL.XI.NOTE,
