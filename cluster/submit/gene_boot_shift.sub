@@ -1,0 +1,25 @@
+#!/bin/sh -l
+# FILENAME:  gene_boot_shift.sbatch
+#
+# Second stage of the bootstrap (Methods: Hybrid noise shift): the stage-1 draws of replicate 1 rerun with every hybrid-allele
+# dispersion divided by 2^Xi from gene_shift_inputs.rda when the shifted contrasts are formed, written to gene_boot_shift_output.rda.
+# Submit after analysis.R Section 2.3 has written gene_shift_inputs.rda from the stage-1 output.
+
+#SBATCH --account=bphm
+#SBATCH --nodes=1
+#SBATCH --ntasks=1
+#SBATCH --partition=cpu
+#SBATCH --cpus-per-task=24
+#SBATCH --qos=normal
+#SBATCH --time=1:30:00
+#SBATCH --job-name gene_boot_shift
+#SBATCH --output=gene_boot_shift_%j.out
+
+module load r/4.5.2
+
+export OMP_NUM_THREADS=1
+export MKL_NUM_THREADS=1
+export OPENBLAS_NUM_THREADS=1
+export VECLIB_MAXIMUM_THREADS=1
+
+GENE_BOOT_STAGE=2 Rscript gene_boot.R

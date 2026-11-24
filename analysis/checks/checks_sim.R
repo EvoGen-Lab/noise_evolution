@@ -1,0 +1,268 @@
+###############################################################
+### checks_sim.R
+### Simulation checks of the methods document (docs/methods.md), one block per check ID of the validation handoff: A1, A2, A4 and C7 (simulation arms),
+### B3, B4, C4, E3 (simulation arm), F1(a), F2, F3 and F4. The checks of the earlier permutation and shifted bootstrap nulls and of the
+### likelihood bounds (D1 to D7, D10, E1, H5) were retired with those tests, and B2 (the estimator of the true share variance, sigma2_c) with the transcriptome
+### share correction that the library split correction replaced; the bootstrap sign test that replaced the nulls is checked by P1
+### (analysis/checks/sign_boot_test.R). Every check simulates from the shared generator (sim_hybrid_dataset(), R/functions_checks.R) on the observed
+### design when the Section 2 checkpoint exists, and on stand-in offsets with the observed coefficients of variation otherwise (recorded in each result).
+### Each result goes to results/checks/<ID>.rds with a row in results/checks/summary.csv; figures go to figures/extra/.
+###
+### Random numbers: every grid row or dataset draws from its own L'Ecuyer-CMRG stream (check_streams()), so a result does not depend on the number of
+### cores. CHECK.SIZE scales the replicate counts (1 = the sizes below). RUN.CHECKS selects the checks to run.
+### Runs locally; no cluster output is needed.
+###############################################################
+library(here); source(here("R", "setup.R")); source(here("R", "functions_checks.R"))
+library(parallel)
+
+CHECK.SCRIPT <- "analysis/checks/checks_sim.R"
+CORES        <- if (.Platform$OS.type == "windows") 1 else max(1, detectCores() - 1)   # mclapply forks, so Windows runs on one core
+if (!exists("CHECK.SIZE")) CHECK.SIZE <- 1   # a value set before sourcing (analysis/doc_checks.R) is kept
+SEED.CHECKS  <- 2026
+if (!exists("RUN.CHECKS")) RUN.CHECKS <- c("A2", "A1", "A7", "A9", "A10", "B3", "B4", "F1", "F2", "F3", "F4", "C4", "A4", "E3")
+set.seed(SEED.SECTION + 20)
+
+## The observed design: offsets, hybrid depth factors and libraries, s-bar and sigma2_s from the Section 2 checkpoint when it exists.
+DESIGN.ENV <- new.env()
+if (file.exists(ckpt_path(2))) load(ckpt_path(2), envir = DESIGN.ENV)
+POOLS <- check_design_pools(DESIGN.ENV)
+cat(sprintf("Design pools: %s (Pc %d, Pe %d, hybrid %d cells; s-bar %.4f, sigma2_s %.3g)\n", POOLS$source, length(POOLS$O_Pc), length(POOLS$O_Pe),
+            length(POOLS$S), POOLS$sbar, POOLS$var_s))
+rm(DESIGN.ENV)
+dir.create(CHECK.FIG.DIR, recursive = TRUE, showWarnings = FALSE)
+
+##############################################################################
+## A2. Unit tests of the slope rule and of the optimizer (Methods: Estimating phi)
+# (a) The adjusted slope at phi = 0 has the closed form 0.5 [sum (y - m)^2 - sum m + sum m^2 / sum m]; a forward finite difference of the adjusted
+# log-likelihood at phi = 1e-8 must agree with it in sign. The difference is taken on the stable form of the likelihood; the lgamma form that the fit
+# uses is differenced too, to report its rounding error at that phi. (b) The fitted phi must be the maximum of the adjusted likelihood: a 2000-point grid
+# over log phi on the search range must not find a better interior point.
+if ("A2" %in% RUN.CHECKS) {
+  n <- ceiling(1e4 * CHECK.SIZE); S <- check_streams(n, SEED.CHECKS + 2)
+  A2 <- do.call(rbind, mclapply(seq_len(n), a2_one, streams = S, mc.cores = CORES))
+  ok <- !A2$empty
+  check_save("A2", A2, "run",
+             headline = c(sprintf("datasets %d (empty %d)", sum(ok), sum(!ok)),
+                          sprintf("(a) sign disagreements closed form vs stable finite difference: %d; median rel. error %.2g, max %.2g",
+                                  sum(A2$sign_disagree[ok]), median(A2$rel_err[ok]), max(A2$rel_err[ok])),
+                          sprintf("lgamma form (.cr_loglik) finite difference at 1e-8: sign disagreements %d, median rel. error %.2g",
+                                  sum(sign(A2$slope_fd_lgamma[ok]) != sign(A2$slope_cf[ok])), median(abs(A2$slope_fd_lgamma[ok] - A2$slope_cf[ok]) / abs(A2$slope_cf[ok]))),
+                          sprintf("(b) grid finds a better maximum: %d of %d, interior %d (largest log-likelihood gain %.3g; the others at an end of the search range)",
+                                  sum(A2$grid_better[ok]), sum(ok), sum(A2$grid_better[ok] & A2$grid_interior[ok]), max(A2$ll_grid[ok] - A2$ll_fit[ok]))),
+             mc_error = "exact counts", script = CHECK.SCRIPT)
+}
+
+##############################################################################
+## A1. Cox-Reid against the unadjusted profile ML and the moment estimators (Methods: Estimating phi; Appendix C)
+# The unadjusted profile ML at the ratio mean carries a bias of order 1 / (N Mbar phi) relative to phi; the Cox-Reid term removes its first-order part.
+# Relative bias times N Mbar phi is flat in N for the unadjusted fit and near zero after the adjustment.
+if ("A1" %in% RUN.CHECKS) {
+  G <- expand.grid(N = c(800, 1600, 3200), Mbar = c(0.05, 0.2, 1, 5, 50), phi = c(0, 0.01, 0.1, 0.5, 2))
+  S <- check_streams(nrow(G), SEED.CHECKS + 1)
+  A1 <- do.call(rbind, mclapply(seq_len(nrow(G)), a1_row, grid = G, nrep = ceiling(500 * CHECK.SIZE), offsets = POOLS$O_Pc, streams = S, mc.cores = CORES))
+  A1$bias_over_sd <- A1$bias / A1$sd; A1$bias_z <- A1$bias / A1$bias_se
+  SB <- summary_by(A1[A1$phi > 0, ], "estimator", "bias_over_sd", z = "bias_z", keys = c("N", "Mbar", "phi"))
+  hl <- sprintf("%s: median bias/SD %.3f, max |bias|/SD %.3f at %s, cells with |bias| > 2 MC SE %d of %d", SB$level, SB$median, SB$max_abs, SB$at, SB$n_z2, SB$n)
+  SP <- summary_by(A1[A1$phi > 0 & A1$Mbar * A1$phi >= 0.05 & A1$estimator %in% c("cox_reid", "profile_ml"), ], "estimator", "rel_bias_x_NMphi")
+  slope_pat <- sprintf("%s: relative bias x N Mbar phi, median %.2f (range %.2f to %.2f)", SP$level, SP$median, SP$min, SP$max)
+  check_save("A1", A1, "run", headline = c(hl, slope_pat, sprintf("offsets %s", POOLS$source)),
+             mc_error = sprintf("bias_se and sd_se per cell (%d genes per cell); median bias_se/SD %.3f", ceiling(500 * CHECK.SIZE), median(A1$bias_se / A1$sd, na.rm = TRUE)),
+             script = CHECK.SCRIPT)
+  fig_pdf("extra/check_A1_relative_bias.pdf", 9, 4)
+  par(mfrow = c(1, 2))
+  for (k in c("profile_ml", "cox_reid")) {
+    x <- A1[A1$estimator == k & A1$phi > 0, ]
+    plot(log10(x$N * x$Mbar * x$phi), x$bias / x$phi, pch = 19, col = match(x$N, c(800, 1600, 3200)), xlab = "log10(N Mbar phi)", ylab = "relative bias of phi",
+         main = k, ylim = c(-0.5, 0.5)); abline(h = 0, lty = 2)
+    legend("topright", legend = paste("N =", c(800, 1600, 3200)), col = 1:3, pch = 19, bty = "n")
+  }
+  dev.off()
+}
+
+##############################################################################
+## A7 (simulation arm). Bias in phi from including the gene's own counts in the library that sets its offset (Methods: Sequencing depth offset)
+# The data arm (checks_data.R) reports the largest share of a cell's library that one gene takes, to read against this curve.
+if ("A7" %in% RUN.CHECKS) {
+  G <- expand.grid(share = c(1e-4, 1e-3, 5e-3, 0.01, 0.02, 0.05), phi = c(0.1, 0.5)); S <- check_streams(nrow(G), SEED.CHECKS + 17)
+  A7 <- do.call(rbind, mclapply(seq_len(nrow(G)), a7_self_row, grid = G, nrep = ceiling(300 * CHECK.SIZE), lib = POOLS$L, n_cells = 1000, streams = S, mc.cores = CORES))
+  check_save("A7_sim", A7, "run", headline = sprintf("library share %g, phi %g: relative bias of phi from self-inclusion %.4f (MC SE %.4f)", A7$share, A7$phi, A7$rel_bias_incl_vs_excl, A7$mc_se),
+             mc_error = "MC SE per row", script = CHECK.SCRIPT)
+}
+
+##############################################################################
+## A9 (Cox-Reid revisit). Does truncation at zero explain the upward bias of the ML estimators in sparse cells?
+# If the untruncated moment estimator is unbiased where the truncated estimators are biased, truncation explains the bias.
+if ("A9" %in% RUN.CHECKS) {
+  G <- expand.grid(N = c(800, 1600, 3200), Mbar = c(0.05, 0.1, 0.2, 0.5), phi = c(0.05, 0.1, 0.2, 0.5), offsets = c("equal", "observed"), stringsAsFactors = FALSE)
+  S <- check_streams(nrow(G), SEED.CHECKS + 19)
+  A9 <- do.call(rbind, mclapply(seq_len(nrow(G)), a9cr_row, grid = G, nrep = ceiling(500 * CHECK.SIZE), offsets = POOLS$O_Pc, streams = S, mc.cores = CORES))
+  A9$bias_z <- A9$bias / A9$bias_se
+  SB <- summary_by(A9, "estimator", "bias", z = "bias_z", keys = c("N", "Mbar", "phi", "offsets"))
+  check_save("A9", A9, "run", headline = c(sprintf("%s: bias median %.4f, range %.4f to %.4f (largest at %s), |bias| > 2 MC SE in %d of %d cells", SB$level, SB$median, SB$min, SB$max, SB$at, SB$n_z2, SB$n),
+                                           sprintf("P(phi-hat = 0), Cox-Reid: %.3f to %.3f", min(A9$p_zero[A9$estimator == "cox_reid"]), max(A9$p_zero[A9$estimator == "cox_reid"]))),
+             mc_error = "bias_se per cell", script = CHECK.SCRIPT)
+}
+
+##############################################################################
+## A10. The covariance of mean and dispersion errors on shared cells (Methods: Separate partitions for each quantity)
+# Formula, derived for the moment estimator with equal offsets: Cov[mu_A, phi_B] = (N_AB / (N_A N_B)) mu (E[(a - 1)^3] - 2 phi^2). The check also measures it
+# for the Appendix C, unadjusted ML and Cox-Reid estimators and for the observed offset spread, where no formula has been derived. N = 400 per set.
+if ("A10" %in% RUN.CHECKS) {
+  G <- expand.grid(family = c("gamma", "lognormal", "bimodal"), overlap = c(0, 0.5, 1), offsets = c("equal", "observed"), mu = 2, phi = 0.5, stringsAsFactors = FALSE)
+  S <- check_streams(nrow(G), SEED.CHECKS + 20)
+  A10 <- do.call(rbind, mclapply(seq_len(nrow(G)), a10_row, grid = G, nrep = ceiling(20000 * CHECK.SIZE), N = 400, offsets = POOLS$O_Pc, streams = S, mc.cores = CORES))
+  A10$z_vs_formula <- (A10$N_cov - A10$N_cov_formula) / A10$N_cov_mc_se
+  x <- A10[A10$estimator == "moment" & A10$offsets == "equal", ]
+  check_save("A10", A10, "run", headline = c(sprintf("moment, equal offsets, %s overlap %.1f: N cov %.3f (MC SE %.3f) against formula %.3f", x$family, x$overlap, x$N_cov, x$N_cov_mc_se, x$N_cov_formula),
+                                             sprintf("%s %s offsets %s overlap %.1f: N cov %.3f (MC SE %.3f), cor %.3f", A10$estimator, A10$offsets, A10$family, A10$overlap, A10$N_cov, A10$N_cov_mc_se, A10$cor)[A10$estimator != "moment" | A10$offsets != "equal"]),
+             mc_error = sprintf("MC SE per row; cor SE %.4f", 1 / sqrt(ceiling(20000 * CHECK.SIZE) - 3)), script = CHECK.SCRIPT)
+}
+
+##############################################################################
+## B3. Closed loop of the library split correction (Methods: Library split correction)
+# lib_scale 1 uses the observed hybrid libraries, where the split bias is small; 0.01 shrinks them 100-fold (expected counts unchanged) so the split error and
+# its correction are large enough to resolve.
+if ("B3" %in% RUN.CHECKS) {
+  G <- expand.grid(phi0 = c(0, 0.005, 0.05, 0.5, 5), Mbar = c(0.1, 1, 10), var_s = c(POOLS$var_s, 1e-4), lib_scale = c(1, 0.01)); S <- check_streams(nrow(G), SEED.CHECKS + 5)
+  B3 <- do.call(rbind, mclapply(seq_len(nrow(G)), b3_row, grid = G, nrep = ceiling(200 * CHECK.SIZE), pools = POOLS, streams = S, mc.cores = CORES))
+  B3$bias_over_sd <- B3$bias / B3$sd
+  x <- B3[B3$phi0 > 0, ]
+  check_save("B3", B3, "run",
+             headline = c(sprintf("phi0 > 0: median |bias|/SD %.3f, max %.3f (phi0=%g Mbar=%g var_s=%g lib_scale=%g)", median(abs(x$bias_over_sd), na.rm = TRUE), max(abs(x$bias_over_sd), na.rm = TRUE),
+                                  x$phi0[which.max(abs(x$bias_over_sd))], x$Mbar[which.max(abs(x$bias_over_sd))], x$var_s[which.max(abs(x$bias_over_sd))], x$lib_scale[which.max(abs(x$bias_over_sd))]),
+                          sprintf("lib_scale %g: median split bias %.3g, share truncated by the correction up to %.3f", c(1, 0.01),
+                                  tapply(B3$mean_split_bias, B3$lib_scale, median)[c("1", "0.01")], tapply(B3$truncated_by_correction, B3$lib_scale, max)[c("1", "0.01")]),
+                          sprintf("relative bias of the allele means: max |Hc| %.4f, max |He| %.4f", max(abs(B3$mean_rel_bias_Hc)), max(abs(B3$mean_rel_bias_He)))),
+             mc_error = sprintf("bias_se per row; median mean_rel_bias_Hc_se %.4f", median(B3$mean_rel_bias_Hc_se)), script = CHECK.SCRIPT)
+}
+
+##############################################################################
+## B4. NB-ML against the moment estimators when the factor t a is not gamma (Notes for revision: ML fit of non-gamma expression factors)
+# pi is the mean of the share multiplier's share (t = s / pi); sigma2_s 1.9e-5 is near the observed value and 1e-3 an inflated one at which t is not negligible.
+# The offsets are the allele offsets of the hybrid cells at the mean share, S_H s-bar.
+if ("B4" %in% RUN.CHECKS) {
+  G <- expand.grid(family = c("gamma", "lognormal", "bimodal"), Mbar = c(0.5, 2, 10), phi = c(0.05, 0.3, 1), pi = c(0.25, 0.5, 0.75), var_s = c(POOLS$var_s, 1e-3),
+                   stringsAsFactors = FALSE)
+  S <- check_streams(nrow(G), SEED.CHECKS + 6)
+  B4 <- do.call(rbind, mclapply(seq_len(nrow(G)), b4_row, grid = G, nrep = ceiling(300 * CHECK.SIZE), N = 1600, offsets = POOLS$S * POOLS$sbar, streams = S, mc.cores = CORES))
+  B4$rel_bias <- B4$bias / B4$truth_var_ta; B4$bias_over_sd <- B4$bias / B4$sd
+  B4$family_estimator <- paste(B4$family, B4$estimator)
+  SB <- summary_by(B4, "family_estimator", "rel_bias", keys = c("Mbar", "phi", "pi", "var_s")); SD_ <- summary_by(B4, "family_estimator", "bias_over_sd")
+  hl <- sprintf("%s: median relative bias %.3f (range %.3f to %.3f, largest at %s), median bias/SD %.2f", SB$level, SB$median, SB$min, SB$max, SB$at, SD_$median)
+  check_save("B4", B4, "run", headline = hl, mc_error = sprintf("bias_se per row; median bias_se/truth %.4f", median(B4$bias_se / B4$truth_var_ta)), script = CHECK.SCRIPT)
+}
+
+##############################################################################
+## B4 addendum. Cox-Reid against the Appendix C estimator at 20,000 cells with equal offsets, and at the observed hybrid depths and cell count
+if ("B4" %in% RUN.CHECKS) {
+  G <- expand.grid(family = c("gamma", "lognormal", "bimodal"), Mbar = c(1, 5), phi = c(0.3, 1), pi = 0.5, var_s = POOLS$var_s, stringsAsFactors = FALSE)
+  S <- check_streams(2 * nrow(G), SEED.CHECKS + 21)
+  B4A <- rbind(cbind(design = "20000 cells, equal offsets", do.call(rbind, mclapply(seq_len(nrow(G)), b4_row, grid = G, nrep = ceiling(100 * CHECK.SIZE), N = 20000, offsets = 1,
+                                                                                      streams = S[seq_len(nrow(G))], mc.cores = CORES))),
+               cbind(design = "observed hybrid depths", do.call(rbind, mclapply(seq_len(nrow(G)), b4_row, grid = G, nrep = ceiling(300 * CHECK.SIZE), N = length(POOLS$S), offsets = POOLS$S * POOLS$sbar,
+                                                                                  streams = S[nrow(G) + seq_len(nrow(G))], mc.cores = CORES))))
+  B4A$rel_bias <- B4A$bias / B4A$truth_var_ta; B4A$rel_bias_se <- B4A$bias_se / B4A$truth_var_ta
+  x <- B4A[B4A$estimator %in% c("cox_reid", "appendixC") & B4A$family != "gamma", ]
+  check_save("B4_addendum", B4A, "run", headline = sprintf("%s, %s, mean %g phi %g, %s: relative bias %.3f (MC SE %.3f)", x$design, x$family, x$Mbar, x$phi, x$estimator, x$rel_bias, x$rel_bias_se),
+             mc_error = "MC SE per row", script = CHECK.SCRIPT)
+}
+
+##############################################################################
+## F1(a). Appendix C estimator with estimated weights (Appendix C, final paragraphs)
+if ("F1" %in% RUN.CHECKS) {
+  G <- expand.grid(N = c(800, 1600), M = c(0.5, 2, 5), phi = c(0.3, 1), cv = c(0.5, 1), counts = c("NB", "Poisson-lognormal"), stringsAsFactors = FALSE)
+  S <- check_streams(nrow(G), SEED.CHECKS + 7)
+  F1 <- do.call(rbind, mclapply(seq_len(nrow(G)), f1_row, grid = G, nrep = ceiling(500 * CHECK.SIZE), streams = S, mc.cores = CORES))
+  x <- F1[F1$estimator == "appendixC", ]
+  check_save("F1_sim", F1, "run",
+             headline = c(sprintf("Appendix C as documented: median |bias| %.4f, max |bias| %.4f (relative %.3f), cells with |bias| > 2 MC SE %d of %d", median(abs(x$bias)), max(abs(x$bias)),
+                                  max(abs(x$bias / x$phi)), sum(abs(x$bias / x$bias_se) > 2), nrow(x)),
+                          sprintf("convergence %.4f to %.4f, boundary %.4f to %.4f", min(x$converged), max(x$converged), min(x$boundary), max(x$boundary)),
+                          sprintf("code's weighted estimator: max |bias| %.4f", max(abs(F1$bias[F1$estimator == "weighted_code"])))),
+             mc_error = sprintf("bias_se per row; median %.4f", median(F1$bias_se)), script = CHECK.SCRIPT)
+}
+
+##############################################################################
+## F2. Appendix D asymptotics with the library split correction (Appendix D: estimating the ploidy shift)
+# Poisson counts, shifted exponential deviations, binomial library splits with the split variances of split_eta() at the observed shares, and the estimators
+# of ploidy_components() (fitted rates). Each setting runs F2.REPS independent replicates of 8e6 cells, so the error of every limit is read against its Monte
+# Carlo SE (SD over replicates / sqrt(R)) instead of a fixed tolerance. Two settings use small hybrid libraries (1000 and 300 UMIs) so the split terms are
+# large enough to resolve; the third uses the observed median library, where they are far below any resolvable error. The star targets are second order in the
+# split error, so terms of order eta^2 can remain at the smallest library. The sampling SD of each estimator at the observed number of hybrid cells (N_H) says
+# how large an unresolved error could be relative to the data's own noise.
+if ("F2" %in% RUN.CHECKS) {
+  SET <- data.frame(sbar = c(0.5024, 0.45, 0.5024), var_s = c(1e-3, 5e-3, POOLS$var_s), lib = c(1000, 300, median(POOLS$L)), s2v = c(0.1, 0.05, 0.15),
+                    s2q = c(0.2, 0.3, 0.1), mu_c = c(5, 2, 1), mu_e = c(3, 4, 1))
+  F2.REPS <- max(2, ceiling(20 * CHECK.SIZE)); F2.N <- 8e6; N.H <- length(POOLS$S)
+  TASKS <- expand.grid(rep = seq_len(F2.REPS), setting = seq_len(nrow(SET))); S <- check_streams(nrow(TASKS), SEED.CHECKS + 8)
+  F2.REP <- do.call(rbind, mclapply(seq_len(nrow(TASKS)), f2_rep, tasks = TASKS, settings = SET, n = F2.N, streams = S, mc.cores = CORES))
+  F2 <- do.call(rbind, lapply(seq_len(nrow(SET)), f2_summary, settings = SET, reps = F2.REP, n = F2.N, n_obs = N.H))
+  check_save("F2", list(summary = F2, replicates = F2.REP), "run",
+             headline = c(sprintf("setting %d (library %g) %s: split term %.2g, error %.2g (MC SE %.1g, z %.1f), sampling SD at N_H = %d: %.2g",
+                                  F2$setting, F2$lib, F2$quantity, F2$split_term, F2$error, F2$mc_se, F2$z, N.H, F2$sd_at_n_obs),
+                          sprintf("|z| > 2 in %d of %d", sum(abs(F2$z) > 2), nrow(F2))),
+             mc_error = sprintf("%d replicates of %.0e cells per setting; MC SE per row", F2.REPS, F2.N), script = CHECK.SCRIPT)
+}
+
+##############################################################################
+## F3 and F4. Appendix D at the observed N, and with unequal intrinsic variances between alleles
+if (any(c("F3", "F4") %in% RUN.CHECKS)) {
+  G <- rbind(expand.grid(omega = c(0.1, 0.25, 0.5, 0.75, 0.9), phi = c(0.1, 0.5), Mbar = c(0.5, 2, 10), q_ratio = 1),
+             expand.grid(omega = c(0.25, 0.75), phi = 0.3, Mbar = 2, q_ratio = c(1, 2, 4)))
+  S <- check_streams(nrow(G), SEED.CHECKS + 9)
+  F34 <- do.call(rbind, mclapply(seq_len(nrow(G)), f34_row, grid = G, nrep = ceiling(300 * CHECK.SIZE), pools = POOLS, streams = S, mc.cores = CORES))
+  F34$bias_over_sd <- F34$bias / F34$sd; F34$bias_z <- F34$bias / F34$bias_se
+  F3 <- F34[F34$q_ratio == 1 & !(F34$phi == 0.3), ]; F4 <- F34[F34$phi == 0.3, ]
+  check_save("F3", F3, "run",
+             headline = with(list(SB = summary_by(F3, "quantity", "bias_over_sd", z = "bias_z", keys = c("omega", "phi", "Mbar")), SZ = summary_by(F3, "quantity", "p_zero", keys = c("omega", "phi", "Mbar"))),
+                             sprintf("%s: median bias/SD %.3f, max |bias|/SD %.3f at %s, |bias| > 2 MC SE in %d of %d; share truncated at zero up to %.3f at %s",
+                                     SB$level, SB$median, SB$max_abs, SB$at, SB$n_z2, SB$n, SZ$max, SZ$at)),
+             mc_error = sprintf("bias_se per row (%d genes)", ceiling(300 * CHECK.SIZE)), script = CHECK.SCRIPT)
+  x <- F4[F4$quantity == "Lambda", ]
+  check_save("F4", F4, "run", headline = sprintf("Lambda error at q_ratio %g, omega %g: bias %.4f (MC SE %.4f), truth %.4f", x$q_ratio, x$omega, x$bias, x$bias_se, x$truth),
+             mc_error = "bias_se per row", script = CHECK.SCRIPT)
+}
+
+##############################################################################
+## C4. Internal pilot invariance (Methods: Estimating partition fractions; Wittes and Brittain 1990)
+# Under the null the cis and trans sign tests should keep their size whether f is estimated from bootstrap variances of the same cells or fixed in advance.
+if ("C4" %in% RUN.CHECKS) {
+  nd <- ceiling(40 * CHECK.SIZE); S <- check_streams(nd, SEED.CHECKS + 10)
+  C4 <- do.call(rbind, mclapply(seq_len(nd), c4_dataset, G = 100, mu_grid = c(0.3, 1, 3, 10), phi = 0.3, B_pilot = 50, B = 499, f_fixed = 0.4, pools = POOLS,
+                                streams = S, mc.cores = CORES))
+  tab <- do.call(rbind, lapply(c("p_cis_est", "p_trans_est", "p_cis_fixed", "p_trans_fixed"), function(k) data.frame(arm = k, size_table(C4[[k]]))))
+  check_save("C4", list(pvalues = C4, size = tab), "run",
+             headline = c(sprintf("%s: rejection at 0.05 %.4f (SE %.4f), KS p %.3g", tab$arm, tab$reject_0.05, tab$se_0.05, tab$ks_p),
+                          sprintf("estimated f: median %.3f (range %.3f to %.3f)", median(unique(C4$f_est)), min(C4$f_est), max(C4$f_est))),
+             mc_error = "binomial SE per arm", script = CHECK.SCRIPT)
+}
+
+##############################################################################
+## A4 and C7 (simulation arms). Mean and dispersion errors are uncorrelated to first order (Methods: Separate partitions for each quantity)
+if ("A4" %in% RUN.CHECKS) {
+  G <- expand.grid(Mbar = c(0.2, 1, 5), phi = c(0.05, 0.3, 1), omega = c(0.25, 0.75)); S <- check_streams(nrow(G), SEED.CHECKS + 11)
+  A4 <- do.call(rbind, mclapply(seq_len(nrow(G)), a4_row, grid = G, nrep = ceiling(1000 * CHECK.SIZE), pools = POOLS, streams = S, mc.cores = CORES))
+  A4$z <- A4$cor / A4$se
+  SA <- summary_by(A4[A4$pair != "share_phi_zero" & (A4$scale == "raw" | A4$pair == "cis_dmu_dphi"), ], "pair", "cor", z = "z", keys = c("Mbar", "phi", "omega"))
+  hl <- sprintf("%s: median cor %.3f, range %.3f to %.3f (largest |cor| at %s), |z| > 2 in %d of %d", SA$level, SA$median, SA$min, SA$max, SA$at, SA$n_z2, SA$n)
+  check_save("A4_sim", A4[!grepl("^C7", A4$pair), ], "run", headline = hl[!grepl("^C7", hl)], mc_error = sprintf("Fisher SE 1/sqrt(n-3), n = %d", ceiling(1000 * CHECK.SIZE)), script = CHECK.SCRIPT)
+  # The first-order covariance of mean and dispersion errors on shared cells is mu (E[(a - 1)^3] - 2 phi^2) / N: zero for a gamma factor, not otherwise.
+  G <- expand.grid(family = c("gamma", "lognormal", "bimodal", "product"), mu = c(1, 5), phi = c(0.3, 1), stringsAsFactors = FALSE); S <- check_streams(nrow(G), SEED.CHECKS + 18)
+  A4M <- do.call(rbind, mclapply(seq_len(nrow(G)), a4_moment_row, grid = G, nrep = ceiling(4000 * CHECK.SIZE), N = 2000, streams = S, mc.cores = CORES))
+  check_save("A4_theory", A4M, "run", headline = sprintf("%s mu %g phi %g: E[(a-1)^3] %.2f (gamma %.2f), Cov formula %.2e, simulated %.2e (MC SE %.1e); cor moment %.3f, Cox-Reid %.3f",
+                                                         A4M$family, A4M$mu, A4M$phi, A4M$third_moment, A4M$third_moment_gamma, A4M$cov_formula, A4M$cov_simulated, A4M$cov_mc_se, A4M$cor_moment, A4M$cor_cox_reid),
+             mc_error = sprintf("cor SE %.3f", 1 / sqrt(ceiling(4000 * CHECK.SIZE) - 3)), script = CHECK.SCRIPT)
+  check_save("C7_sim", A4[grepl("^C7", A4$pair), ], "run", headline = hl[grepl("^C7", hl)], mc_error = sprintf("Fisher SE 1/sqrt(n-3), n = %d", ceiling(1000 * CHECK.SIZE)), script = CHECK.SCRIPT)
+}
+
+##############################################################################
+## E3 (simulation arm). Coverage of the 95% percentile intervals with the -Inf mapping (Methods: bootstrap intervals)
+if ("E3" %in% RUN.CHECKS) {
+  G <- expand.grid(Mbar = c(0.5, 2), phi = c(0.1, 0.5), ratio = c(1, 2), mu_ratio = 1.5); S <- check_streams(nrow(G), SEED.CHECKS + 12)
+  E3 <- do.call(rbind, mclapply(seq_len(nrow(G)), e3_row, grid = G, nrep = ceiling(200 * CHECK.SIZE), B = 200, offsets = POOLS$O_Pc, n_cells = 800, streams = S, mc.cores = CORES))
+  check_save("E3_sim", E3, "run",
+             headline = with(list(SC = summary_by(E3, "quantity", "coverage", keys = c("Mbar", "phi", "ratio")), SZ = summary_by(E3, "quantity", "mean_zero_share")),
+                             sprintf("%s: coverage median %.3f, range %.3f to %.3f; mean zero share up to %.4f", SC$level, SC$median, SC$min, SC$max, SZ$max)),
+             mc_error = sprintf("binomial SE of 95%% coverage with %d intervals: %.4f", ceiling(200 * CHECK.SIZE), binom_se(0.95, ceiling(200 * CHECK.SIZE))), script = CHECK.SCRIPT)
+}
+

@@ -1,9 +1,11 @@
 #!/bin/sh -l
 # FILENAME:  gene_boot.sbatch
 #
-# Bootstrap replicates as a job array: task k bootstraps replicate k (seed offset k - 1) and writes
-# gene_boot_output_<k>of<K>.rda. Resubmitting the array recomputes only the replicates whose output file is
-# missing. gene_boot.R checks that --array matches the number of replicates in its inputs.
+# First stage of the staged bootstrap (Methods: Bootstrap tests of significance), 1,000 replicates per gene, unshifted, as a job
+# array: task k bootstraps seed replicate k (draw plan seed SEED.BOOT + k - 1) and writes gene_boot_output_<k>of<K>.rda. Replicate 1
+# is the first stage; the others check seed adequacy. Resubmitting the array recomputes only the replicates whose output file is
+# missing. gene_boot.R checks that --array matches the number of seed replicates in its inputs. Stage 2 is gene_boot_shift.sub,
+# stages 3 to 5 gene_boot_stage.sub.
 
 #SBATCH --account=bphm
 #SBATCH --nodes=1
