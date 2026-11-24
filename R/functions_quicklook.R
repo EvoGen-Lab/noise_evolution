@@ -1,8 +1,8 @@
 ###############################################################
 ### functions_quicklook.R
-### Functions of the quick-look angle classification (analysis/quicklook_angles.R). Point estimates with model-based standard errors and delta-method
-### intervals stand in for the bootstrap, so the whole classification runs locally from the Section 1 checkpoint in minutes. Sourced after R/functions.R,
-### whose fit_dispersion() and .cr_loglik() give the pipeline's estimates.
+### Functions of the quick-look classification by direction (analysis/quicklook_angles.R). Point estimates with model-based standard errors and normal or
+### delta-method intervals stand in for the bootstrap, so the classification runs locally from the Section 1 checkpoint in minutes. Sourced after R/functions.R,
+### whose fit_dispersion() and .cr_loglik() give the pipeline's estimates and whose dir_classify_table() gives the gate and the classes.
 ###############################################################
 
 ## QL.STEP: the step in log(phi) of the central second difference that gives the observed information of the Cox-Reid adjusted likelihood.
@@ -34,90 +34,53 @@ ql_fit_gene <- function(g, mat, expo, eta) {
   out
 }
 
-## ql_contrasts: the four log2 contrasts of one quantity from the per-group log2 values x and their variances v (genes x c(Pc, Pe, Hc, He) matrices), with
-## the variances and covariances that the classification planes need (handoff Section 4). The four groups are independent but for Hc and He, which share
-## the hybrid cells; their covariance is set to zero here. Delta_trans = Delta_total - Delta_cis on the same hybrid cells, so Cov(cis, trans) = -Var(cis).
-## Each contrast gets a two-sided Wald test, z = Delta / SE, and BH q-values over the genes with a defined contrast. Returns a data frame by gene.
-ql_contrasts <- function(x, v) {
-  stopifnot(identical(colnames(x), c("Pc", "Pe", "Hc", "He")), identical(dim(x), dim(v)))
-  tot <- x[, "Pc"] - x[, "Pe"]; cis <- x[, "Hc"] - x[, "He"]; trans <- tot - cis; dom <- 0.5 * (x[, "Hc"] + x[, "He"]) - 0.5 * (x[, "Pc"] + x[, "Pe"])
-  vt <- v[, "Pc"] + v[, "Pe"]; vc <- v[, "Hc"] + v[, "He"]
-  out <- data.frame(total = tot, cis = cis, trans = trans, dom = dom,
-                    var_total = vt, var_cis = vc, var_trans = vt + vc, var_dom = (vt + vc) / 4,
-                    cov_cis_trans = -vc, cov_total_dom = 0.5 * (v[, "Pe"] - v[, "Pc"]),
-                    cov_trans_dom = 0.5 * (v[, "Pe"] - v[, "Pc"]) + 0.5 * (v[, "He"] - v[, "Hc"]), row.names = rownames(x))
-  for (k in c("total", "cis", "trans", "dom")) {
-    z <- out[[k]] / sqrt(out[[paste0("var_", k)]]); p <- 2 * pnorm(-abs(z)); p[!is.finite(z)] <- NA
-    out[[paste0("se_", k)]] <- sqrt(out[[paste0("var_", k)]]); out[[paste0("q_", k)]] <- p.adjust(p, "BH")
+## ql_dir_rows: one quantity's rows of the direction table for one scheme from the quick look's per-group log2 values x and variances v (genes x c(Pc, Pe, Hc, He))
+## on all cells, in the columns dir_classify_table() reads, so the quick look gates and classes genes with the pipeline's rules. The parts and diagonals are those
+## of dir_parts(); their variances and the covariance of A and B follow from the group variances with the Hc and He estimates taken as uncorrelated (the quick
+## look has no split, so A and B share hybrid cells and covary). The margin tests are the normal versions of dir_margin_test(): #{x* <= delta} / B becomes
+## Phi((delta - x) / se), and so on. theta's SE is the delta method's, sqrt(B^2 Var A + A^2 Var B - 2 A B Cov) / (A^2 + B^2) in radians; its interval is theta
+## +- z se with z = qnorm(1 - tail) (tail per gene, or one value). p is dir_share() with the model variances. xi (by gene, or NULL) centres the inheritance
+## schemes on the shared shift (scheme names with "_xi"). zero (by gene) flags an observed zero rate or dispersion, failed a failed fit.
+ql_dir_rows <- function(q, scheme, x, v, delta, zero, failed, xi = NULL, tail = 0.025) {
+  stopifnot(identical(colnames(x), c("Pc", "Pe", "Hc", "He")), identical(dim(x), dim(v)), scheme %in% c(.DIR.SCHEMES, "inheritance_xi", "trans_inh_xi"))
+  sc <- sub("_xi$", "", scheme)
+  if (grepl("_xi$", scheme)) { x[, c("Hc", "He")] <- x[, c("Hc", "He")] - .DIR.Q[[q]]$sh * xi }
+  a <- lapply(setNames(colnames(x), colnames(x)), function(k) x[, k])
+  pt <- sapply(seq_len(nrow(x)), function(i) dir_parts(sc, lapply(a, `[`, i)))
+  A <- pt["A_all", ]; B <- pt["B_all", ]; S <- pt["S", ]; D <- pt["D", ]
+  Vpc <- v[, "Pc"]; Vpe <- v[, "Pe"]; Vhc <- v[, "Hc"]; Vhe <- v[, "He"]
+  vv <- switch(sc,
+    cis_trans   = list(A = Vhc + Vhe, B = Vpc + Vpe + Vhc + Vhe, C = -(Vhc + Vhe), S = Vpc + Vpe),
+    inheritance = list(A = 0.25 * (Vhc + Vhe) + Vpe, B = Vpc + 0.25 * (Vhc + Vhe), C = -0.25 * (Vhc + Vhe), S = Vpc + Vpe),
+    trans_inh   = list(A = Vhe + Vpe, B = Vpc + Vhc, C = 0 * Vpc, S = Vpc + Vpe + Vhc + Vhe))
+  vD <- if (sc == "trans_inh") vv$A + vv$B else vv$A + vv$B - 2 * vv$C
+  se <- list(A = sqrt(vv$A), B = sqrt(vv$B), S = sqrt(vv$S), D = sqrt(vD)); est <- list(A = A, B = B, S = S, D = D)
+  out <- data.frame(gene = rownames(x), quantity = q, scheme = scheme, failed_fit = failed, zero_fit = zero, A = A, B = B, S = S, D = D, stringsAsFactors = FALSE)
+  for (k in c("A", "B", "S", "D")) {
+    out[[paste0(k, "_se")]] <- se[[k]]; out[[paste0(k, "_lo")]] <- est[[k]] - 1.96 * se[[k]]; out[[paste0(k, "_hi")]] <- est[[k]] + 1.96 * se[[k]]
+    for (m in seq_along(DIR.DELTA.MULT)) {
+      dl <- DIR.DELTA.MULT[m] * delta; z1 <- pnorm((dl - est[[k]]) / se[[k]]); z2 <- pnorm((est[[k]] + dl) / se[[k]])
+      out[[sprintf("pR_%s_m%d", k, m)]] <- pmin(1, 2 * pmin(z1, z2))
+      out[[sprintf("pE_%s_m%d", k, m)]] <- pmax(pnorm((est[[k]] - dl) / se[[k]]), pnorm((-dl - est[[k]]) / se[[k]]))
+    }
   }
+  bad <- failed | zero | !is.finite(A) | !is.finite(B)
+  th <- ifelse(bad, NA_real_, dir_theta(A, B))
+  se_th <- (180 / pi) * sqrt(pmax(B^2 * vv$A + A^2 * vv$B - 2 * A * B * vv$C, 0)) / (A^2 + B^2)
+  z <- qnorm(1 - tail)
+  out$theta <- th; out$theta_se <- se_th; out$theta_tail <- tail; out$theta_lo <- th - z * se_th; out$theta_hi <- th + z * se_th
+  out$p_raw <- ifelse(bad, NA_real_, dir_share(A, B)); out$p <- ifelse(bad, NA_real_, dir_share(A, B, vv$A, vv$B))
+  out$cov_AB <- vv$C; out$xi <- if (grepl("_xi$", scheme)) xi else NA_real_
+  out[zero, grep("^p[RE]_", names(out))] <- NA     # infinite estimates leave the normal tests undefined: the row is labelled Zero fit
+  out[failed, setdiff(names(out), c("gene", "quantity", "scheme", "failed_fit", "zero_fit"))] <- NA
   out
 }
 
-## QL.SCHEMES: the three classification planes (handoff Section 5). Each orients a gene by s, the sign of a parental difference, so the higher parent (or the
-## higher trans environment) sits at +45 degrees for every gene; ref and other name the two contrasts of the plane, which also form the Conserved gate.
-QL.SCHEMES <- list(
-  cis_trans   = list(gate = c("cis", "trans"), landmarks = c(-45, 45, 90), circular = TRUE),
-  inheritance = list(gate = c("total", "dom"), landmarks = c(-45, 0, 45), circular = FALSE),
-  trans_inh   = list(gate = c("trans", "dom"), landmarks = c(-45, 0, 45), circular = FALSE))
-
-## ql_scheme_table: one quantity's genes placed in one plane: h >= 0 and v, the angle theta = atan2(v, h) in degrees (-90 to 90), the magnitude, SE(theta) by
-## the delta method, the 95% interval theta +- 1.96 SE, the landmarks it covers and the class (handoff Section 6).
-##   cis_trans    s = sign(total), h = s (cis + trans) / 2, v = s (cis - trans) / 2. +-90 degrees are one direction (compensatory, total zero), so the angle
-##                lives on a circle of 180 degrees: interval ends wrap and coverage uses the circular distance.
-##   inheritance  s = sign(total), h = |total| / 2, v = Delta_dom; the interval is clamped to [-90, 90], whose ends are different directions.
-##   trans_inh    s = sign(trans), h = |trans| / 2, v = Delta_dom.
-## The gate first: a gene whose two contrasts both have q >= sig is Conserved ("No trans divergence" for trans_inh). Every other gene takes the class of the
-## one landmark its interval covers, or, covering none or several, the class of the region holding theta. bad gives a class that replaces the angle for a
-## gene whose fits leave the quantity undefined ("Zero fit", "Failed fit", "No counts"; NA when defined). Returns one row per gene.
-ql_scheme_table <- function(scheme, ct, bad, sig = 0.05) {
-  sc <- QL.SCHEMES[[scheme]]
-  stopifnot(!is.null(sc), is.data.frame(ct), length(bad) == nrow(ct))
-  ref <- if (scheme == "trans_inh") "trans" else "total"
-  s <- sign(ct[[ref]]); s[s == 0] <- 1
-  if (scheme == "cis_trans") {
-    h <- 0.5 * s * (ct$cis + ct$trans); v <- 0.5 * s * (ct$cis - ct$trans)
-    vh <- 0.25 * (ct$var_cis + ct$var_trans + 2 * ct$cov_cis_trans); vv <- 0.25 * (ct$var_cis + ct$var_trans - 2 * ct$cov_cis_trans)
-    chv <- 0.25 * (ct$var_cis - ct$var_trans)
-  } else {
-    h <- 0.5 * abs(ct[[ref]]); v <- ct$dom
-    vh <- 0.25 * ct[[paste0("var_", ref)]]; vv <- ct$var_dom; chv <- 0.5 * s * ct[[paste0("cov_", ref, "_dom")]]
-  }
-  theta <- atan2(v, h) * 180 / pi; mag <- sqrt(h^2 + v^2)
-  se <- (180 / pi) * sqrt(pmax(v^2 * vh + h^2 * vv - 2 * h * v * chv, 0)) / (h^2 + v^2)
-  hw <- 1.96 * se
-  wrap <- function(a) ((a + 90) %% 180) - 90
-  lo <- if (sc$circular) wrap(theta - hw) else pmax(theta - hw, -90); hi <- if (sc$circular) wrap(theta + hw) else pmin(theta + hw, 90)
-  cover <- sapply(sc$landmarks, function(L) if (sc$circular) abs(wrap(theta - L)) <= hw | hw >= 90 else (theta - hw) <= L & L <= (theta + hw))
-  cover <- matrix(cover, ncol = length(sc$landmarks))
-  covers <- apply(cover, 1, function(r) paste(sc$landmarks[r %in% TRUE], collapse = ";"))
-  hi_p <- ifelse(s > 0, "Pc", "Pe"); lo_p <- ifelse(s > 0, "Pe", "Pc")
-  if (scheme == "cis_trans") {
-    lm_class <- c("Trans only", "Cis only", "Compensatory")
-    region <- ifelse(abs(theta) == 90, "Compensatory", ifelse(theta > 45, "Cis, opposed by trans", ifelse(theta == 45, "Cis only",
-              ifelse(theta >= 0, "Cis + trans, cis larger", ifelse(theta > -45, "Cis + trans, trans larger", ifelse(theta == -45, "Trans only", "Trans, opposed by cis"))))))
-  } else {
-    above <- if (scheme == "inheritance") "Overdominant" else "Beyond both parents, above"
-    below <- if (scheme == "inheritance") "Underdominant" else "Beyond both parents, below"
-    lm_mat <- cbind(paste(lo_p, "dominant"), "Additive", paste(hi_p, "dominant"))
-    region <- ifelse(theta > 45, above, ifelse(theta == 45, paste(hi_p, "dominant"), ifelse(theta > 0, paste("Partial toward", hi_p),
-              ifelse(theta == 0, "Additive", ifelse(theta > -45, paste("Partial toward", lo_p), ifelse(theta == -45, paste(lo_p, "dominant"), below))))))
-  }
-  n_cov <- rowSums(cover, na.rm = TRUE); one <- which(n_cov == 1 & is.finite(theta))
-  cls <- region
-  if (length(one)) {
-    j <- apply(cover[one, , drop = FALSE], 1, which)
-    cls[one] <- if (scheme == "cis_trans") lm_class[j] else lm_mat[cbind(one, j)]
-  }
-  gq <- cbind(ct[[paste0("q_", sc$gate[1])]], ct[[paste0("q_", sc$gate[2])]])
-  conserved <- rowSums(gq < sig, na.rm = TRUE) == 0 & rowSums(is.finite(gq)) == 2
-  cls[conserved] <- if (scheme == "trans_inh") "No trans divergence" else "Conserved"
-  cls[!is.finite(theta) & !conserved] <- NA
-  cls[!is.na(bad)] <- bad[!is.na(bad)]
-  merged <- sub("^Cis \\+ trans, (cis|trans) larger$", "Cis + trans", cls)
-  keep <- is.na(bad)
-  data.frame(gene = rownames(ct), scheme = scheme, contrast_1 = sc$gate[1], est_1 = ct[[sc$gate[1]]], se_1 = ct[[paste0("se_", sc$gate[1])]],
-             q_1 = ct[[paste0("q_", sc$gate[1])]], contrast_2 = sc$gate[2], est_2 = ct[[sc$gate[2]]], se_2 = ct[[paste0("se_", sc$gate[2])]],
-             q_2 = ct[[paste0("q_", sc$gate[2])]], s = s, h = h, v = v, magnitude = mag, theta = theta, se_theta = se, theta_lo = lo, theta_hi = hi,
-             landmarks_covered = covers, class = cls, class_merged = merged, high_parent = ifelse(keep, hi_p, NA), fit_flag = ifelse(keep, "", bad),
-             row.names = NULL, stringsAsFactors = FALSE)
+## ql_dir_combo: the rows of one quantity and scheme (ql_dir_rows()) from the list Q of per-group log2 values and variances by quantity, with the quantity's
+## margin, zero and failed flags (the mean family or the dispersion family) and, with alpha (the false coverage-statement rate by "<quantity>|<scheme>"), theta
+## intervals at level 1 - 2 alpha; without it, or when no gene is divergent, 95% intervals.
+ql_dir_combo <- function(q, sc, Q, delta, zero, failed, xi, alpha = NULL) {
+  f <- if (q == "mean") "mean" else "disp"
+  a <- if (is.null(alpha)) NA_real_ else alpha[[paste(q, sc, sep = "|")]]
+  ql_dir_rows(q, sc, Q[[q]]$x, Q[[q]]$v, delta[[q]], zero[[f]], failed[[f]], xi, if (is.finite(a) && a > 0) a else 0.025)
 }

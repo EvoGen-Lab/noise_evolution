@@ -1,14 +1,17 @@
 ###############################################################
 ### quicklook_angles.R
-### Quick-look angle classification of every gene from point estimates (handoff "Claude Code handoff: quick-look angle classification", claude.ai artifact
-### FUpo4Xgrw8WjhvmQzCfQhp). A first look at the data, not the final analysis: model-based standard errors and delta-method intervals stand in for the
-### bootstrap, all hybrid cells serve every contrast (no cis/trans partition), and the Hc and He estimates are taken as uncorrelated.
+### Quick-look classification by direction of every gene from point estimates (spec "Classification by direction", claude.ai artifact Y9Vn84qUaxXJVf8ZebEJEr;
+### it replaces the angle scheme of the first quick-look handoff). A first look at the data, not the final analysis: model-based standard errors and normal
+### intervals stand in for the bootstrap, all hybrid cells serve every part (no split, so A and B covary through the shared hybrid cells), and the Hc and He
+### estimates are taken as uncorrelated. The gate and the classes are the pipeline's (dir_classify_table()).
 ###   Quantities  mean mu, dispersion phi, burst frequency alpha = 1 / phi, burst size beta = mu phi, kinetic balance kappa = alpha / beta, all on log2.
-###   Schemes     cis/trans (theta_R), inheritance (theta_P) and trans inheritance (theta_T): each gene is a point (h, v) in an oriented plane, classed by the
-###               angle theta = atan2(v, h) of that point and its delta-method interval against the landmark lines.
+###   Schemes     cis/trans, inheritance and trans inheritance: parts A and B from Pe toward Pc, diagonals S and D; relevance and equivalence tests against a
+###               margin gate each gene; a divergent gene is classed by its direction theta = atan2(B, A) mod 180 and the interval of theta against bands of
+###               +-DIR.W degrees around the class landmarks.
 ### Needs   : the Section 1 checkpoint (MIX.SC, MIX.SE, HYB.SC, HYB.SE; the split variances are computed from them). The shared shift Xi (DOM.SHIFT) is read from the Section 2 checkpoint when
 ###           that exists and QL.USE.XI is TRUE; otherwise the script runs without it and says so.
-### Writes  : analysis/output/quicklook_angles.csv (gene x quantity x scheme), quicklook_class_counts.csv, quicklook_angles.pdf and quicklook_inputs.txt.
+### Writes  : analysis/output/quicklook_angles.csv (gene x quantity x scheme), quicklook_class_counts.csv, quicklook_sensitivity.csv, quicklook_angles.pdf and
+###           quicklook_inputs.txt.
 ### Changes nothing in the pipeline; its functions are in R/functions_quicklook.R. Runs locally in minutes.
 ###############################################################
 library(here); source(here("R", "setup.R")); source(here("R", "functions_quicklook.R"))
@@ -17,7 +20,7 @@ set.seed(SEED.SECTION + 50)
 
 QL.OUT.DIR <- here("analysis", "output"); dir.create(QL.OUT.DIR, recursive = TRUE, showWarnings = FALSE)
 CORES <- if (.Platform$OS.type == "windows") 1 else max(1, detectCores() - 1)   # mclapply forks, so Windows runs on one core
-if (!exists("QL.SIG"))       QL.SIG       <- 0.05    # BH level of the Conserved gate
+if (!exists("QL.SIG"))       QL.SIG       <- 0.05    # BH level of the gate
 if (!exists("QL.MIN.COUNT")) QL.MIN.COUNT <- 0       # mean count per cell a gene needs in every group (0 keeps every gene)
 if (!exists("QL.USE.XI"))    QL.USE.XI    <- TRUE    # divide the hybrid allele dispersions by 2^Xi when the Section 2 checkpoint holds DOM.SHIFT
 
@@ -53,16 +56,16 @@ cat(sprintf("Fitted %d genes in 4 groups in %.1f min\n", length(QL.GENES), as.nu
 QL.STATUS.TAB <- sapply(QL.FIT, function(f) table(factor(QL.STATUS[f[, "status"]], levels = QL.STATUS)))
 cat("Fit status by group:\n"); print(QL.STATUS.TAB)
 
-## ---- The shared shift Xi (optional): the hybrid's genome-wide rise in dispersion, removed from the hybrid alleles before the contrasts ----
-## Dividing each hybrid allele phi by 2^Xi moves the log2 allele values by -Xi for phi, +Xi for alpha, -Xi for beta and +2 Xi for kappa; the mean carries no
-## shift. It cancels in cis and trans and moves Delta_dom. It rescales phi and its standard error alike, so the variances stay as they are.
-QL.XI <- setNames(rep(0, length(QL.GENES)), QL.GENES); QL.XI.NOTE <- "Xi not applied: no Section 2 checkpoint with DOM.SHIFT (or QL.USE.XI is FALSE)"
+## ---- The shared shift Xi (optional): the hybrid's genome-wide rise in noise, used for the inheritance schemes centred on it ----
+## Centring Delta_dom is an open item, so both versions are reported: inheritance and trans_inh as measured, and inheritance_xi and trans_inh_xi with each hybrid
+## log2 value moved by -Xi for phi and beta, +Xi for alpha and +2 Xi for kappa (the mean carries no shift). Xi cancels in cis and trans.
+QL.XI <- setNames(rep(0, length(QL.GENES)), QL.GENES); QL.XI.NOTE <- "Xi not available (no Section 2 checkpoint with DOM.SHIFT, or QL.USE.XI is FALSE): the centred inheritance schemes are not reported"
 if (QL.USE.XI && file.exists(ckpt_path(2))) local({
   e <- new.env(); load(ckpt_path(2), envir = e)
   if (exists("DOM.SHIFT", envir = e, inherits = FALSE)) {
     hit <- intersect(QL.GENES, names(e$DOM.SHIFT))
     QL.XI[hit] <<- e$DOM.SHIFT[hit]
-    QL.XI.NOTE <<- sprintf("Xi applied from the Section 2 checkpoint (DOM.SHIFT) to %d of %d genes; the rest run without it", length(hit), length(QL.GENES))
+    QL.XI.NOTE <<- sprintf("Xi from the Section 2 checkpoint (DOM.SHIFT) for %d of %d genes, used for the centred inheritance schemes (the rest centred on 0)", length(hit), length(QL.GENES))
   }
 })
 cat(QL.XI.NOTE, "\n")
@@ -73,65 +76,78 @@ cat(QL.XI.NOTE, "\n")
 QL.GRP <- c("Pc", "Pe", "Hc", "He")
 QL.COL <- lapply(setNames(colnames(QL.FIT$Pc), colnames(QL.FIT$Pc)), function(col) sapply(QL.GRP, function(k) QL.FIT[[k]][, col]))
 LM <- suppressWarnings(log2(QL.COL$mu)); LP <- suppressWarnings(log2(QL.COL$phi)); VM <- QL.COL$v_mu; VP <- QL.COL$v_phi; ST <- QL.COL$status
-XI.H <- cbind(Pc = 0, Pe = 0, Hc = QL.XI, He = QL.XI)
-QL.Q <- list(mean = list(x = LM, v = VM, xi = 0), phi = list(x = LP, v = VP, xi = -1), alpha = list(x = -LP, v = VP, xi = 1),
-             beta = list(x = LM + LP, v = VM + VP, xi = -1), kappa = list(x = -LM - 2 * LP, v = VM + 4 * VP, xi = 2))
-## A quantity is undefined for a gene with no counts in a group (every quantity) or with a failed or zero dispersion in a group (every quantity but the mean):
-## its log2 contrasts are infinite or missing, so it is flagged and takes no angle.
-QL.BAD <- list(
-  mean = ifelse(rowSums(ST == 4) > 0, "No counts", NA_character_),
-  disp = ifelse(rowSums(ST == 4) > 0, "No counts", ifelse(rowSums(ST == 3) > 0, "Failed fit", ifelse(rowSums(ST == 2) > 0, "Zero fit", NA_character_))))
+QL.Q <- list(mean = list(x = LM, v = VM), disp = list(x = LP, v = VP), alpha = list(x = -LP, v = VP), bsize = list(x = LM + LP, v = VM + VP), kbal = list(x = -LM - 2 * LP, v = VM + 4 * VP))
+for (q in names(QL.Q)) { colnames(QL.Q[[q]]$x) <- QL.GRP; colnames(QL.Q[[q]]$v) <- QL.GRP; rownames(QL.Q[[q]]$x) <- QL.GENES }
+## A gene with no counts in a group has no estimate for any quantity; a failed dispersion fit leaves every quantity but the mean undefined (failed fit); a zero
+## dispersion makes the log2 parts infinite (zero fit: tested, but given no direction).
+QL.FAILED <- list(mean = rowSums(ST == 4) > 0, disp = rowSums(ST == 4 | ST == 3) > 0)
+QL.ZERO   <- list(mean = rep(FALSE, length(QL.GENES)), disp = rowSums(ST == 2) > 0 & !QL.FAILED$disp)
 
-## ---- Contrasts, Wald tests and the three planes for every quantity ----
-QL.TABLE <- do.call(rbind, lapply(names(QL.Q), function(q) {
-  qq <- QL.Q[[q]]; x <- qq$x + qq$xi * XI.H; bad <- if (q == "mean") QL.BAD$mean else QL.BAD$disp
-  x[!is.na(bad), ] <- NA; colnames(x) <- QL.GRP; colnames(qq$v) <- QL.GRP; rownames(x) <- QL.GENES
-  ct <- ql_contrasts(x, qq$v)
-  cbind(quantity = q, do.call(rbind, lapply(names(QL.SCHEMES), ql_scheme_table, ct = ct, bad = bad, sig = QL.SIG)), xi = unname(QL.XI[rownames(ct)]) * (qq$xi != 0))
-}))
+## ---- Margins: delta_phi = log2(1.15), and for every other quantity the same multiple of its median SE of S ----
+QL.DELTA <- local({
+  se <- vapply(names(QL.Q), function(q) median(sqrt(QL.Q[[q]]$v[, "Pc"] + QL.Q[[q]]$v[, "Pe"])[!QL.FAILED[[if (q == "mean") "mean" else "disp"]] & !QL.ZERO[[if (q == "mean") "mean" else "disp"]]], na.rm = TRUE), numeric(1))
+  DIR.DELTA.PHI * se / se[["disp"]]
+})
+cat("Margins delta (log2), scaled by the median SE of S:\n"); print(round(QL.DELTA, 4))
+
+## ---- Rows of the direction table, the gate, and the classes ----
+## Pass 1 builds every row with 95% theta intervals and gates the genes; the false coverage-statement rate of each quantity and scheme, alpha_FCR = 0.05 N_div /
+## N_test, then sets the level 1 - 2 alpha_FCR of the theta intervals of pass 2, which gives the classes. The centred inheritance schemes (_xi) need Xi.
+QL.SCH <- c(.DIR.SCHEMES, if (any(QL.XI != 0)) c("inheritance_xi", "trans_inh_xi"))
+QL.COMBOS <- expand.grid(quantity = names(QL.Q), scheme = QL.SCH, stringsAsFactors = FALSE)
+QL.COMBOS <- QL.COMBOS[!(QL.COMBOS$quantity == "mean" & grepl("_xi$", QL.COMBOS$scheme)), ]
+QL.TAB1 <- do.call(rbind, Map(ql_dir_combo, QL.COMBOS$quantity, QL.COMBOS$scheme, MoreArgs = list(Q = QL.Q, delta = QL.DELTA, zero = QL.ZERO, failed = QL.FAILED, xi = QL.XI)))
+QL.PRE <- dir_classify_table(QL.TAB1, sig = QL.SIG)
+QL.ALPHA <- tapply(QL.PRE$alpha_fcr, paste(QL.PRE$quantity, QL.PRE$scheme, sep = "|"), function(a) a[1])
+QL.TAB <- do.call(rbind, Map(ql_dir_combo, QL.COMBOS$quantity, QL.COMBOS$scheme, MoreArgs = list(Q = QL.Q, delta = QL.DELTA, zero = QL.ZERO, failed = QL.FAILED, xi = QL.XI, alpha = QL.ALPHA)))
+QL.TABLE <- dir_classify_table(QL.TAB, sig = QL.SIG)
 write.csv(QL.TABLE, file.path(QL.OUT.DIR, "quicklook_angles.csv"), row.names = FALSE)
 
-## ---- Class counts per quantity and scheme, the cis + trans classes shown split (by which effect is larger) and merged ----
-QL.COUNTS <- do.call(rbind, lapply(c("class", "class_merged"), function(col) {
-  tb <- as.data.frame(table(quantity = QL.TABLE$quantity, scheme = QL.TABLE$scheme, class = QL.TABLE[[col]], useNA = "ifany"), stringsAsFactors = FALSE)
-  tb <- tb[tb$Freq > 0, ]; tb$version <- if (col == "class") "split" else "merged"; tb
-}))
-QL.COUNTS <- QL.COUNTS[!(QL.COUNTS$version == "merged" & QL.COUNTS$scheme != "cis_trans"), ]
-QL.COUNTS <- QL.COUNTS[order(match(QL.COUNTS$quantity, names(QL.Q)), QL.COUNTS$scheme, QL.COUNTS$version, -QL.COUNTS$Freq), c("quantity", "scheme", "version", "class", "Freq")]
-names(QL.COUNTS)[5] <- "genes"
-cat("\nGenes per class:\n"); print(QL.COUNTS, row.names = FALSE)
+## ---- Class counts at the main margin and band, and the sensitivity of the counts to the margin multiplier and the band width ----
+QL.COUNTS <- as.data.frame(table(quantity = QL.TABLE$quantity, scheme = QL.TABLE$scheme, class = QL.TABLE$class_label), stringsAsFactors = FALSE)
+QL.COUNTS <- QL.COUNTS[QL.COUNTS$Freq > 0, ]; names(QL.COUNTS)[4] <- "genes"
+QL.COUNTS <- QL.COUNTS[order(match(QL.COUNTS$quantity, names(QL.Q)), QL.COUNTS$scheme, -QL.COUNTS$genes), ]
+cat("\nGenes per class (margin multiplier 1, w = ", DIR.W, " degrees):\n", sep = ""); print(QL.COUNTS, row.names = FALSE)
 write.csv(QL.COUNTS, file.path(QL.OUT.DIR, "quicklook_class_counts.csv"), row.names = FALSE)
+QL.SENS <- do.call(rbind, lapply(seq_along(DIR.DELTA.MULT), function(m) do.call(rbind, lapply(DIR.W.SENS, function(w) {
+  ct <- dir_classify_table(QL.TAB, m = m, w = w, sig = QL.SIG); tb <- as.data.frame(table(quantity = ct$quantity, scheme = ct$scheme, class = ct$class), stringsAsFactors = FALSE)
+  cbind(delta_mult = DIR.DELTA.MULT[m], w = w, tb[tb$Freq > 0, ]) }))))
+write.csv(QL.SENS, file.path(QL.OUT.DIR, "quicklook_sensitivity.csv"), row.names = FALSE)
 
-## ---- Figure: theta against magnitude, one column per scheme and one row per quantity, landmarks dashed, Conserved genes in grey ----
-QL.PLOT <- QL.TABLE[is.finite(QL.TABLE$theta) & QL.TABLE$fit_flag == "", ]
-QL.PLOT$quantity <- factor(QL.PLOT$quantity, levels = names(QL.Q))
-QL.TITLE <- c(cis_trans = "cis / trans (theta_R)", inheritance = "Inheritance (theta_P)", trans_inh = "trans inheritance (theta_T)")
-QL.PANELS <- lapply(names(QL.SCHEMES), function(sc) {
-  d <- QL.PLOT[QL.PLOT$scheme == sc, ]
-  lv <- sort(setdiff(unique(d$class), c("Conserved", "No trans divergence")))
-  cols <- c(setNames(scales::hue_pal()(length(lv)), lv), Conserved = "grey75", `No trans divergence` = "grey75")
-  lm <- QL.SCHEMES[[sc]]$landmarks; lm <- if (QL.SCHEMES[[sc]]$circular) c(lm, -90) else lm
-  ggplot(d, aes(theta, magnitude, colour = class)) +
-    geom_vline(xintercept = lm, linetype = "dashed", colour = "grey40", linewidth = 0.3) +
+## ---- Figure: direction theta (0 to 180 degrees) against the size of (A, B), one column per scheme and one row per quantity; class bands shaded, the
+## boundary landmark dashed, divergent genes coloured by class and the rest in grey ----
+QL.PLOT <- QL.TABLE[is.finite(QL.TABLE$theta), ]
+QL.PLOT$quantity <- factor(QL.PLOT$quantity, levels = names(QL.Q)); QL.PLOT$magnitude <- sqrt(QL.PLOT$A^2 + QL.PLOT$B^2)
+QL.PLOT$colour <- ifelse(QL.PLOT$gate %in% "Divergent", QL.PLOT$class, "Not divergent")
+QL.TITLE <- c(cis_trans = "cis / trans", inheritance = "Inheritance", trans_inh = "trans inheritance", inheritance_xi = "Inheritance, centred on Xi", trans_inh_xi = "trans inheritance, centred on Xi")
+QL.PANELS <- lapply(intersect(names(QL.TITLE), unique(QL.PLOT$scheme)), function(sc) {
+  d <- QL.PLOT[QL.PLOT$scheme == sc, ]; seg <- dir_segments(sub("_xi$", "", sc), DIR.W); bands <- seg[seg$band, ]
+  lv <- sort(setdiff(unique(d$colour), "Not divergent"))
+  cols <- c(setNames(scales::hue_pal()(length(lv)), lv), `Not divergent` = "grey80")
+  bd <- rbind(bands, transform(bands[bands$from < 0, ], from = from + 180, to = to + 180))
+  ggplot(d, aes(theta, magnitude, colour = colour)) +
+    geom_rect(data = bd, aes(xmin = pmax(from, 0), xmax = pmin(to, 180), ymin = -Inf, ymax = Inf), inherit.aes = FALSE, fill = "grey92") +
+    geom_vline(xintercept = if (sub("_xi$", "", sc) == "cis_trans") 45 else 135, linetype = "dashed", colour = "grey50", linewidth = 0.3) +
     geom_point(size = 0.4, alpha = 0.6) + facet_grid(quantity ~ ., scales = "free_y") +
-    scale_x_continuous(limits = c(-90, 90), breaks = c(-90, -45, 0, 45, 90)) + scale_colour_manual(values = cols, name = NULL) +
-    labs(title = QL.TITLE[[sc]], x = "theta (degrees)", y = "magnitude (log2)") + theme_bw(base_size = 8) +
+    scale_x_continuous(limits = c(0, 180), breaks = seq(0, 180, 45)) + scale_colour_manual(values = cols, name = NULL) +
+    labs(title = QL.TITLE[[sc]], x = "direction theta (degrees)", y = "size of (A, B), log2") + theme_bw(base_size = 8) +
     theme(legend.position = "bottom", legend.key.size = unit(0.3, "cm")) + guides(colour = guide_legend(ncol = 2, override.aes = list(size = 1.5, alpha = 1)))
 })
 QL.FIGURE <- wrap_plots(QL.PANELS, nrow = 1)
-ggsave(file.path(QL.OUT.DIR, "quicklook_angles.pdf"), QL.FIGURE, width = 14, height = 13, useDingbats = FALSE)
+ggsave(file.path(QL.OUT.DIR, "quicklook_angles.pdf"), QL.FIGURE, width = 3.2 * length(QL.PANELS) + 1, height = 13, useDingbats = FALSE)
 cat(sprintf("Figure written to %s\n", normalizePath(file.path(QL.OUT.DIR, "quicklook_angles.pdf"), winslash = "/")))
-## In an interactive session the figure is also drawn on the current device (the RStudio Plots pane); enlarge the pane or use Zoom, since the grid holds 15 panels.
+## In an interactive session the figure is also drawn on the current device (the RStudio Plots pane); enlarge the pane or use Zoom.
 if (interactive()) print(QL.FIGURE)
 
 ## ---- What was used ----
 QL.INPUTS <- c(sprintf("Section 1 checkpoint: %s", ckpt_path(1)),
-               "Counts: MIX.SC (Pc), MIX.SE (Pe), HYB.SC (Hc), HYB.SE (He), all hybrid cells for every contrast",
+               "Counts: MIX.SC (Pc), MIX.SE (Pe), HYB.SC (Hc), HYB.SE (He), all hybrid cells for every part (no split)",
                sprintf("Offsets: library / D, D = %.1f (median parental library); alleles on their own genome's library; split variances from the hybrid counts (split_eta())", QL.D),
                "Fits: fit_dispersion(method = 'NB'): ratio mean, Cox-Reid phi with the boundary rule and interior check, split-corrected for Hc and He",
                sprintf("Genes: %d (mean count per cell >= %g in every group)", length(QL.GENES), QL.MIN.COUNT),
                QL.XI.NOTE,
-               sprintf("Gate: both contrasts of a scheme with BH q >= %g (Wald tests, BH within contrast x quantity) -> Conserved", QL.SIG),
-               "Intervals: theta +- 1.96 SE (delta method); Hc-He covariance set to zero")
+               sprintf("Margins (log2): %s; sensitivity at multipliers %s", paste(sprintf("%s %.3f", names(QL.DELTA), QL.DELTA), collapse = ", "), paste(DIR.DELTA.MULT, collapse = ", ")),
+               sprintf("Gate: relevance and equivalence tests (normal approximation), BH within quantity x scheme x contrast x test at %g", QL.SIG),
+               sprintf("Classes: theta intervals at 1 - 2 alpha_FCR (delta method), bands +-%g degrees (sensitivity %s); Hc-He covariance set to zero", DIR.W, paste(DIR.W.SENS, collapse = ", ")))
 writeLines(QL.INPUTS, file.path(QL.OUT.DIR, "quicklook_inputs.txt"))
 cat("\n", paste(QL.INPUTS, collapse = "\n"), "\n", sep = "")
