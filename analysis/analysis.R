@@ -974,6 +974,139 @@ FIT.STATUS.COUNTS <- do.call(rbind, lapply(.CONTRAST.GROUPS, function(grp) {
 cat("Fit status by dataset (observed genes; bootstrap refits summed over genes and replicates):\n"); print(FIT.STATUS.COUNTS, row.names = FALSE)
 write.csv(FIT.STATUS.COUNTS, file.path(TABLE.DIR, "fit_status_counts.csv"), row.names = FALSE)
 
+## 2.4 Classification by direction (spec "Classification by direction", claude.ai artifact Y9Vn84qUaxXJVf8ZebEJEr)
+# Each scheme writes a difference as two parts, A and B, from Pe toward Pc, with the diagonals S (size) and D (imbalance): cis/trans (A cis, B trans),
+# inheritance (A = H - Pe, B = Pc - H) and trans inheritance (A = He - Pe, B = Pc - Hc), for the mean, the dispersion, burst frequency alpha, burst size and
+# kinetic balance. Relevance and equivalence tests against a margin delta gate each gene (Divergent, Conserved, Inconclusive); a divergent gene's class comes
+# from its direction theta = atan2(B, A) mod 180 and the interval of theta against bands of half-width w around the class landmarks (dir_class()). A and B come
+# from disjoint hybrid cells, redrawn at random in every replicate (dir_draw()), so they are independent; S, D, the point estimates and p use all cells.
+
+# Margins. delta_phi = log2(1.15), the change the power analysis was designed to detect; every other quantity gets the margin that is the same multiple of its
+# own median SE of S (the total contrast on all cells, pooled over the pilot genes as the partition fractions are), so each margin is equally detectable.
+# alpha = 1 / phi has the dispersion's SE. Sensitivity: every margin times DIR.DELTA.MULT.
+DIR.DELTA <- local({
+  res <- PILOT.SE$gene %in% PILOT.RESOLVED; stems <- c(mean = "logmu", disp = "logdisp", bsize = "logbsize", kbal = "logkbal")
+  se <- vapply(names(stems), function(q) median(sqrt(PILOT.SE[[paste0("MIX.SC_", stems[[q]], "_se")]]^2 + PILOT.SE[[paste0("MIX.SE_", stems[[q]], "_se")]]^2)[res | q == "mean"], na.rm = TRUE) / log(2), numeric(1))
+  se[["alpha"]] <- se[["disp"]]
+  DIR.DELTA.PHI * se[names(.DIR.Q)] / se[["disp"]]
+})
+cat("Margins delta (log2) by quantity, scaled by the median SE of S:\n"); print(round(DIR.DELTA, 4))
+
+# Cell sets. The cis fraction chi of each partition is the existing balance of cis and trans (SPLIT.FRAC). The trans cells are divided again into an A set
+# and a B set for each inheritance scheme at the share f that makes Var A = Var B (dir_ab_fraction()), from the pooled pilot variances: the parental term
+# of A is Pe and of B is Pc; the hybrid term is the per-genome hybrid H for inheritance and the single allele (He for A, Hc for B) for trans inheritance. When
+# the parents differ in precision by more than the hybrid cells can offset, the more precise parent is thinned to the fraction t for those tests.
+DIR.CHI <- c(mean = SPLIT.FRAC$f_mean, disp = SPLIT.FRAC$f_disp, kbal = SPLIT.FRAC$f_kbal, bsize = SPLIT.FRAC$f_bsize)
+DIR.AB <- list()
+for (p in names(DIR.CHI)) {
+  stem <- c(mean = "logmu", disp = "logdisp", kbal = "logkbal", bsize = "logbsize")[[p]]
+  ok <- if (p == "mean") rep(TRUE, nrow(PILOT.SE)) else PILOT.SE$gene %in% PILOT.RESOLVED
+  v <- vapply(c(Pe = "MIX.SE", Pc = "MIX.SC", He = "HYB.SE", Hc = "HYB.SC"), function(k) median(PILOT.SE[[paste0(k, "_", stem, "_se")]][ok]^2, na.rm = TRUE), numeric(1))
+  n_h <- ncol(HYB.SC); n_t <- (1 - DIR.CHI[[p]]) * n_h
+  u_h <- n_h * median(0.25 * (PILOT.SE[[paste0("HYB.SC_", stem, "_se")]]^2 + PILOT.SE[[paste0("HYB.SE_", stem, "_se")]]^2 + 2 * PILOT.SE[[paste0("HYB_", stem, "_cov")]])[ok], na.rm = TRUE)
+  DIR.AB[[p]] <- rbind(inh = dir_ab_fraction(v[["Pe"]], v[["Pc"]], u_h, u_h, n_t), tinh = dir_ab_fraction(v[["Pe"]], v[["Pc"]], n_h * v[["He"]], n_h * v[["Hc"]], n_t))
+}
+rm(p, stem, ok, v, n_h, n_t, u_h)
+DIR.ALLOCATION <- do.call(rbind, lapply(names(DIR.AB), function(p) data.frame(partition = p, chi = DIR.CHI[[p]], scheme = rownames(DIR.AB[[p]]), DIR.AB[[p]], row.names = NULL)))
+cat("A/B allocation of the trans cells (f = share for A) and parental thinning (t):\n"); print(DIR.ALLOCATION, digits = 3, row.names = FALSE)
+write.csv(DIR.ALLOCATION, file.path(TABLE.DIR, "direction_allocation.csv"), row.names = FALSE)
+
+# Draw plans of the three stages (fresh seeds), the inputs on all cells of the four groups, and the shared shift for the centred inheritance schemes (Delta_dom
+# centring is an open item; both versions are reported, inheritance_xi and trans_inh_xi with Xi).
+DIR.NC <- c(Pc = ncol(CONTRAST.MATS.INFER$MIX.SC), Pe = ncol(CONTRAST.MATS.INFER$MIX.SE), H = ncol(CONTRAST.MATS.INFER$HYB.SC))
+DIR.PLANS <- list(stage1 = make_dir_plan(DIR.NC, N.BOOT.STAGE[1], SEED.BOOT + 3000, DIR.CHI, DIR.AB),
+                  stage2 = make_dir_plan(DIR.NC, N.BOOT.STAGE[2], SEED.BOOT + 4000, DIR.CHI, DIR.AB),
+                  stage3 = make_dir_plan(DIR.NC, N.BOOT.STAGE[3], SEED.BOOT + 5000, DIR.CHI, DIR.AB))
+N.DIR.ARRAY <- 20           # gene blocks of gene_dir.R, one array task each (gene_dir.sub --array=1-20)
+local({
+  g4 <- c("MIX.SC", "MIX.SE", "HYB.SC", "HYB.SE")
+  DIR.MATS <- CONTRAST.MATS.INFER[g4]; DIR.EXPOS <- CONTRAST.EXPOS[g4]; DIR.ETAS <- CONTRAST.ETAS[g4]; DIR.FITS <- CONTRAST.FITS.INFER[g4]; GENES <- GENES.INFER
+  save(DIR.MATS, DIR.EXPOS, DIR.ETAS, DIR.FITS, GENES, DIR.PLANS, DIR.DELTA, DOM.SHIFT, file = file.path(INPUT.DIR, "gene_dir_inputs.rda"))
+})
+
+## ---- Cluster round trips: Rscript gene_dir.R with GENE_DIR_STAGE = 1, 2, 3 (job arrays over gene blocks, gene_dir.sub) ----
+## Stage 1 runs every gene; a family (the mean, or the dispersion quantities) continues to 10,000 fresh replicates while some margin test of A, B, S or D at the
+## main margin has n0 < STAGE.N0[1] (its outcome may still change), and to 100,000 while n0 < STAGE.N0[2] (dir_stage_genes()). A later stage's rows replace the
+## earlier ones for the genes that reached it.
+DIR.TABLE.INFER <- NULL; DIR.STAGE.GENES <- list()
+for (st in 1:3) {
+  DIR.JOBS <- if (st == 1) list(mean = GENES.INFER, disp = GENES.INFER) else
+    lapply(setNames(names(.DIR.FAMILY), names(.DIR.FAMILY)), function(fam) dir_stage_genes(DIR.TABLE.INFER, fam, STAGE.N0[st - 1], N.BOOT.STAGE[st - 1]))
+  DIR.PLAN <- paste0("stage", st); THETA.TAIL <- NULL
+  DIR.KEY <- list(stage = st, jobs = DIR.JOBS, plan = DIR.PLANS[[DIR.PLAN]][c("seed", "B")], delta = DIR.DELTA, shift = DOM.SHIFT)
+  DIR.STAGE.GENES[[DIR.PLAN]] <- DIR.JOBS
+  cat(sprintf("Direction stage %d: %d genes for the mean, %d for the dispersion family (%d replicates)\n", st, length(DIR.JOBS$mean), length(DIR.JOBS$disp), N.BOOT.STAGE[st]))
+  save(DIR.JOBS, DIR.PLAN, DIR.KEY, N.DIR.ARRAY, THETA.TAIL, file = file.path(INPUT.DIR, sprintf("gene_dir_stage%d_inputs.rda", st)))
+  DIR.OUT <- NULL
+  for (k in seq_len(N.DIR.ARRAY)) {
+    f <- sprintf("gene_dir_stage%d_output_%dof%d.rda", st, k, N.DIR.ARRAY); e <- new.env()
+    load_cluster_output(file.path(OUTPUT.DIR, f), sprintf("gene_dir.R (stage %d)", st), envir = e)
+    check_cluster_key(e$DIR.KEY, DIR.KEY, f, sprintf("gene_dir.R (stage %d)", st))
+    DIR.OUT <- rbind(DIR.OUT, e$DIR.OUT)
+  }
+  key_new <- paste(DIR.OUT$gene, DIR.OUT$quantity, DIR.OUT$scheme)
+  DIR.TABLE.INFER <- rbind(DIR.TABLE.INFER[!(paste(DIR.TABLE.INFER$gene, DIR.TABLE.INFER$quantity, DIR.TABLE.INFER$scheme) %in% key_new), ], DIR.OUT)
+}
+rm(st, DIR.JOBS, DIR.PLAN, THETA.TAIL, DIR.KEY, DIR.OUT, key_new)
+## ---- end cluster round trips 1 to 3 ----
+
+# Gate and false coverage-statement rate at the main margin. The theta intervals are built only for divergent genes, so their level is 1 - 2 alpha_FCR with
+# alpha_FCR = 0.05 N_div / N_test per quantity and scheme; the factor 2 makes inclusion in a band an equivalence test at alpha_FCR.
+DIR.PRE <- dir_classify_table(DIR.TABLE.INFER)
+DIR.ALPHA.FCR <- tapply(DIR.PRE$alpha_fcr, paste(DIR.PRE$quantity, DIR.PRE$scheme, sep = "|"), function(a) a[1])
+DIR.DIVERGENT <- lapply(setNames(names(.DIR.FAMILY), names(.DIR.FAMILY)), function(fam) unique(DIR.PRE$gene[DIR.PRE$quantity %in% .DIR.FAMILY[[fam]] & DIR.PRE$gate %in% "Divergent"]))
+
+## ---- Cluster round trip 4: Rscript gene_dir.R with GENE_DIR_STAGE = 4 (gene_dir.sub) ----
+## The divergent genes get the theta intervals of the 100,000 draws of the stage-3 plan at tail alpha_FCR (THETA.TAIL, by quantity and scheme): fresh replicates
+## for a gene whose family stopped earlier, the very replicates of its stage 3 for one that reached it (checked below on the A, B, S and D intervals).
+local({
+  DIR.JOBS <- DIR.DIVERGENT; DIR.PLAN <- "stage3"; THETA.TAIL <- DIR.ALPHA.FCR[is.finite(DIR.ALPHA.FCR) & DIR.ALPHA.FCR > 0]
+  DIR.KEY <- list(stage = 4, jobs = DIR.JOBS, plan = DIR.PLANS$stage3[c("seed", "B")], delta = DIR.DELTA, shift = DOM.SHIFT, tail = THETA.TAIL)
+  save(DIR.JOBS, DIR.PLAN, DIR.KEY, N.DIR.ARRAY, THETA.TAIL, file = file.path(INPUT.DIR, "gene_dir_stage4_inputs.rda"))
+  out <- NULL
+  for (k in seq_len(N.DIR.ARRAY)) {
+    f <- sprintf("gene_dir_stage4_output_%dof%d.rda", k, N.DIR.ARRAY); e <- new.env()
+    load_cluster_output(file.path(OUTPUT.DIR, f), "gene_dir.R (stage 4)", envir = e)
+    check_cluster_key(e$DIR.KEY, DIR.KEY, f, "gene_dir.R (stage 4)")
+    out <- rbind(out, e$DIR.OUT)
+  }
+  DIR.THETA4 <<- out
+})
+## ---- end cluster round trip 4 ----
+DIR.TABLE.INFER <- local({
+  t <- DIR.TABLE.INFER; i <- match(paste(DIR.THETA4$gene, DIR.THETA4$quantity, DIR.THETA4$scheme), paste(t$gene, t$quantity, t$scheme))
+  same <- t$n_boot[i] == N.BOOT.STAGE[3]
+  cols <- c("A_lo", "A_hi", "B_lo", "B_hi", "S_lo", "S_hi", "D_lo", "D_hi")
+  if (any(same)) stopifnot("stage 4 does not repeat the stage-3 replicates" = isTRUE(all.equal(DIR.THETA4[same, cols], t[i[same], cols], check.attributes = FALSE)))
+  div <- paste(t$gene, t$quantity, t$scheme)[i] %in% paste(DIR.PRE$gene, DIR.PRE$quantity, DIR.PRE$scheme)[DIR.PRE$gate %in% "Divergent"]
+  t[i[div], c("theta_lo", "theta_hi", "theta_tail", "theta_undef")] <- DIR.THETA4[div, c("theta_lo", "theta_hi", "theta_tail", "theta_undef")]
+  t
+})
+
+# Classes at the main margin and band (DIR.CLASS), and the class counts at every margin multiplier and band width as the sensitivity check (DIR.SENS). The theta
+# intervals keep the level of the main margin in the sensitivity runs.
+DIR.CLASS <- dir_classify_table(DIR.TABLE.INFER)
+DIR.COUNTS <- as.data.frame(table(quantity = DIR.CLASS$quantity, scheme = DIR.CLASS$scheme, class = DIR.CLASS$class_label), stringsAsFactors = FALSE)
+DIR.COUNTS <- DIR.COUNTS[DIR.COUNTS$Freq > 0, ]
+DIR.SENS <- do.call(rbind, lapply(seq_along(DIR.DELTA.MULT), function(m) do.call(rbind, lapply(DIR.W.SENS, function(w) {
+  ct <- dir_classify_table(DIR.TABLE.INFER, m = m, w = w)
+  tb <- as.data.frame(table(quantity = ct$quantity, scheme = ct$scheme, class = ct$class), stringsAsFactors = FALSE)
+  cbind(delta_mult = DIR.DELTA.MULT[m], w = w, tb[tb$Freq > 0, ])
+}))))
+cat("Classes by direction (main margin, w = ", DIR.W, " degrees):\n", sep = ""); print(DIR.COUNTS, row.names = FALSE)
+
+# Checks of the design: genes whose all-cell estimate of A or B falls outside its split-based interval; the balance of Var A and Var B (median ratio near 1);
+# the correlation of A and B with the split (near 0) and on all cells (negative for cis/trans and inheritance); the share of resolved genes toward Pc and Pe.
+DIR.CHECKS <- do.call(rbind, lapply(split(DIR.CLASS, paste(DIR.CLASS$quantity, DIR.CLASS$scheme)), function(d) data.frame(
+  quantity = d$quantity[1], scheme = d$scheme[1], genes = nrow(d), out_A = sum(d$out_A, na.rm = TRUE), out_B = sum(d$out_B, na.rm = TRUE),
+  median_varA_over_varB = median(d$var_A / d$var_B, na.rm = TRUE), median_cor_AB_split = median(d$cor_AB, na.rm = TRUE), median_cor_AB_all = median(d$cor_AB_all, na.rm = TRUE),
+  toward_Pc = sum(grepl("Pc", d$class_label)), toward_Pe = sum(grepl("Pe", d$class_label)), contradictory = sum(d$contradictory, na.rm = TRUE), row.names = NULL)))
+cat("Checks of the direction classification:\n"); print(DIR.CHECKS, digits = 3, row.names = FALSE)
+write.csv(DIR.CLASS, file.path(TABLE.DIR, "direction_classes.csv"), row.names = FALSE)
+write.csv(DIR.COUNTS, file.path(TABLE.DIR, "direction_class_counts.csv"), row.names = FALSE)
+write.csv(DIR.SENS, file.path(TABLE.DIR, "direction_sensitivity.csv"), row.names = FALSE)
+write.csv(DIR.CHECKS, file.path(TABLE.DIR, "direction_checks.csv"), row.names = FALSE)
+
 ## The shared shift reported by its median within equal-count deciles of log2 mu_H (all genes with a finite log2 mu_H), with the calibrator count and the median
 ## Delta_dom(log2 phi) of the calibrators before and after the shift in each decile; and per mode the median Delta_dom and the significant calls before and after.
 DOM.SHIFT.DECILES <- local({
@@ -1275,6 +1408,7 @@ save(GENES, GENES.INFER, GENE.TABLE, SPLIT.FITS.W, CONTRAST.FITS.INFER, PLOIDY.S
      STATE.PROGRAM, STATE.MEMBERS, STATE.COND, STATE.SCORE.SUMMARY, COND.CONTRASTS, STATE.FLAG.SUMMARY, STATE.FLAGGED, STATE.FLAG.SIG,
      PILOT.PRECISION, DROPOUT.AIC, DOM.ADJ.SUMMARY, DOM.ADJ.SIG, DOM.ADJ.SPAN, DOM.ADJ.CAL, DOM.SHIFT, DOM.SHIFT.DECILES, BOOT.STAGE1,
      N.BOOT.STAGE, STAGE.N0, STAGE.GENES, BOOT.STAGE.COUNTS, K.LEVEL, K.SELECT, FIT.STATUS.COUNTS,
+     DIR.DELTA, DIR.CHI, DIR.AB, DIR.ALLOCATION, DIR.STAGE.GENES, DIR.TABLE.INFER, DIR.ALPHA.FCR, DIR.CLASS, DIR.COUNTS, DIR.SENS, DIR.CHECKS,
      file = ckpt_path(2))
 
 console_start(3)

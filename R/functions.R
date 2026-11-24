@@ -4164,6 +4164,329 @@ dom_shift_curve <- function(d, x, cal, span = 0.3) {
 }
 
 ## ============================================================
+## CLASSIFICATION BY DIRECTION (spec "Classification by direction", artifact Y9Vn84qUaxXJVf8ZebEJEr)
+## ============================================================
+## Each scheme writes a difference as the sum of two parts A and B, taken from Pe toward Pc, with the diagonals S (the size of the difference) and D (how
+## unevenly it divides). Margin tests decide only whether a gene has enough divergence to classify (the gate); the class comes from the direction
+## theta = atan2(B, A) mod 180 degrees and its interval, judged against bands around the class landmarks, so no class rests on a test that failed to reject.
+##   cis_trans    A = cis = Hc - He, B = trans = (Pc - Pe) - (Hc - He), S = Pc - Pe, D = A - B
+##   inheritance  A = H - Pe, B = Pc - H (H = (Hc + He) / 2), S = Pc - Pe, D = 2 Delta_dom = Hc + He - Pc - Pe
+##   trans_inh    A = He - Pe, B = Pc - Hc, S = trans, D = 2 Delta_dom
+## In expectation S = A + B and D = A - B. A and B come from split hybrid cells (cis cells, and the trans cells divided again into an A set and a B set), so
+## they are independent; S, D and the point estimates use all cells of their groups. Every replicate resamples each group and repartitions the resampled
+## hybrid cells at random at the fixed fractions (dir_draw()).
+
+## Settings: the bands of the class landmarks (w, degrees) with the values of the sensitivity check; the margin of the dispersion (delta_phi on log2 phi) and
+## the multipliers of every margin for the sensitivity check; the least fraction of the trans cells either part keeps.
+DIR.W          <- 9
+DIR.W.SENS     <- c(6, 9, 12)
+DIR.DELTA.PHI  <- log2(1.15)
+DIR.DELTA.MULT <- c(0.75, 1, 1.5)
+DIR.AB.MIN     <- 0.2
+
+## .DIR.Q: the classified quantities, the partition (and pilot SE stem) each takes its cells from, and the factor of the shared shift Xi on its hybrid log2
+## values (phi and beta move by -Xi, alpha by +Xi, kappa by +2 Xi, the mean not at all). alpha = 1 / phi uses the dispersion partition.
+.DIR.Q <- list(mean = list(part = "mean", sh = 0), disp = list(part = "disp", sh = 1), alpha = list(part = "disp", sh = -1),
+               bsize = list(part = "bsize", sh = 1), kbal = list(part = "kbal", sh = -2))
+.DIR.FAMILY <- list(mean = "mean", disp = c("disp", "alpha", "bsize", "kbal"))
+.DIR.SCHEMES <- c("cis_trans", "inheritance", "trans_inh")
+
+## .dir_log2: the log2 value of quantity q in one group from its mean rate and dispersion. A zero rate or dispersion gives +-Inf (alpha and kappa are infinite
+## at phi = 0), which replicates keep; NA stays NA.
+.dir_log2 <- function(mu, phi, q) switch(q, mean = log2(mu), disp = log2(phi), alpha = -log2(phi), bsize = log2(mu) + log2(phi), kbal = -log2(mu) - 2 * log2(phi))
+
+## dir_ab_fraction: the share f of the trans cells that carries part A, chosen so Var A = Var B. Var A = v_a + u_a / (f n_t) and Var B = v_b + u_b /
+## ((1 - f) n_t), with v_a and v_b the variances of the parental term of each part (Pe for A, Pc for B) and u_a, u_b the per-cell variances of the hybrid term.
+## Var A - Var B falls as f grows, so the balance point is one root. When the parents differ in precision by more than the hybrid cells can offset within
+## [f_min, 1 - f_min], f stays at the nearer end and the more precise parent is thinned to the fraction t of its cells that closes the gap (only for the A
+## and B tests). Returns c(f, t_pe, t_pc).
+dir_ab_fraction <- function(v_pe, v_pc, u_a, u_b, n_t, f_min = DIR.AB.MIN) {
+  stopifnot(all(is.finite(c(v_pe, v_pc, u_a, u_b, n_t))), v_pe > 0, v_pc > 0, u_a > 0, u_b > 0, n_t > 0, f_min > 0, f_min < 0.5)
+  g <- function(f) (v_pe + u_a / (f * n_t)) - (v_pc + u_b / ((1 - f) * n_t))
+  lo <- f_min; hi <- 1 - f_min
+  if (g(lo) >= 0 && g(hi) <= 0) return(c(f = uniroot(g, c(lo, hi), tol = 1e-10)$root, t_pe = 1, t_pc = 1))
+  if (g(hi) > 0) return(c(f = hi, t_pe = 1, t_pc = v_pc / (v_pe + u_a / (hi * n_t) - u_b / ((1 - hi) * n_t))))   # A noisier at most cells: thin Pc
+  c(f = lo, t_pe = v_pe / (v_pc + u_b / ((1 - lo) * n_t) - u_a / (lo * n_t)), t_pc = 1)                          # A more precise at fewest cells: thin Pe
+}
+
+## make_dir_plan / dir_draw: the draws of the direction bootstrap. Draw b resamples each parent's cells and the hybrid cells with replacement, then, for each
+## partition (mean, disp, kbal, bsize), permutes the resampled hybrid copies at random and gives the first round(chi n) to cis and the rest to trans; the trans
+## copies are permuted again for each inheritance scheme (inh, tinh) and divided at its fraction f into an A set and a B set, and each parent is thinned to its
+## fraction t for that scheme's A and B parts. Draw b is drawn from its own seed (seed * DRAW.SEED.STRIDE + b), so every gene and job sees the same draws and
+## a stage of 100,000 replicates ships no index file. chi is named by partition; ab is a list by partition of 2 x 3 matrices (rows inh, tinh; columns f,
+## t_pe, t_pc).
+make_dir_plan <- function(ncells, B, seed, chi, ab) {
+  stopifnot(all(c("Pc", "Pe", "H") %in% names(ncells)), B >= 1, B < DRAW.SEED.STRIDE, (seed + 1) * DRAW.SEED.STRIDE < 2^31 - 1,
+            setequal(names(chi), names(ab)), all(chi > 0 & chi < 1),
+            all(vapply(ab, function(m) all(c("inh", "tinh") %in% rownames(m)) && all(m[, "f"] > 0 & m[, "f"] < 1 & m[, c("t_pe", "t_pc")] > 0 & m[, c("t_pe", "t_pc")] <= 1), logical(1))))
+  structure(list(ncells = ncells[c("Pc", "Pe", "H")], B = as.integer(B), seed = seed, chi = chi, ab = ab), class = "dir_plan")
+}
+dir_draw <- function(plan, b) {
+  stopifnot(inherits(plan, "dir_plan"), b >= 1, b <= plan$B)
+  n <- plan$ncells
+  with_local_seed(plan$seed * DRAW.SEED.STRIDE + b, {
+    d <- list(Pc = sample.int(n[["Pc"]], n[["Pc"]], TRUE), Pe = sample.int(n[["Pe"]], n[["Pe"]], TRUE), H = sample.int(n[["H"]], n[["H"]], TRUE))
+    for (p in names(plan$chi)) {
+      h <- d$H[sample.int(length(d$H))]; nc <- round(plan$chi[[p]] * length(h))
+      s <- list(cis = h[seq_len(nc)], trans = h[-seq_len(nc)])
+      for (sc in c("inh", "tinh")) {
+        tt <- s$trans[sample.int(length(s$trans))]; na <- round(plan$ab[[p]][sc, "f"] * length(tt))
+        s[[paste0(sc, "_A")]] <- tt[seq_len(na)]; s[[paste0(sc, "_B")]] <- tt[-seq_len(na)]
+        s[[paste0(sc, "_Pe")]] <- d$Pe[seq_len(max(2, round(plan$ab[[p]][sc, "t_pe"] * length(d$Pe))))]
+        s[[paste0(sc, "_Pc")]] <- d$Pc[seq_len(max(2, round(plan$ab[[p]][sc, "t_pc"] * length(d$Pc))))]
+      }
+      d[[p]] <- s
+    }
+    d
+  })
+}
+
+## dir_parts: A, B, S and D of one scheme from named lists of group log2 values: x_all (Pc, Pe, Hc, He on all cells) and, for the split parts, x_split (the
+## groups of the split sets: Hc_cis, He_cis, Hc_trans, He_trans, Hc_inhA, He_inhA, Hc_inhB, He_inhB, He_tinhA, Hc_tinhB, and the parents of each inheritance
+## scheme's parts, Pc_inh, Pe_inh, Pc_tinh, Pe_tinh). Returns c(A, B, S, D, A_all, B_all): A and B from the split cells (NA without x_split), S and D and the
+## all-cell parts from all cells. Plain arithmetic keeps the zero rules: a part with one infinite group is +-Inf, one with both signs NaN (undefined).
+dir_parts <- function(scheme, x_all, x_split = NULL) {
+  a <- lapply(x_all, unname); s <- if (is.null(x_split)) NULL else lapply(x_split, unname)     # values alone, so names of the inputs never reach the result
+  r <- switch(scheme,
+    cis_trans   = c(A_all = a$Hc - a$He, B_all = (a$Pc - a$Pe) - (a$Hc - a$He), S = a$Pc - a$Pe, D = 2 * (a$Hc - a$He) - (a$Pc - a$Pe),
+                    A = if (is.null(s)) NA_real_ else s$Hc_cis - s$He_cis, B = if (is.null(s)) NA_real_ else (a$Pc - a$Pe) - (s$Hc_trans - s$He_trans)),
+    inheritance = c(A_all = 0.5 * (a$Hc + a$He) - a$Pe, B_all = a$Pc - 0.5 * (a$Hc + a$He), S = a$Pc - a$Pe, D = a$Hc + a$He - a$Pc - a$Pe,
+                    A = if (is.null(s)) NA_real_ else 0.5 * (s$Hc_inhA + s$He_inhA) - s$Pe_inh, B = if (is.null(s)) NA_real_ else s$Pc_inh - 0.5 * (s$Hc_inhB + s$He_inhB)),
+    trans_inh   = c(A_all = a$He - a$Pe, B_all = a$Pc - a$Hc, S = (a$Pc - a$Pe) - (a$Hc - a$He), D = a$Hc + a$He - a$Pc - a$Pe,
+                    A = if (is.null(s)) NA_real_ else s$He_tinhA - s$Pe_tinh, B = if (is.null(s)) NA_real_ else s$Pc_tinh - s$Hc_tinhB))
+  r[c("A", "B", "S", "D", "A_all", "B_all")]
+}
+
+## dir_margin_test: the relevance and equivalence tests of one contrast against the margin delta from its replicates x (the percentile sign test shifted from 0
+## to +-delta). Relevance (|x| > delta): p_R = min(1, 2 min(1 + #{x <= delta}, 1 + #{x >= -delta}) / (1 + B)). Equivalence (|x| < delta, two one-sided tests,
+## Schuirmann 1987, https://doi.org/10.1007/BF01068419): p_E = max(1 + #{x >= delta}, 1 + #{x <= -delta}) / (1 + B). An infinite replicate falls beyond the
+## margin on its side; an undefined replicate (NA) counts on the null side of each test, within the margin for relevance and outside it for equivalence.
+## Returns c(pR, pE, n0R, n0E), n0 the count in the binding term.
+dir_margin_test <- function(x, delta) {
+  stopifnot(is.numeric(delta), length(delta) == 1, delta >= 0)
+  B <- length(x); u <- is.na(x)
+  n0R <- min(sum(u | x <= delta), sum(u | x >= -delta)); n0E <- max(sum(u | x >= delta), sum(u | x <= -delta))
+  c(pR = min(1, 2 * (1 + n0R) / (1 + B)), pE = min(1, (1 + n0E) / (1 + B)), n0R = n0R, n0E = n0E)
+}
+
+## dir_theta: the direction of (A, B) in degrees, atan2(B, A) taken modulo 180, so flipping both signs (which leaves the class unchanged) gives the same value.
+## dir_recentre: replicate angles re-expressed within +-90 degrees of the estimate theta0, so a percentile interval never breaks at 0 = 180.
+dir_theta <- function(A, B) { th <- (atan2(B, A) * 180 / pi) %% 180; th[is.nan(A) | is.nan(B) | is.na(A) | is.na(B)] <- NA_real_; th }
+dir_recentre <- function(th, theta0) theta0 + ((th - theta0 + 90) %% 180) - 90
+
+## dir_share: p, the share of the divergence carried by part A, (2 / pi) atan2(sqrt(max(A^2 - Var A, 0)), sqrt(max(B^2 - Var B, 0))). Subtracting the variance
+## inside the square root removes most of the upward bias of |A| and |B| for weak effects; with vA = vB = 0 it is the uncorrected share, 1 - theta / 90 in
+## the same-sign region. For cis/trans it is the proportion cis of Hallgrimsdottir, Carilli and Pachter (2026, https://doi.org/10.1093/genetics/iyag228).
+## When neither corrected magnitude is above zero, no part exceeds its noise and the share is undefined (NA), rather than the 0 that atan2(0, 0) would give.
+dir_share <- function(A, B, vA = 0, vB = 0) {
+  a <- pmax(A^2 - vA, 0); b <- pmax(B^2 - vB, 0); p <- (2 / pi) * atan2(sqrt(a), sqrt(b))
+  p[a == 0 & b == 0] <- NA_real_
+  p
+}
+
+## dir_segments: the circle of directions for one scheme, cut into the bands of the class landmarks (+-w around 0, 90 and, for cis/trans, 135 degrees;
+## around 0, 45 and 90 for the inheritance schemes) and the regions between them, as consecutive segments on [-w, 180 - w). The boundary landmarks (45 for
+## cis/trans, 135 for inheritance) have no band and split no region. The region of opposite signs in the inheritance schemes is labelled "OU" and named over or
+## under by the sign of D.
+dir_segments <- function(scheme, w = DIR.W) {
+  stopifnot(scheme %in% .DIR.SCHEMES, w > 0, w < 22.5)
+  if (scheme == "cis_trans")
+    data.frame(from = c(-w, w, 90 - w, 90 + w, 135 - w, 135 + w), to = c(w, 90 - w, 90 + w, 135 - w, 135 + w, 180 - w),
+               label = c("Cis", "Cis + trans", "Trans", "Cis x trans", "Compensatory", "Cis x trans"), band = c(TRUE, FALSE, TRUE, FALSE, TRUE, FALSE))
+  else
+    data.frame(from = c(-w, w, 45 - w, 45 + w, 90 - w, 90 + w), to = c(w, 45 - w, 45 + w, 90 - w, 90 + w, 180 - w),
+               label = c("Pc dominant", "Partial toward Pc", "Additive", "Partial toward Pe", "Pe dominant", "OU"), band = c(TRUE, FALSE, TRUE, FALSE, TRUE, FALSE))
+}
+
+## dir_class: the class of every divergent gene from its direction interval [lo, hi] (re-expressed around theta, so possibly beyond 0 or 180) and, for the
+## inheritance schemes, the side of D (dsign: 1 when D's interval lies above 0, -1 below, 0 or NA when it holds 0). The interval is laid on the segments of
+## dir_segments() (repeated a turn either side), and the run of segments it touches sets the class:
+##   one segment        on a landmark (inside a band) or in a region (inside a region, clear of every band): that class
+##   two segments       the interval crosses a band edge: "Leaning", with the two neighbouring classes
+##   three or more      "Unresolved"; so is an interval of 180 degrees or more, or an undefined bound
+## The opposite-sign region of the inheritance schemes is Overdominant or Underdominant by dsign (for trans_inh, Beyond both, above or below), and
+## "Over- or underdominant" when D's interval holds 0. Returns a data frame with class, lean_1, lean_2.
+dir_class <- function(lo, hi, scheme, w = DIR.W, dsign = NULL) {
+  seg <- dir_segments(scheme, w); n <- nrow(seg)
+  if (is.null(dsign)) dsign <- rep(NA_real_, length(lo))
+  ou <- if (scheme == "trans_inh") c(up = "Beyond both, above", dn = "Beyond both, below", na = "Beyond both, direction unresolved") else
+    c(up = "Overdominant", dn = "Underdominant", na = "Over- or underdominant")
+  ext <- rbind(transform(seg, from = from - 180, to = to - 180), seg, transform(seg, from = from + 180, to = to + 180))
+  lab <- function(i, ds) { l <- ext$label[i]; if (l != "OU") l else if (is.na(ds) || ds == 0) ou[["na"]] else if (ds > 0) ou[["up"]] else ou[["dn"]] }
+  out <- data.frame(class = rep(NA_character_, length(lo)), lean_1 = NA_character_, lean_2 = NA_character_, stringsAsFactors = FALSE)
+  for (j in seq_along(lo)) {
+    if (is.na(lo[j]) || is.na(hi[j])) next
+    if (!is.finite(lo[j]) || !is.finite(hi[j]) || hi[j] - lo[j] >= 180) { out$class[j] <- "Unresolved"; next }
+    hit <- which(ext$from < hi[j] & ext$to > lo[j])                                   # segments the interval overlaps
+    if (!length(hit)) hit <- which(ext$from <= lo[j] & ext$to >= lo[j])[1]               # a zero-width interval sits in the segment holding it
+    if (length(hit) == 1) out$class[j] <- lab(hit, dsign[j])
+    else if (length(hit) == 2) { out$class[j] <- "Leaning"; out$lean_1[j] <- lab(hit[1], dsign[j]); out$lean_2[j] <- lab(hit[2], dsign[j]) }
+    else out$class[j] <- "Unresolved"
+  }
+  out
+}
+
+## dir_gate: the gate of one family of genes from the BH q-values of the relevance (qR) and equivalence (qE) tests of A, B, S and D (n x 4 matrices, columns
+## A, B, S, D): Divergent when any contrast is relevant, Conserved when S and D are both equivalent (max(|S|, |D|) = |A| + |B| then holds A and B within the
+## margin too), Inconclusive otherwise. A gene meeting both rules is contradictory evidence: Inconclusive, flagged. NA when a q-value the rule needs is NA.
+dir_gate <- function(qR, qE, sig = 0.05) {
+  stopifnot(identical(colnames(qR), c("A", "B", "S", "D")), identical(colnames(qE), c("A", "B", "S", "D")))
+  div <- rowSums(qR < sig, na.rm = TRUE) > 0
+  cons <- (qE[, "S"] < sig) %in% TRUE & (qE[, "D"] < sig) %in% TRUE
+  defined <- rowSums(is.finite(qR)) == 4 & is.finite(qE[, "S"]) & is.finite(qE[, "D"])
+  gate <- ifelse(div & cons, "Inconclusive", ifelse(div, "Divergent", ifelse(cons, "Conserved", "Inconclusive")))
+  gate[!defined & !div] <- NA
+  data.frame(gate = gate, contradictory = div & cons, stringsAsFactors = FALSE)
+}
+
+## dir_contrasts_one: one gene's direction bootstrap (the unit of work of gene_dir.R), one row per quantity and scheme. Every replicate refits the four groups on
+## their resampled cells (the all-cell parts, S and D) and, for each partition, the hybrid alleles on the cis, trans, A and B sets of the replicate's random
+## split and the thinned parents of the A and B parts (dir_draw()), with the observed estimators and the split variances of the resampled cells; a failed refit
+## counts as a zero dispersion. The point estimates of A, B, S and D come from the observed all-cell fits (fits: MIX.SC, MIX.SE, HYB.SC, HYB.SE). For each
+## margin multiplier the relevance and equivalence tests of A and B use their split replicates and those of S and D their all-cell replicates (dir_margin_test());
+## the classic two-sided tests of A and B against zero (sign_boot_p()) are reported only. theta comes from the all-cell estimates and its interval from the split
+## replicates, re-expressed around it, at tail probability theta_tail (one value, or a vector named "<quantity>|<scheme>"; 0.025 by default). p comes from the
+## all-cell estimates with the variances of the all-cell replicates; its interval from the all-cell replicates. With shift (Xi by gene) the inheritance schemes
+## are also given centred on Xi (schemes inheritance_xi, trans_inh_xi: each hybrid log2 value moved by -sh Xi, .DIR.Q). family "mean" refits means alone (the
+## ratio estimate); "disp" the dispersion quantities. delta is the margin of each quantity (named), multiplied by DIR.DELTA.MULT.
+## flags: zero_fit (an observed zero rate or dispersion: infinite estimates, no theta), failed_fit (an observed failed fit: no estimates, tests or intervals),
+## out_A, out_B (the all-cell estimate outside the 95% interval of the split replicates).
+dir_contrasts_one <- function(g, expos, fits, mats, etas, plan, delta, family = c("mean", "disp"), shift = NULL, theta_tail = NULL) {
+  family <- match.arg(family)
+  stopifnot(inherits(plan, "dir_plan"), all(.DIR.FAMILY[[family]] %in% names(delta)), all(c("MIX.SC", "MIX.SE", "HYB.SC", "HYB.SE") %in% names(mats)))
+  qs <- .DIR.FAMILY[[family]]; parts <- unique(vapply(.DIR.Q[qs], `[[`, "", "part")); B <- plan$B
+  xi <- if (is.null(shift) || !(g %in% names(shift))) NA_real_ else unname(shift[[g]])
+  schemes <- c(.DIR.SCHEMES, if (is.finite(xi) && family == "disp") c("inheritance_xi", "trans_inh_xi"))
+  grp <- c(Pc = "MIX.SC", Pe = "MIX.SE", Hc = "HYB.SC", He = "HYB.SE")
+  eta_at <- function(k, ix) { et <- etas[[grp[[k]]]]; if (length(et) > 1) et[ix] else et }
+  fit_at <- function(k, ix) {
+    y <- mats[[grp[[k]]]][g, ix]; e <- expos[[grp[[k]]]][ix]
+    if (family == "mean") return(c(mu = .ratio_mean(y, e), disp = NA_real_))
+    f <- .fit_one(y, e, eta_at(k, ix)); c(mu = unname(f[["mu"]]), disp = if (is.finite(f[["disp"]])) unname(f[["disp"]]) else 0)
+  }
+  ## The observed all-cell values; a failed observed fit leaves the quantity undefined
+  fo <- lapply(grp, function(k) c(mu = fits[[k]][g, "MU"], disp = fits[[k]][g, "DISP"]))
+  rows <- expand.grid(quantity = qs, scheme = schemes, stringsAsFactors = FALSE)
+  rows <- rows[!(rows$quantity == "mean" & grepl("_xi$", rows$scheme)), ]
+  key <- paste(rows$quantity, rows$scheme, sep = "|"); nk <- length(key)
+  rep_arr <- array(NA_real_, c(B, nk, 6), dimnames = list(NULL, key, c("A", "B", "S", "D", "A_all", "B_all")))
+  xval <- function(fl, q, hyb, xs) { v <- .dir_log2(fl[["mu"]], fl[["disp"]], q); if (hyb && is.finite(xs)) v - .DIR.Q[[q]]$sh * xs else v }
+  for (b in seq_len(B)) {
+    d <- dir_draw(plan, b)
+    fa <- list(Pc = fit_at("Pc", d$Pc), Pe = fit_at("Pe", d$Pe), Hc = fit_at("Hc", d$H), He = fit_at("He", d$H))
+    fs <- list()
+    for (p in parts) {
+      s <- d[[p]]
+      fs[[p]] <- list(Hc_cis = fit_at("Hc", s$cis), He_cis = fit_at("He", s$cis), Hc_trans = fit_at("Hc", s$trans), He_trans = fit_at("He", s$trans),
+                      Hc_inhA = fit_at("Hc", s$inh_A), He_inhA = fit_at("He", s$inh_A), Hc_inhB = fit_at("Hc", s$inh_B), He_inhB = fit_at("He", s$inh_B),
+                      He_tinhA = fit_at("He", s$tinh_A), Hc_tinhB = fit_at("Hc", s$tinh_B),
+                      Pe_inh = if (length(s$inh_Pe) == length(d$Pe)) fa$Pe else fit_at("Pe", s$inh_Pe), Pc_inh = if (length(s$inh_Pc) == length(d$Pc)) fa$Pc else fit_at("Pc", s$inh_Pc),
+                      Pe_tinh = if (length(s$tinh_Pe) == length(d$Pe)) fa$Pe else fit_at("Pe", s$tinh_Pe), Pc_tinh = if (length(s$tinh_Pc) == length(d$Pc)) fa$Pc else fit_at("Pc", s$tinh_Pc))
+    }
+    for (j in seq_len(nk)) {
+      q <- rows$quantity[j]; sc <- sub("_xi$", "", rows$scheme[j]); xs <- if (grepl("_xi$", rows$scheme[j])) xi else NA_real_
+      xa <- lapply(setNames(names(fa), names(fa)), function(k) xval(fa[[k]], q, k %in% c("Hc", "He"), xs))
+      fsp <- fs[[.DIR.Q[[q]]$part]]
+      xsp <- lapply(setNames(names(fsp), names(fsp)), function(k) xval(fsp[[k]], q, grepl("^H", k), xs))
+      rep_arr[b, j, ] <- dir_parts(sc, xa, xsp)
+    }
+  }
+  out <- vector("list", nk)
+  for (j in seq_len(nk)) {
+    q <- rows$quantity[j]; scf <- rows$scheme[j]; sc <- sub("_xi$", "", scf); xs <- if (grepl("_xi$", scf)) xi else NA_real_
+    xo <- lapply(setNames(names(fo), names(fo)), function(k) xval(fo[[k]], q, k %in% c("Hc", "He"), xs))
+    failed <- any(vapply(xo, is.na, logical(1)))
+    est <- if (failed) setNames(rep(NA_real_, 6), c("A", "B", "S", "D", "A_all", "B_all")) else dir_parts(sc, xo)
+    zero <- !failed && any(!is.finite(unlist(xo)))
+    R <- rep_arr[, j, ]; R[is.nan(R)] <- NA
+    r <- list(gene = g, quantity = q, scheme = scf, n_boot = B, xi = if (is.finite(xs)) xs else NA_real_, failed_fit = failed, zero_fit = zero,
+              A = est[["A_all"]], B = est[["B_all"]], S = est[["S"]], D = est[["D"]])
+    for (k in c("A", "B", "S", "D")) {
+      s <- .boot_summary(R[, k], TRUE); r[[paste0(k, "_lo")]] <- s[["lo"]]; r[[paste0(k, "_hi")]] <- s[["hi"]]
+      for (m in seq_along(DIR.DELTA.MULT)) {
+        t <- if (failed) c(pR = NA, pE = NA, n0R = NA, n0E = NA) else dir_margin_test(R[, k], DIR.DELTA.MULT[m] * delta[[q]])
+        r[[sprintf("pR_%s_m%d", k, m)]] <- t[["pR"]]; r[[sprintf("pE_%s_m%d", k, m)]] <- t[["pE"]]
+        if (DIR.DELTA.MULT[m] == 1) { r[[paste0("n0R_", k)]] <- t[["n0R"]]; r[[paste0("n0E_", k)]] <- t[["n0E"]] }
+      }
+    }
+    r$delta <- delta[[q]]
+    for (k in c("A", "B")) r[[paste0("pclassic_", k)]] <- if (failed || !is.finite(est[[paste0(k, "_all")]]) || est[[paste0(k, "_all")]] == 0) NA_real_ else
+      sign_boot_p(sign(R[, k]), sign(est[[paste0(k, "_all")]]))
+    r$out_A <- !failed && is.finite(est[["A_all"]]) && is.finite(r$A_lo) && (est[["A_all"]] < r$A_lo || est[["A_all"]] > r$A_hi)
+    r$out_B <- !failed && is.finite(est[["B_all"]]) && is.finite(r$B_lo) && (est[["B_all"]] < r$B_lo || est[["B_all"]] > r$B_hi)
+    fin <- function(v) v[is.finite(v)]
+    r$var_A <- if (length(fin(R[, "A"])) > 2) var(fin(R[, "A"])) else NA_real_; r$var_B <- if (length(fin(R[, "B"])) > 2) var(fin(R[, "B"])) else NA_real_
+    ok <- is.finite(R[, "A"]) & is.finite(R[, "B"]); r$cor_AB <- if (sum(ok) > 2) cor(R[ok, "A"], R[ok, "B"]) else NA_real_
+    ok2 <- is.finite(R[, "A_all"]) & is.finite(R[, "B_all"]); r$cor_AB_all <- if (sum(ok2) > 2) cor(R[ok2, "A_all"], R[ok2, "B_all"]) else NA_real_
+    th0 <- if (failed || zero) NA_real_ else dir_theta(est[["A_all"]], est[["B_all"]])
+    tail <- if (is.null(theta_tail)) 0.025 else if (length(theta_tail) == 1 && is.null(names(theta_tail))) theta_tail else unname(theta_tail[paste(q, scf, sep = "|")])
+    if (!is.finite(tail)) tail <- 0.025
+    r$theta <- th0; r$theta_tail <- tail
+    if (is.finite(th0)) {
+      tb <- dir_recentre(dir_theta(R[, "A"], R[, "B"]), th0); s <- .boot_summary(tb, TRUE, tail)
+      r$theta_lo <- s[["lo"]]; r$theta_hi <- s[["hi"]]; r$theta_undef <- sum(is.na(tb))
+    } else { r$theta_lo <- NA_real_; r$theta_hi <- NA_real_; r$theta_undef <- NA_real_ }
+    vA <- var(fin(R[, "A_all"])); vB <- var(fin(R[, "B_all"]))
+    r$var_A_all <- vA; r$var_B_all <- vB
+    r$p_raw <- if (is.finite(th0)) dir_share(est[["A_all"]], est[["B_all"]]) else NA_real_
+    r$p <- if (is.finite(th0) && is.finite(vA) && is.finite(vB)) dir_share(est[["A_all"]], est[["B_all"]], vA, vB) else NA_real_
+    if (is.finite(r$p)) { pb <- dir_share(R[, "A_all"], R[, "B_all"], vA, vB); pb[!ok2] <- NA; s <- .boot_summary(pb, TRUE); r$p_lo <- s[["lo"]]; r$p_hi <- s[["hi"]] }
+    else { r$p_lo <- NA_real_; r$p_hi <- NA_real_ }
+    out[[j]] <- as.data.frame(r, stringsAsFactors = FALSE)
+  }
+  do.call(rbind, out)
+}
+
+## dir_classify_table: the gate and the class of every row of a direction table (gene x quantity x scheme, columns of dir_contrasts_one(); the quick look
+## builds the same columns from model-based SEs). For margin multiplier m: BH q-values of the relevance and equivalence tests of A, B, S and D, one family per
+## quantity, scheme, contrast and test type over all genes (no family depends on an earlier selection); the gate (dir_gate()); the false coverage-statement
+## rate of each quantity and scheme, alpha_FCR = 0.05 N_div / N_test (Benjamini and Yekutieli 2005, https://doi.org/10.1198/016214504000001907), at which the
+## theta intervals are built (level 1 - 2 alpha_FCR); and, for divergent genes, the class from the theta interval and bands of half-width w (dir_class()), with
+## over or under read from D's interval. zero_fit rows (an observed zero fit) that are divergent or untested are "Zero fit" (no direction), and
+## failed_fit rows "Failed fit". k = D / S is reported for genes
+## whose S is relevant; it sets no class. Returns tab with the q-values, gate, contradictory, alpha_fcr, class, lean_1, lean_2, class_label and k.
+dir_classify_table <- function(tab, m = which(DIR.DELTA.MULT == 1), w = DIR.W, sig = 0.05) {
+  stopifnot(all(c("gene", "quantity", "scheme", "theta_lo", "theta_hi", "D_lo", "D_hi", "S", "D") %in% names(tab)), length(m) == 1)
+  fam <- paste(tab$quantity, tab$scheme, sep = "|")
+  for (k in c("A", "B", "S", "D")) for (t in c("R", "E")) {
+    pc <- sprintf("p%s_%s_m%d", t, k, m); qc <- sprintf("q%s_%s", t, k)
+    tab[[qc]] <- ave(tab[[pc]], fam, FUN = function(p) p.adjust(p, "BH"))
+  }
+  gt <- dir_gate(as.matrix(setNames(tab[paste0("qR_", c("A", "B", "S", "D"))], c("A", "B", "S", "D"))),
+                 as.matrix(setNames(tab[paste0("qE_", c("A", "B", "S", "D"))], c("A", "B", "S", "D"))), sig)
+  tab$gate <- gt$gate; tab$contradictory <- gt$contradictory
+  tab$gate[tab$failed_fit %in% TRUE] <- NA
+  tab$alpha_fcr <- ave(tab$gate, fam, FUN = function(x) sig * sum(x %in% "Divergent") / sum(!is.na(x)))
+  tab$alpha_fcr <- as.numeric(tab$alpha_fcr)
+  tab$class <- NA_character_; tab$lean_1 <- NA_character_; tab$lean_2 <- NA_character_
+  for (sc in unique(tab$scheme)) {
+    i <- which(tab$scheme == sc & tab$gate %in% "Divergent" & !(tab$zero_fit %in% TRUE))
+    if (!length(i)) next
+    ds <- ifelse(tab$D_lo[i] > 0, 1, ifelse(tab$D_hi[i] < 0, -1, 0))
+    cl <- dir_class(tab$theta_lo[i], tab$theta_hi[i], sub("_xi$", "", sc), w, ds)
+    tab$class[i] <- cl$class; tab$lean_1[i] <- cl$lean_1; tab$lean_2[i] <- cl$lean_2
+  }
+  tab$class[tab$gate %in% "Conserved"] <- ifelse(grepl("^trans_inh", tab$scheme[tab$gate %in% "Conserved"]), "No trans difference", "Conserved")
+  tab$class[tab$gate %in% "Inconclusive"] <- "Inconclusive"
+  tab$class[tab$zero_fit %in% TRUE & (is.na(tab$gate) | tab$gate %in% "Divergent")] <- "Zero fit"     # untested or divergent with no direction
+  tab$class[tab$failed_fit %in% TRUE] <- "Failed fit"
+  tab$class_label <- ifelse(tab$class %in% "Leaning", paste0("Leaning: ", tab$lean_1, " / ", tab$lean_2), tab$class)
+  srel <- (tab$qR_S < sig) %in% TRUE
+  tab$k <- ifelse(srel, tab$D / tab$S, NA_real_)
+  tab
+}
+
+## dir_stage_genes: the genes of a long table of dir_contrasts_one() rows whose family continues to the next stage: some row of the family has a relevance or
+## equivalence test of A, B, S or D at the main margin with n0 below n0_min, so its outcome may still change. B_only restricts to the genes whose family ran
+## that many replicates.
+dir_stage_genes <- function(tab, family, n0_min, B_only = NULL) {
+  t <- tab[tab$quantity %in% .DIR.FAMILY[[family]], ]
+  if (!is.null(B_only)) t <- t[t$n_boot == B_only, ]
+  n0 <- as.matrix(t[c(paste0("n0R_", c("A", "B", "S", "D")), paste0("n0E_", c("A", "B", "S", "D")))])
+  unique(t$gene[rowSums(n0 < n0_min, na.rm = TRUE) > 0])
+}
+
+## ============================================================
 ## STATE-CONDITIONED ESTIMATES (Methods Appendix E: State-conditioned estimates)
 ## ============================================================
 ## The parents were cultured in one tube and the hybrid in another, so every contrast between them (trans, mid, par) carries any difference between the

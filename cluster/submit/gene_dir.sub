@@ -1,0 +1,30 @@
+#!/bin/sh -l
+# FILENAME:  gene_dir.sbatch
+#
+# Direction bootstrap of the classification by direction (analysis.R Section 2.4), one job array over gene blocks per stage:
+#   stage 1: every gene, 1,000 replicates; stage 2: 10,000 fresh replicates for families with an unsettled margin test (n0 < 40);
+#   stage 3: 100,000 fresh replicates (n0 < 50 at stage 2); stage 4: theta intervals of the divergent genes at level 1 - 2 alpha_FCR.
+# Submit each after analysis.R Section 2.4 has written gene_dir_stage<s>_inputs.rda, with the stage and the number of blocks (N.DIR.ARRAY):
+#   sbatch --export=ALL,GENE_DIR_STAGE=1 --array=1-20 gene_dir.sub
+# A replicate refits about 34 groups (the four on all cells, and per partition the hybrid alleles on the cis, trans, A and B sets), about twice
+# the cost of a gene_boot.R replicate; raise --time or the number of blocks with the stage's gene count.
+
+#SBATCH --account=bphm
+#SBATCH --nodes=1
+#SBATCH --ntasks=1
+#SBATCH --partition=cpu
+#SBATCH --cpus-per-task=24
+#SBATCH --qos=normal
+#SBATCH --time=24:00:00
+#SBATCH --job-name gene_dir
+#SBATCH --output=gene_dir_%A_%a.out
+
+module load r/4.5.2
+
+export OMP_NUM_THREADS=1
+export MKL_NUM_THREADS=1
+export OPENBLAS_NUM_THREADS=1
+export VECLIB_MAXIMUM_THREADS=1
+
+if [ -z "$GENE_DIR_STAGE" ]; then echo "set GENE_DIR_STAGE to 1, 2, 3 or 4 (sbatch --export=ALL,GENE_DIR_STAGE=1 ...)"; exit 1; fi
+Rscript gene_dir.R

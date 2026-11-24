@@ -63,7 +63,7 @@ if (file.exists(OUT.FILE)) { cat(sprintf("%s already exists, nothing to do\n", O
 ## mean-dispersion correlations stay those of the first stage).
 JOBS <- if (STAGE <= 2) list(all = list(genes = GENES, plan = BOOT.PLANS$rep[[ARRAY.ID]], family = "all", methods = c("NB", "weighted"))) else
   lapply(setNames(names(STAGE.JOBS), names(STAGE.JOBS)), function(fam) { g <- STAGE.JOBS[[fam]]
-    list(genes = g[cut(seq_along(g), N.ARRAY, labels = FALSE) == ARRAY.ID], plan = BOOT.PLANS[[STAGE.PLAN]], family = fam, methods = "NB") })
+    list(genes = if (length(g)) g[cut(seq_along(g), N.ARRAY, labels = FALSE) == ARRAY.ID] else character(0), plan = BOOT.PLANS[[STAGE.PLAN]], family = fam, methods = "NB") })
 
 NUM.CORES <- as.integer(Sys.getenv("SLURM_CPUS_PER_TASK", unset = detectCores()))
 cl <- makeCluster(NUM.CORES, type = "FORK")
