@@ -267,6 +267,23 @@ each allele dispersion carries the per-cell split bias (Methods: Library split c
 per-genome mean from summed rescaled counts) are retired. B3 is now the closed loop of the split correction and F2 the large-N limits of ploidy_components() under
 binomial splits. Every other check uses the allele offsets and the per-cell eta, subset with its cells. No numbers below were recomputed with the new correction.
 
+## Classification by direction (Nov 24)
+
+Implements the spec "Classification by direction: specification and Claude Code handoff" (claude.ai artifact Y9Vn84qUaxXJVf8ZebEJEr, revision 15) in Section 2.4 (`gene_dir.R`, `gene_dir.sub`) and in the quick look (`analysis/quicklook_angles.R`), with one shared gate and class rule (`dir_classify_table()`). Decisions taken with the user on Nov 24: both in one pass; margins of mu, beta and kappa scaled by the SE ratio to delta_phi = log2(1.15); staging continues while any margin test is unsettled; theta intervals at 1 - 2 alpha_FCR.
+
+Checks (`analysis/dir_class_check.R`, local, stand-in design, 72 simulated genes on the mean, B = 300): all 17 pass. Contrast definitions and identities exact (8.9e-16); test formulas with +-Inf and undefined replicates; gate logic over all 81 outcome combinations (5 contradictory); theta wrap near 0 = 180; disjoint cis, A and B sets and per-replicate redraw, reproducible from the seed; median Var A / Var B 1.00; replicate cor(A, B) -0.02 with the split and -0.25 on all cells; class recovery 1.00 for additive, dominant, partial, over and under genes (exact class 0.83 for additive, the rest leaning toward it); no class bias between additive and dominant genes. These simulated effects are large (parents differ by log2 1.2); recovery for weak effects is not yet measured. A dry run of the Section 2.4 code with `gene_dir.R` stages 1 to 4 on 12 synthetic genes ran end to end, including the check that stage 4 repeats the stage-3 replicates.
+
+Findings and deviations:
+
+1. **p for weak effects.** As written, the corrected p is 0 whenever both corrected magnitudes truncate to zero (atan2(0, 0) = 0), which biased it low (A = B = 0.05, SE 0.1: bias -0.19). `dir_share()` now leaves p undefined in that case. With that, the correction lowers |bias| in the weak-effect settings checked (for example A 0.15, B 0.05: 0.155 to 0.065) but adds about 0.03 to 0.04 where the raw p is already near unbiased (A 0.3, B 0.15: 0.014 to 0.041).
+2. **Section 8 not implemented:** the mean-adjusted noise quantity (it waits on open item 6, the trend test between groups) and the matched-power downsampling of the mean.
+3. **Delta_dom centring (open item 7):** both versions are reported, the inheritance schemes as measured and centred on Xi (`inheritance_xi`, `trans_inh_xi`).
+4. **Margin on D (open item 2):** delta applies to D as written, so Delta_dom has delta / 2.
+5. **Sensitivity runs** reuse the theta intervals built at the main margin's alpha_FCR.
+6. **Zero fits:** the margin tests run on the replicates; a divergent or untested gene with an observed zero fit is "Zero fit" and has no direction.
+7. **Two bootstraps:** the contrast bootstrap of Section 2.3 (`gene_boot.R`) keeps its fixed depth-matched partitions; only the direction bootstrap redraws the split per replicate.
+8. **Section 3 and co-expression** still use the k_P classes (`classify_dom()`); moving the figures and tables to the direction classes is not done.
+
 ## Dispersion boundary, zero-tolerant signs and the staged bootstrap (Nov 23)
 
 Implements the handoff "Claude Code handoff: dispersion centering and zero-tolerant inference" (claude.ai artifact JtBYPQhKdrRZorZXQeeAKo) against the Statistical Methods document (artifact 76UUgMeP9KaXjjcBGwMQa7, Methods tab revision 8110; `docs/methods.md` is the earlier snapshot, revision 5638).
